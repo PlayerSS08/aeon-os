@@ -250,14 +250,19 @@ const COLOR_GREEN: usize = 0x02;
 const COLOR_CYAN: usize = 0x03;
 #[allow(dead_code)]
 const COLOR_RED: usize = 0x04;
+#[allow(dead_code)]
 const COLOR_LIGHT_GRAY: usize = 0x07;
 #[allow(dead_code)]
 const COLOR_DARK_GRAY: usize = 0x08;
 #[allow(dead_code)]
 const COLOR_LIGHT_BLUE: usize = 0x09;
+#[allow(dead_code)]
 const COLOR_LIGHT_GREEN: usize = 0x0A;
+#[allow(dead_code)]
 const COLOR_LIGHT_CYAN: usize = 0x0B;
+#[allow(dead_code)]
 const COLOR_LIGHT_RED: usize = 0x0C;
+#[allow(dead_code)]
 const COLOR_YELLOW: usize = 0x0E;
 const COLOR_WHITE: usize = 0x0F;
 
@@ -286,6 +291,7 @@ fn screen_print(cout: *mut TextOut, s: &str) {
     }
 }
 
+#[allow(dead_code)]
 fn screen_print_dec_u64(cout: *mut TextOut, mut n: u64) {
     if n == 0 {
         screen_print(cout, "0");
@@ -310,6 +316,7 @@ fn screen_print_dec_u64(cout: *mut TextOut, mut n: u64) {
     }
 }
 
+#[allow(dead_code)]
 fn screen_print_hex_u32(cout: *mut TextOut, val: u32) {
     screen_print(cout, "0x");
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -335,6 +342,7 @@ fn screen_print_hex_u64(cout: *mut TextOut, val: u64) {
     }
 }
 
+#[allow(dead_code)]
 fn screen_print_hash(cout: *mut TextOut, h: &[u8; 32]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut buf = [0u8; 64];
@@ -874,14 +882,20 @@ impl TrustMatrix {
 
 // Minimal universal Unicode Block Art boot splash
 const BOOT_LOGO: &str = "\r
+\n\r
+\n\r
+\n\r
+\n\r
+\n\r
+\n\r
+\n\r
+\n\r
                   █████╗  ███████╗  ██████╗  ███╗   ██╗\r
                  ██╔══██╗ ██╔════╝ ██╔═══██╗ ████╗  ██║\r
                  ███████║ █████╗   ██║   ██║ ██╔██╗ ██║\r
                  ██╔══██║ ██╔══╝   ██║   ██║ ██║╚██╗██║\r
                  ██║  ██║ ███████╗ ╚██████╔╝ ██║ ╚████║\r
                  ╚═╝  ╚═╝ ╚══════╝  ╚═════╝  ╚═╝  ╚═══╝\r
-\n\r
-         A E O N   M I C R O - O S   v 0 . 2 . 0   ·   6 4 - B I T   U E F I\r
 \n\r";
 
 // ============================================================================
@@ -1118,135 +1132,12 @@ pub extern "efiapi" fn efi_main(_handle: *mut (), sys: *mut SystemTable) -> usiz
     }
     serial_str("[AEON] ================================================================\n");
 
-    // 11. Render On-Screen Color Trust Dashboard
+    // 11. User Display: Pure Minimal Splash Logo (Zero console clutter)
     let cout = sys_ref.con_out;
     if !cout.is_null() {
         unsafe { ((*cout).clear_screen)(cout); }
-
-        // White Logo & Title
         screen_set_color(cout, COLOR_WHITE);
         screen_print(cout, BOOT_LOGO);
-
-        screen_set_color(cout, COLOR_DARK_GRAY);
-        screen_print(cout, " ────────────────────────────────────────────────────────────────────────────\r\n");
-
-        // Section 1: Root of Trust
-        screen_set_color(cout, COLOR_LIGHT_CYAN);
-        screen_print(cout, " [1] ROOT OF TRUST    : ");
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "SystemTable ");
-        screen_set_color(cout, if sig_valid { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if sig_valid { "\"IBI SYST\" [OK] " } else { "\"CORRUPT\" [FAIL] " });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "│ Header CRC32 ");
-        screen_set_color(cout, COLOR_WHITE);
-        screen_print_hex_u32(cout, sys_ref.hdr.crc32);
-        screen_set_color(cout, if crc_valid { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if crc_valid { " [OK]\r\n" } else { " [FAIL]\r\n" });
-
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "                        ACPI 2.0+ Root Pointer (XSDT @ ");
-        screen_set_color(cout, COLOR_WHITE);
-        screen_print_hex_u32(cout, (xsdt_phys & 0xFFFF_FFFF) as u32);
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, ") ");
-        screen_set_color(cout, if acpi_found && acpi_csum_pass { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if acpi_found && acpi_csum_pass { "[DUAL CSUM PASS]\r\n" } else { "[CHECKSUM FAIL]\r\n" });
-
-        // Section 2: Silicon Defenses
-        screen_set_color(cout, COLOR_LIGHT_CYAN);
-        screen_print(cout, " [2] SILICON DEFENSES : ");
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "NX=");
-        screen_set_color(cout, if silicon.has_nx { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if silicon.has_nx { "ON " } else { "OFF " });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "│ AES-NI=");
-        screen_set_color(cout, if silicon.has_aes { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if silicon.has_aes { "ON " } else { "OFF " });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "│ RDRAND=");
-        screen_set_color(cout, if silicon.has_rdrand { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if silicon.has_rdrand { "ON " } else { "OFF " });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "│ RDSEED=");
-        screen_set_color(cout, if silicon.has_rdseed { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if silicon.has_rdseed { "ON " } else { "OFF " });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "│ APIC=");
-        screen_set_color(cout, if silicon.has_apic { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if silicon.has_apic { "ON\r\n" } else { "OFF\r\n" });
-
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "                        SMEP/SMAP: ");
-        screen_set_color(cout, COLOR_LIGHT_GREEN);
-        screen_print(cout, if silicon.has_smep && silicon.has_smap { "RING 0 ISOLATION ACTIVE" } else if silicon.is_hypervisor { "HYPERVISOR ENFORCED (Ring -1)" } else { "PARTIAL" });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, " │ BUS: ");
-        screen_set_color(cout, COLOR_WHITE);
-        screen_print_dec_u64(cout, silicon.phys_bits as u64);
-        screen_print(cout, "b Phys / ");
-        screen_print_dec_u64(cout, silicon.virt_bits as u64);
-        screen_print(cout, "b Virt\r\n");
-
-        // Section 3: Physical Memory & Entropy
-        screen_set_color(cout, COLOR_LIGHT_CYAN);
-        screen_print(cout, " [3] RAM & ENTROPY    : ");
-        screen_set_color(cout, COLOR_WHITE);
-        screen_print_dec_u64(cout, geom.total_mb);
-        screen_print(cout, " MB Total (");
-        screen_print_dec_u64(cout, geom.usable_mb);
-        screen_print(cout, " MB Free) │ Frag: ");
-        screen_print_dec_u64(cout, geom.fragmentation_pct);
-        screen_print(cout, "% (Max Block: ");
-        screen_print_dec_u64(cout, geom.largest_free_block_mb);
-        screen_print(cout, " MB)\r\n");
-
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "                        NIST Monobit: ");
-        screen_set_color(cout, if monobit_pass { COLOR_LIGHT_GREEN } else { COLOR_LIGHT_RED });
-        screen_print(cout, if monobit_pass { "PASS" } else { "FAIL" });
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, " (|n1-n0|=");
-        screen_print_dec_u64(cout, delta as u64);
-        screen_print(cout, "/2048) │ Shannon: ");
-        screen_set_color(cout, COLOR_WHITE);
-        screen_print_dec_u64(cout, (shannon_mbit / 1000) as u64);
-        screen_print(cout, ".");
-        let m_rem = (shannon_mbit % 1000) / 10;
-        if m_rem < 10 { screen_print(cout, "0"); }
-        screen_print_dec_u64(cout, m_rem as u64);
-        screen_print(cout, " bits/byte\r\n");
-
-        // Section 4: Measured Boot
-        screen_set_color(cout, COLOR_LIGHT_CYAN);
-        screen_print(cout, " [4] MEASURED BOOT (SHA-256 DIGESTS):\r\n");
-
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "    PCR0: ");
-        screen_set_color(cout, COLOR_YELLOW);
-        screen_print_hash(cout, &pcr0_digest);
-        screen_print(cout, "\r\n");
-
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "    PCR1: ");
-        screen_set_color(cout, COLOR_YELLOW);
-        screen_print_hash(cout, &pcr1_digest);
-        screen_print(cout, "\r\n");
-
-        screen_set_color(cout, COLOR_LIGHT_GRAY);
-        screen_print(cout, "    PCR2: ");
-        screen_set_color(cout, COLOR_YELLOW);
-        screen_print_hash(cout, &pcr2_digest);
-        screen_print(cout, "\r\n");
-
-        // Final Trust Score Banner
-        screen_set_color(cout, COLOR_LIGHT_GREEN);
-        screen_print(cout, " ════════════════════════════════════════════════════════════════════════════\r\n");
-        screen_print(cout, "   HARDWARE TRUST ATTESTATION : ");
-        screen_print_dec_u64(cout, trust.score as u64);
-        screen_print(cout, "% VERIFIED  [ TIER-1 ROOT OF TRUST ]\r\n");
-        screen_print(cout, " ════════════════════════════════════════════════════════════════════════════\r\n");
     }
 
     // 12. Non-terminating Hardware Idle Loop (x86 PAUSE instruction)

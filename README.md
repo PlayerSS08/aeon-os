@@ -22,9 +22,8 @@ An ultra-minimal, trust-anchored 64-bit UEFI microkernel written in pure Rust (`
   - Parses real-time `GetMemoryMap` descriptors into total, usable conventional, and reserved page frames.
   - Computes exact memory fragmentation index ($\Phi$) and Top of Memory (TOM) physical boundary.
 - **Silicon Defenses Audit:** Probes CPUID for NX (No-Execute), SMEP, SMAP, UMIP, CET Shadow Stack, AES-NI, RDRAND, RDSEED, physical/virtual address bus width, and hypervisor isolation.
-- **Dual Telemetry & Color HUD:**
-  - Dynamic UEFI color dashboard (`SimpleTextOutput.SetAttribute`) presenting status badges, cryptographic hashes, and metrics.
-  - Hardware-direct 16550 UART serial telemetry (`COM1` @ `0x03F8`, 115200 8N1) streaming complete forensic audit logs.
+- **Minimalist Console Display:** Pitch-black UEFI display rendering solely the centered, symmetrical `AEON` Unicode block art. Zero console clutter.
+- **Hardware Telemetry Layer:** Direct 16550 UART serial logger (`COM1` @ `0x03F8`, 115200 8N1) streaming all mathematical, cryptographic, measured boot, and silicon security telemetry.
 - **100% Attestation Score:** Computes composite Hardware Root-of-Trust score (0–100) attesting platform security.
 
 ---
@@ -38,23 +37,6 @@ An ultra-minimal, trust-anchored 64-bit UEFI microkernel written in pure Rust (`
                  ██╔══██║ ██╔══╝   ██║   ██║ ██║╚██╗██║
                  ██║  ██║ ███████╗ ╚██████╔╝ ██║ ╚████║
                  ╚═╝  ╚═╝ ╚══════╝  ╚═════╝  ╚═╝  ╚═══╝
-
-         A E O N   M I C R O - O S   v 0 . 2 . 0   ·   6 4 - B I T   U E F I
-
- ────────────────────────────────────────────────────────────────────────────
- [1] ROOT OF TRUST    : SystemTable "IBI SYST" [OK] │ Header CRC32 0xA8128C57 [OK]
-                        ACPI 2.0+ Root Pointer (XSDT @ 0x3ED7D0E8) [DUAL CSUM PASS]
- [2] SILICON DEFENSES : NX=ON │ AES-NI=ON │ RDRAND=ON │ RDSEED=ON │ APIC=ON
-                        SMEP/SMAP: HYPERVISOR ENFORCED (Ring -1) │ BUS: 39b Phys / 48b Virt
- [3] RAM & ENTROPY    : 1027 MB Total (980 MB Free) │ Frag: 2% (Max Block: 958 MB)
-                        NIST Monobit: PASS (|n1-n0|=64/2048) │ Shannon: 7.26 bits/byte
- [4] MEASURED BOOT (SHA-256 DIGESTS):
-    PCR0: 5586e49eb9e3896855dd8d136938eae543f3a76e1ed600499a1f269a50c852de
-    PCR1: 3efe46f2c4449c45ee443366032ae708b868233fc05528c42c8db462aa513b46
-    PCR2: 37a1846988781ab96ebab3e1e451ee9d4eba4d5c7c419a2ebc9ee2b8283b87e8
- ════════════════════════════════════════════════════════════════════════════
-   HARDWARE TRUST ATTESTATION : 100% VERIFIED  [ TIER-1 ROOT OF TRUST ]
- ════════════════════════════════════════════════════════════════════════════
 ```
 
 ---
@@ -73,18 +55,19 @@ An ultra-minimal, trust-anchored 64-bit UEFI microkernel written in pure Rust (`
 [AEON:ARCH]  Address Bus Topology: 39-bit Physical | 48-bit Virtual
 [AEON:MATH]  Physical RAM Map Descriptors: 104 regions parsed
 [AEON:MATH]  Total Physical Memory:  1027 MB (263056 x 4KB frames)
-[AEON:MATH]  Conventional Usable RAM: 980 MB (251016 free frames)
+[AEON:MATH]  Conventional Usable RAM: 980 MB (251017 free frames)
 [AEON:MATH]  ACPI Reclaim / MMIO:    0 MB ACPI | 4 MB MMIO
 [AEON:MATH]  RAM Fragmentation:      2% (Largest Block: 958 MB in 5 segments)
 [AEON:MATH]  Top of Memory (TOM):    4096 MB physical boundary
-[AEON:ENTR]  NIST SP 800-22 Monobit: PASS (|n1-n0| = 4 / 2048 bits; ones=1026, zeros=1022)
-[AEON:ENTR]  Shannon Entropy Density: 7.22 / 8.00 bits per byte
-[AEON:PCR0]  Bootloader Code SHA-256: 1BAC3D4F572E98616BF1ACD676B1FAB1C5E127D97246D5A5848DACF7FB916276
+[AEON:ENTR]  NIST SP 800-22 Monobit: PASS (|n1-n0| = 20 / 2048 bits; ones=1034, zeros=1014)
+[AEON:ENTR]  Shannon Entropy Density: 7.26 / 8.00 bits per byte
+[AEON:PCR0]  Bootloader Code SHA-256: 8CA88CFA14883F6117DD0DBA3FA1075F8D8478583F44241D879C741E82A4CD32
 [AEON:PCR1]  Firmware Tables SHA-256: 3EFE46F2C4449C45EE443366032AE708B868233FC05528C42C8DB462AA513B46
-[AEON:PCR2]  Memory Map Base SHA-256: 0380CAC3DA833A7E44FF564E881C0D49D3F24B0581F382F296781BA19F176436
-[AEON:TIME]  Execution Cycle Overhead: 244616549 CPU cycles
+[AEON:PCR2]  Memory Map Base SHA-256: 000009A551812EB8FF5A013B96F803C14502AB4C0A68C63D698881A4055F7FC0
+[AEON:TIME]  Execution Cycle Overhead: 38504354 CPU cycles
 [AEON:TRUST] Attestation Score: 100/100 (TIER-1 SECURE HARDWARE ROOT OF TRUST VERIFIED)
 [AEON] ================================================================
+```
 ```
 
 ---

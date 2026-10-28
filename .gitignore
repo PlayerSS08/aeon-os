@@ -1,4 +1,5 @@
 target/
 build/*.vdi
 build/*.img
+build/*.log
 *.tmp
