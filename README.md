@@ -29,6 +29,36 @@ An ultra-minimal, trust-anchored 64-bit UEFI microkernel written in pure Rust (`
 
 ---
 
+## Live Boot Screen (UEFI Display)
+
+```text
+                  █████╗  ███████╗  ██████╗  ███╗   ██╗
+                 ██╔══██╗ ██╔════╝ ██╔═══██╗ ████╗  ██║
+                 ███████║ █████╗   ██║   ██║ ██╔██╗ ██║
+                 ██╔══██║ ██╔══╝   ██║   ██║ ██║╚██╗██║
+                 ██║  ██║ ███████╗ ╚██████╔╝ ██║ ╚████║
+                 ╚═╝  ╚═╝ ╚══════╝  ╚═════╝  ╚═╝  ╚═══╝
+
+         A E O N   M I C R O - O S   v 0 . 2 . 0   ·   6 4 - B I T   U E F I
+
+ ────────────────────────────────────────────────────────────────────────────
+ [1] ROOT OF TRUST    : SystemTable "IBI SYST" [OK] │ Header CRC32 0xA8128C57 [OK]
+                        ACPI 2.0+ Root Pointer (XSDT @ 0x3ED7D0E8) [DUAL CSUM PASS]
+ [2] SILICON DEFENSES : NX=ON │ AES-NI=ON │ RDRAND=ON │ RDSEED=ON │ APIC=ON
+                        SMEP/SMAP: HYPERVISOR ENFORCED (Ring -1) │ BUS: 39b Phys / 48b Virt
+ [3] RAM & ENTROPY    : 1027 MB Total (980 MB Free) │ Frag: 2% (Max Block: 958 MB)
+                        NIST Monobit: PASS (|n1-n0|=64/2048) │ Shannon: 7.26 bits/byte
+ [4] MEASURED BOOT (SHA-256 DIGESTS):
+    PCR0: 5586e49eb9e3896855dd8d136938eae543f3a76e1ed600499a1f269a50c852de
+    PCR1: 3efe46f2c4449c45ee443366032ae708b868233fc05528c42c8db462aa513b46
+    PCR2: 37a1846988781ab96ebab3e1e451ee9d4eba4d5c7c419a2ebc9ee2b8283b87e8
+ ════════════════════════════════════════════════════════════════════════════
+   HARDWARE TRUST ATTESTATION : 100% VERIFIED  [ TIER-1 ROOT OF TRUST ]
+ ════════════════════════════════════════════════════════════════════════════
+```
+
+---
+
 ## Live Boot Telemetry (COM1 Serial Log)
 
 ```
