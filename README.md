@@ -1,15 +1,18 @@
 # Aeon Micro-OS
 
-An ultra-minimal bare-metal 64-bit UEFI microkernel written in pure Rust (`#![no_std]`, `#![no_main]`) with zero heap allocation, Unicode block art splash, and direct 16550 UART serial telemetry.
+An ultra-minimal, trust-anchored 64-bit UEFI microkernel written in pure Rust (`#![no_std]`, `#![no_main]`) with zero heap allocation, cryptographic table verification, CPU hardware defense auditing, and direct 16550 UART serial telemetry.
 
 ---
 
 ## Architecture Highlights
-- **Single-File Zero-Dependency Kernel:** Core runtime lives entirely within `src/main.rs`.
-- **Target:** `x86_64-unknown-uefi`
-- **Binary Footprint:** ~2.5 KB (`BOOTX64.EFI`) via LLD link-time garbage collection, stripped symbols, and merged sections.
+- **Single-File Zero-Dependency Architecture:** Core runtime and hardware interfaces live entirely within `src/main.rs`.
+- **Target:** `x86_64-unknown-uefi` (Native 64-bit Long Mode).
+- **Binary Footprint:** ~4.5 KB (`BOOTX64.EFI`) via LLD link-time garbage collection, stripped symbols, and merged sections.
+- **Root-of-Trust & Table Integrity:** Bitwise IEEE 802.3 CRC32 verification over UEFI system headers (`IBI SYST`) validating firmware uncorrupted state.
+- **Hardware Security Audit:** Live CPUID silicon probing for NX (No-Execute), SMEP, SMAP, AES-NI, RDRAND, and APIC.
+- **Physical Memory Geometry:** Real-time UEFI `GetMemoryMap` parsing calculating total physical RAM, usable 4KB conventional page frames, and reserved firmware boundaries.
 - **Display Layer:** Centered UCS-2 UTF-16 Unicode block drawing boot splash on UEFI `SimpleTextOutput`.
-- **Telemetry Layer:** Hardware-direct 16550 UART serial logger (`COM1` @ `0x03F8`, 115200 8N1). Zero heap allocations, direct port I/O streaming.
+- **Telemetry Layer:** Hardware-direct 16550 UART serial logger (`COM1` @ `0x03F8`, 115200 8N1) streaming trust scores and cycle benchmarks. Zero heap allocations, direct port I/O streaming.
 
 ---
 
