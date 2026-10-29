@@ -2,4 +2,6 @@ target/
 build/*.vdi
 build/*.img
 build/*.log
+build/disk/NvVars
+ovmf/
 *.tmp

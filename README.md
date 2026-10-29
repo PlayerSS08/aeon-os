@@ -79,7 +79,10 @@ aeon/
 │   └── config.toml       # LLD linker flags, subsystem EFI, section merging
 ├── build/
 │   ├── disk/EFI/BOOT/    # Bootloader staging directory (BOOTX64.EFI)
-│   └── update_vdi.py     # FAT16 disk synthesizer and VDI converter
+│   ├── serial.log        # Direct COM1 UART forensic telemetry log
+│   └── screen.png        # Captured UEFI framebuffer screenshot
+├── scripts/
+│   └── run.ps1           # Automated QEMU UEFI boot & telemetry runner
 ├── src/
 │   └── main.rs           # Pure Rust microkernel implementation
 ├── Cargo.toml            # opt-level = "z", lto = "fat", panic = "abort"
@@ -88,25 +91,30 @@ aeon/
 
 ---
 
-## Build & Test
+## Build & Run
 
 ### 1. Prerequisites
-- Rust toolchain with UEFI target:
+- Rust nightly/stable toolchain with UEFI target:
   ```bash
   rustup target add x86_64-unknown-uefi
   ```
-- Python 3
-- Oracle VirtualBox (for testing on modern 64-bit UEFI VM)
+- QEMU (`qemu-system-x86_64`) + OVMF x86_64 firmware.
 
-### 2. Compilation & Disk Staging
+### 2. Single-Command Build & Boot
+Run directly via Cargo:
 ```powershell
-cargo build --target x86_64-unknown-uefi --release
-Copy-Item "target\x86_64-unknown-uefi\release\aeon.efi" "build\disk\EFI\BOOT\BOOTX64.EFI" -Force
-python "build\update_vdi.py"
+cargo run --release
 ```
+Cargo automatically compiles `aeon.efi`, stages it into `build/disk/EFI/BOOT/BOOTX64.EFI`, boots QEMU with direct virtual FAT32 mounting, streams live COM1 telemetry to stdout and `build/serial.log`, and opens the pitch-black centered `AEON` console.
 
-### 3. Emulation (VirtualBox)
-Attach `build/aeon.vdi` to a VirtualBox VM configured with 64-bit EFI (`Firmware: EFI64`) and COM1 serial enabled (`RawFile` mode pointing to `serial.log`):
+### 3. Remote GDB Debugging (Optional)
+To attach GDB and debug the microkernel at instruction level:
 ```powershell
-& "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" startvm "Aeon" --type headless
+qemu-system-x86_64 -bios <path-to-ovmf> -drive format=raw,file=fat:rw:build/disk -s -S
+```
+In GDB or VS Code:
+```gdb
+target remote :1234
+b efi_main
+c
 ```
