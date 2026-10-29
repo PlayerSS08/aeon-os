@@ -9,6 +9,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Workspace = Split-Path -Parent $ScriptDir
 $DiskDir = Join-Path $Workspace "build\disk"
 $TargetEfi = Join-Path $DiskDir "EFI\BOOT\BOOTX64.EFI"
+$VBoxManage = "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
 
 if (-not (Test-Path (Split-Path -Parent $TargetEfi))) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $TargetEfi) -Force | Out-Null
@@ -19,64 +20,27 @@ if ($BinaryPath -and (Test-Path $BinaryPath)) {
     Copy-Item -Path $BinaryPath -Destination $TargetEfi -Force
 }
 
-# Find QEMU binary
-$QemuCandidates = @(
-    "C:\Program Files\qemu\qemu-system-x86_64.exe",
-    "C:\Users\SREEHARAN\qemu\qemu-system-x86_64.exe",
-    "G:\Aeon\tools\qemu\qemu-system-x86_64.exe"
-)
-
-$QemuBin = $null
-foreach ($cand in $QemuCandidates) {
-    if (Test-Path $cand) {
-        $QemuBin = $cand
-        break
-    }
-}
-
-if (-not $QemuBin) {
-    $cmd = Get-Command qemu-system-x86_64 -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $QemuBin = $cmd.Source
-    }
-}
-
-if (-not $QemuBin) {
-    Write-Error "[Aeon:ERR] qemu-system-x86_64.exe not found."
+if (-not (Test-Path $VBoxManage)) {
+    Write-Error "[Aeon:ERR] VirtualBox VBoxManage.exe not found at $VBoxManage"
     exit 1
 }
 
-# Find OVMF firmware
-$QemuDir = Split-Path -Parent $QemuBin
-$OvmfCandidates = @(
-    (Join-Path $QemuDir "share\edk2-x86_64-code.fd"),
-    (Join-Path $QemuDir "edk2-x86_64-code.fd"),
-    (Join-Path $QemuDir "share\OVMF.fd"),
-    (Join-Path $Workspace "ovmf\OVMF.fd"),
-    (Join-Path $Workspace "build\OVMF.fd")
-)
-
-$OvmfPath = $null
-foreach ($cand in $OvmfCandidates) {
-    if (Test-Path $cand) {
-        $OvmfPath = $cand
-        break
-    }
+# Stop VM first if running so VDI lock is released
+$vmState = (& $VBoxManage showvminfo "Aeon" --machinereadable 2>$null | Select-String 'VMState="running"')
+if ($vmState) {
+    Write-Host "[Aeon] Stopping active VM session..." -ForegroundColor Yellow
+    & $VBoxManage controlvm "Aeon" poweroff | Out-Null
+    Start-Sleep -Seconds 2
 }
 
-if (-not $OvmfPath) {
-    Write-Error "[Aeon:ERR] OVMF UEFI firmware (.fd) not found."
+# Generate VDI with persistent UUID
+Write-Host "[Aeon] Synthesizing FAT16 and updating VirtualBox VDI..." -ForegroundColor Cyan
+python "$Workspace\build\update_vdi.py"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "[Aeon:ERR] Failed to update aeon.vdi"
     exit 1
 }
 
-Write-Host "[Aeon] Launching QEMU with OVMF ($OvmfPath)..." -ForegroundColor Green
-
-$SerialLog = Join-Path $Workspace "build\serial.log"
-
-& $QemuBin `
-    -cpu max `
-    -drive "if=pflash,format=raw,readonly=on,file=$OvmfPath" `
-    -drive "format=raw,file=fat:rw:$DiskDir" `
-    -serial stdio `
-    -net none `
-    -m 1024M | Tee-Object -FilePath $SerialLog
+# Launch VM
+Write-Host "[Aeon] Booting Aeon in Oracle VirtualBox (UEFI x86_64)..." -ForegroundColor Green
+& $VBoxManage startvm "Aeon"

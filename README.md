@@ -79,10 +79,12 @@ aeon/
 │   └── config.toml       # LLD linker flags, subsystem EFI, section merging
 ├── build/
 │   ├── disk/EFI/BOOT/    # Bootloader staging directory (BOOTX64.EFI)
+│   ├── aeon.vdi          # VirtualBox VDI hard disk image
+│   ├── update_vdi.py     # FAT16 synthesizer & VDI converter (fixed UUID)
 │   ├── serial.log        # Direct COM1 UART forensic telemetry log
 │   └── screen.png        # Captured UEFI framebuffer screenshot
 ├── scripts/
-│   └── run.ps1           # Automated QEMU UEFI boot & telemetry runner
+│   └── run.ps1           # Automated VirtualBox UEFI runner
 ├── src/
 │   └── main.rs           # Pure Rust microkernel implementation
 ├── Cargo.toml            # opt-level = "z", lto = "fat", panic = "abort"
@@ -94,27 +96,16 @@ aeon/
 ## Build & Run
 
 ### 1. Prerequisites
-- Rust nightly/stable toolchain with UEFI target:
+- Rust toolchain with UEFI target:
   ```bash
   rustup target add x86_64-unknown-uefi
   ```
-- QEMU (`qemu-system-x86_64`) + OVMF x86_64 firmware.
+- Python 3.x
+- Oracle VirtualBox 7.2.x with registered `Aeon` VM (EFI64, 1024 MB RAM, COM1 file redirect to `build/serial.log`).
 
 ### 2. Single-Command Build & Boot
 Run directly via Cargo:
 ```powershell
 cargo run --release
 ```
-Cargo automatically compiles `aeon.efi`, stages it into `build/disk/EFI/BOOT/BOOTX64.EFI`, boots QEMU with direct virtual FAT32 mounting, streams live COM1 telemetry to stdout and `build/serial.log`, and opens the pitch-black centered `AEON` console.
-
-### 3. Remote GDB Debugging (Optional)
-To attach GDB and debug the microkernel at instruction level:
-```powershell
-qemu-system-x86_64 -bios <path-to-ovmf> -drive format=raw,file=fat:rw:build/disk -s -S
-```
-In GDB or VS Code:
-```gdb
-target remote :1234
-b efi_main
-c
-```
+Cargo automatically compiles `aeon.efi`, stages it into `build/disk/EFI/BOOT/BOOTX64.EFI`, synthesizes the bootable FAT16 disk, converts it to `build/aeon.vdi`, restarts the `Aeon` VM in Oracle VirtualBox, captures COM1 telemetry into `build/serial.log`, and renders the pitch-black centered `AEON` console.
