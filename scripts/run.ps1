@@ -21,9 +21,9 @@ if ($BinaryPath -and (Test-Path $BinaryPath)) {
 
 # Find QEMU binary
 $QemuCandidates = @(
+    "C:\Program Files\qemu\qemu-system-x86_64.exe",
     "C:\Users\SREEHARAN\qemu\qemu-system-x86_64.exe",
-    "G:\Aeon\tools\qemu\qemu-system-x86_64.exe",
-    "C:\Program Files\qemu\qemu-system-x86_64.exe"
+    "G:\Aeon\tools\qemu\qemu-system-x86_64.exe"
 )
 
 $QemuBin = $null
