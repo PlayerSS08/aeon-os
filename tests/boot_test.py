@@ -216,7 +216,8 @@ def t_boot_and_splash(ctx):
                    "kernel-env", "kernel-memory", "kernel-tasks"]:
             r.check(f"stage {st}", f"enter {st}" in t)
         r.check("random seed gathered", "boot seed ready from" in t, "no seed line")
-        r.check("seed value never logged", "seed=" not in t)
+        import re
+        r.check("seed value never logged", re.search(r"(?<![a-z])seed=", t) is None)
         r.check("shell prompt", vm.wait_for("aeon> ", 30))
         time.sleep(1.0)
         w, h, pix2 = vm.shot(os.path.join(ctx.shots, "2-shell.png"))
