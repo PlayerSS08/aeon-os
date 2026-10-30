@@ -54,7 +54,6 @@ class Vm:
         self.swtpm = None
         args = [
             "qemu-system-x86_64", "-machine", "q35,smm=on", "-cpu", "max", "-m", "256", "-vga", "std", "-display", "none",
-            "-global", "driver=cfi.pflash01,property=secure,value=on",
             "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
             "-drive", f"if=pflash,format=raw,unit=1,file={self.vars}",
             "-drive", f"format=raw,file=fat:rw:{esp_dir}",
@@ -62,6 +61,9 @@ class Vm:
             "-debugcon", f"file:{self.dcon}", "-global", "isa-debugcon.iobase=0xe9",
             "-qmp", f"unix:{self.qmp_path},server,nowait", "-no-reboot",
         ]
+        if code == CODE_SB:
+            # The SMM-enabled firmware build keeps its variable flash writable only from SMM.
+            args += ["-global", "driver=cfi.pflash01,property=secure,value=on"]
         if tpm:
             tdir = os.path.join(work, f"{name}.tpm")
             os.makedirs(tdir)
@@ -156,10 +158,13 @@ class Vm:
             self.swtpm.wait()
 
 
-def make_esp(work, efi, name="esp", extra=None):
+def make_esp(work, efi, name="esp", cfg=None):
     d = os.path.join(work, name)
     os.makedirs(os.path.join(d, "EFI", "BOOT"), exist_ok=True)
     shutil.copy(efi, os.path.join(d, "EFI", "BOOT", "BOOTX64.EFI"))
+    if cfg is not None:
+        with open(os.path.join(d, "EFI", "BOOT", "aeon.cfg"), "w") as f:
+            f.write(cfg)
     return d
 
 
@@ -294,6 +299,7 @@ def t_tpm(ctx):
             r.check("PCR 12 equals SHA256(before || SHA256(cmdline)) computed independently", after[0] == expect, f"{after[0]} != {expect}")
             r.check("PCR 12 started at zero", before[0] == "0" * 64)
         r.check("event log located", "event log at" in t)
+        r.check("event log replay matches the TPM for every PCR it compared", "compared 10 PCRs with the TPM, 0 differ" in t, t[-800:])
         # PCR 11 holds the boot-phase marker measured just before leaving the firmware
         p11a = [l.split("pcr11_after=")[1].strip() for l in t.splitlines() if "pcr11_after=" in l]
         p11b = [l.split("pcr11_before=")[1].strip() for l in t.splitlines() if "pcr11_before=" in l]
@@ -347,11 +353,113 @@ def t_commands(ctx):
             vm.keys("ret")
             r.check(f"`{cmd}` prints", vm.wait_for(expect, 30, "serial"), vm.serial_text()[-400:])
         s = vm.serial_text()
-        for needle in ("no-execute (NX)    yes", "write protect      yes", "measured boot      yes", "shadow stack (CET) not enabled"):
+        for needle in ("no-execute (NX)    yes", "write protect      yes", "measured boot      yes", "shadow stack (CET) not enabled", "replayed, matches the TPM", "0 failed boot(s) before this one; recovery mode: no", "0 of 10 PCRs differ"):
             r.check(f"security shows: {needle}", needle in s)
         pcr12 = [l.split()[-1] for l in s.splitlines() if l.startswith("pcr12 (command line)")]
         pcr11 = [l.split()[-1] for l in s.splitlines() if l.startswith("pcr11 (boot phase)")]
         r.check("tpm command shows non-zero PCR values", bool(pcr12) and bool(pcr11) and pcr12[0] != "0" * 64 and pcr11[0] != "0" * 64)
+    finally:
+        vm.close()
+
+
+def t_config(ctx):
+    """aeon.cfg on the ESP: options are read, merged, shown and measured into PCR 12."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-cfg", cfg="# test config\nverbose\nnomenu\n"), ctx.work, name="cfg", tpm=True)
+    try:
+        r.check("boots", vm.wait_for("boot complete", 150), vm.text()[-600:])
+        t = vm.text()
+        r.check("config file was read", "options from aeon.cfg" in t and 'effective options "verbose nomenu"' in t, t[:600])
+        r.check("nomenu skips the boot menu", "press any key within" not in t)
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "6-config-verbose.png"))
+        r.check("verbose: no splash bar, log on screen", find_bar(pix, w, h) is None)
+        after = [l.split("pcr12_after=")[1].strip() for l in t.splitlines() if "pcr12_after=" in l]
+        data = "verbose nomenu".encode("utf-16-le") + b"\x00\x00"
+        want = hashlib.sha256(b"\x00" * 32 + hashlib.sha256(data).digest()).hexdigest()
+        r.check("the effective options (load options + config) are what PCR 12 measured", bool(after) and after[0] == want, f"{after} vs {want}")
+    finally:
+        vm.close()
+
+
+def t_modes(ctx):
+    """mode=WxH picks a firmware screen mode; the splash lays out correctly at each size."""
+    r = ctx.r
+    for (mw, mh) in ((640, 480), (1024, 768), (1920, 1080)):
+        vm = Vm(make_esp(ctx.work, ctx.efi, f"esp-{mw}", cfg=f"mode={mw}x{mh}\n"), ctx.work, name=f"mode{mw}")
+        try:
+            r.check(f"{mw}x{mh}: menu wait reached", vm.wait_for("press any key within", 150), vm.text()[-400:])
+            t = vm.text()
+            if f"console=" not in t:
+                time.sleep(0.2)
+            time.sleep(0.4)
+            w, h, pix = vm.shot(os.path.join(ctx.shots, f"7-mode-{mw}x{mh}.png"))
+            r.check(f"{mw}x{mh}: screen has the requested size", (w, h) == (mw, mh), f"got {w}x{h}")
+            bar = find_bar(pix, w, h)
+            r.check(f"{mw}x{mh}: progress bar drawn", bar is not None)
+            if bar:
+                y, x0, x1, fx = bar
+                r.check(f"{mw}x{mh}: bar is centred", abs((x0 + x1) / 2 - w / 2) < 6, f"x0={x0} x1={x1}")
+                r.check(f"{mw}x{mh}: bar is inside the screen", 0 < y < h - 40 and x0 > 0 and x1 < w - 1)
+                lit = [yy for yy in range(h) for xx in range(0, w, 3) if px(pix, w, xx, yy) == (255, 255, 255)]
+                r.check(f"{mw}x{mh}: logo block is vertically centred with the bar", lit and abs(((min(lit) + y) / 2) - h / 2) < h * 0.12, f"top={min(lit) if lit else None} bar={y}")
+        finally:
+            vm.close()
+
+
+def t_bootcount(ctx):
+    """Three failed boots in a row switch the next boot to recovery mode; a good boot clears the counter."""
+    r = ctx.r
+    bad = os.path.join(ctx.faults, "fault-panic", "aeon.efi")
+    vars_file = VARS
+    for i in range(1, 4):
+        vm = Vm(make_esp(ctx.work, bad, f"esp-bad{i}"), ctx.work, vars_file=vars_file, name=f"bad{i}")
+        try:
+            r.check(f"failing boot {i} reaches its panic", vm.wait_for("deliberate panic", 150), vm.text()[-300:])
+            r.check(f"failing boot {i} counts {i - 1} earlier failure(s)", f"failed_boots={i - 1} " in vm.text())
+        finally:
+            vm.close()
+        vars_file = vm.vars
+    # Same NVRAM, a good image: must enter recovery.
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-rec"), ctx.work, vars_file=vars_file, tpm=True, name="rec")
+    try:
+        r.check("recovery boot completes", vm.wait_for("boot complete", 180), vm.text()[-600:])
+        t = vm.text()
+        r.check("3 failures trigger recovery", "failed_boots=3 counting=true recovery=true" in t)
+        r.check("recovery banner logged", "RECOVERY MODE" in t)
+        r.check("no timer or scheduler in recovery", "timer and scheduler are off" in t and "pit irq0 ok" not in t and "task shell started" not in t)
+        r.check("menu waits in recovery", "press any key within 10 s" in t)
+        r.check("a different phase marker is measured", "measured phase" in t)
+        p11a = [l.split("pcr11_after=")[1].strip() for l in t.splitlines() if "pcr11_after=" in l]
+        normal = hashlib.sha256(b"\x00" * 32 + hashlib.sha256(b"aeon:exit-boot-services").digest()).hexdigest()
+        rec = hashlib.sha256(b"\x00" * 32 + hashlib.sha256(b"aeon:recovery").digest()).hexdigest()
+        r.check("PCR 11 holds the recovery marker, not the normal one", bool(p11a) and p11a[0] == rec and p11a[0] != normal, str(p11a))
+        r.check("shell still works in recovery", vm.wait_for("aeon> ", 60, "serial"))
+        r.check("successful recovery boot clears the counter", "boot succeeded, counter cleared" in vm.text())
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "8-recovery.png"))
+        r.check("recovery shows the log, not the splash", find_bar(pix, w, h) is None)
+    finally:
+        vm.close()
+    vars_file = vm.vars
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-after"), ctx.work, vars_file=vars_file, name="after")
+    try:
+        r.check("next boot is normal again", vm.wait_for("boot complete", 150) and "failed_boots=0 counting=true recovery=false" in vm.text(), vm.text()[:500])
+    finally:
+        vm.close()
+    # nocount ignores the counter entirely
+    vars_file = vm.vars
+    vm0 = Vm(make_esp(ctx.work, bad, "esp-bad-again"), ctx.work, vars_file=vars_file, name="bad-again")
+    vm0.wait_for("deliberate panic", 150)
+    vm0.close()
+    vm1 = Vm(make_esp(ctx.work, bad, "esp-bad-again2"), ctx.work, vars_file=vm0.vars, name="bad-again2")
+    vm1.wait_for("deliberate panic", 150)
+    vm1.close()
+    vm2 = Vm(make_esp(ctx.work, bad, "esp-bad-again3"), ctx.work, vars_file=vm1.vars, name="bad-again3")
+    vm2.wait_for("deliberate panic", 150)
+    vm2.close()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-nocount", cfg="nocount\n"), ctx.work, vars_file=vm2.vars, name="nocount")
+    try:
+        t_ok = vm.wait_for("boot complete", 150)
+        r.check("nocount: no recovery and no counter writes", t_ok and "counting=false recovery=false" in vm.text(), vm.text()[:500])
     finally:
         vm.close()
 
@@ -471,7 +579,8 @@ def t_faults(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "config": t_config, "modes": t_modes,
+    "bootcount": t_bootcount, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
 

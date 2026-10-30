@@ -13,10 +13,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use aeon::acpi::{self, Rsdp};
 use aeon::arch;
+use aeon::bootcount;
 use aeon::bootinfo::{BootInfo, FbInfo, SecureBoot, MAX_REGIONS};
 use aeon::bootopts::{self, BootOpts};
 use aeon::cpuid;
 use aeon::entropy;
+use aeon::eventlog;
 use aeon::fb::Console;
 use aeon::splash;
 use aeon::tcg2;
@@ -58,6 +60,30 @@ struct Stages {
 
 static STAGES: Global<Stages> = Global::new(Stages { n: 0, items: [("", 0); 12] });
 
+/// Busy-waits `us` microseconds on the TSC (usable before and after ExitBootServices).
+fn wait_us(us: u64) {
+    let t0 = arch::rdtsc();
+    let ticks = log::tsc_hz() / 1_000_000 * us;
+    while arch::rdtsc().wrapping_sub(t0) < ticks {
+        arch::pause();
+    }
+}
+
+/// Moves the splash bar to `target` in a few short steps, so it glides instead of jumping.
+fn bar_to(target: u32) {
+    let _ = log::with_console(|c| {
+        let from = c.bar();
+        if target <= from {
+            c.progress(target);
+            return;
+        }
+        for i in 1..=4u32 {
+            c.progress(from + (target - from) * i / 4);
+            wait_us(3_000);
+        }
+    });
+}
+
 fn stage(name: &'static str) {
     // SAFETY: single-threaded boot; the reference is dropped before logging.
     let done = unsafe {
@@ -68,7 +94,7 @@ fn stage(name: &'static str) {
         }
         s.n - 1
     };
-    let _ = log::with_console(|c| c.progress(splash::stage_permille(done, TOTAL_STAGES)));
+    bar_to(splash::stage_permille(done, TOTAL_STAGES));
     info!("stage", "enter {}", name);
 }
 
@@ -92,9 +118,24 @@ fn calibrate_tsc(bs: &BootServices) -> u64 {
     }
 }
 
-fn pick_gop_mode(gop: &Gop) -> Option<u32> {
+fn pick_gop_mode(gop: &Gop, want: Option<(u32, u32)>) -> Option<u32> {
     // SAFETY: `gop.mode` is set by firmware and valid for the protocol's lifetime.
     let (max_mode, current) = unsafe { ((*gop.mode).max_mode, (*gop.mode).mode) };
+    // A mode asked for with `mode=WxH` wins when the firmware offers it with a linear framebuffer.
+    if let Some((ww, hh)) = want {
+        for m in 0..max_mode {
+            let mut size = 0usize;
+            let mut info: *const GopModeInfo = core::ptr::null();
+            if (gop.query_mode)(gop as *const Gop as *mut Gop, m, &mut size, &mut info) != uefi::SUCCESS || info.is_null() {
+                continue;
+            }
+            // SAFETY: query_mode succeeded, so `info` points at a firmware-allocated GopModeInfo.
+            let i = unsafe { &*info };
+            if i.pixel_format != 3 && i.horizontal_resolution == ww && i.vertical_resolution == hh {
+                return Some(m);
+            }
+        }
+    }
     // The firmware's current mode is normally the panel's native one: keep it when it has a linear
     // framebuffer, so the image is sharp instead of scaled by the display.
     let mut size = 0usize;
@@ -130,7 +171,7 @@ fn pick_gop_mode(gop: &Gop) -> Option<u32> {
     best.map(|(m, _)| m)
 }
 
-fn init_gop(bs: &BootServices) -> Option<FbInfo> {
+fn init_gop(bs: &BootServices, want: Option<(u32, u32)>) -> Option<FbInfo> {
     let mut p: *mut c_void = core::ptr::null_mut();
     if (bs.locate_protocol)(&uefi::GOP_GUID, core::ptr::null_mut(), &mut p) != uefi::SUCCESS || p.is_null() {
         return None;
@@ -141,7 +182,7 @@ fn init_gop(bs: &BootServices) -> Option<FbInfo> {
     if g.mode.is_null() {
         return None;
     }
-    if let Some(m) = pick_gop_mode(g) {
+    if let Some(m) = pick_gop_mode(g, want) {
         // SAFETY: reading the current mode number from the firmware-owned mode record.
         if m != unsafe { (*g.mode).mode } {
             let _ = (g.set_mode)(gop, m);
@@ -323,6 +364,79 @@ fn measure_phase(bs: &BootServices, phase: &str) {
     }
 }
 
+/// Reads the firmware event log back and replays it, then compares the replayed SHA-256 PCRs with
+/// what the TPM reports. A mismatch means the log, the TPM or a measurement cannot be trusted.
+fn verify_eventlog(bs: &BootServices) {
+    let Some(tcg) = locate_tcg2(bs) else { return };
+    let (mut loc, mut last, mut truncated) = (0u64, 0u64, 0u8);
+    // SAFETY: live protocol; format 2 is the crypto-agile log; the three out-pointers are valid.
+    let s = unsafe { ((*tcg).get_event_log)(tcg, 2, &mut loc, &mut last, &mut truncated) };
+    if s != uefi::SUCCESS || loc == 0 || last < loc || truncated != 0 {
+        warn!("evlog", "no usable event log (status={:#x}, truncated={})", s, truncated != 0);
+        return;
+    }
+    let last_off = (last - loc) as usize;
+    if last_off > 60 * 1024 {
+        warn!("evlog", "event log larger than {} KiB, not replayed", 60);
+        return;
+    }
+    // The last record starts at `last_off`; records are small, so this window covers it.
+    let len = last_off + 2048;
+    // SAFETY: the log lives in firmware memory that is identity-mapped before ExitBootServices;
+    // the firmware reserves at least 64 KiB for it and `len` stays below that.
+    let log = unsafe { core::slice::from_raw_parts(loc as *const u8, len) };
+    let rp = match eventlog::replay(log, last_off) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("evlog", "event log could not be parsed: {:?}", e);
+            return;
+        }
+    };
+    let mut compared = 0u8;
+    let mut mismatched = 0u8;
+    let mut hex = [0u8; 64];
+    for pcr in (0..8u32).chain([tcg2::PCR_PHASE, tcg2::PCR_CMDLINE]) {
+        let Some(actual) = pcr_read(tcg, pcr) else { continue };
+        compared += 1;
+        let want = &rp.pcrs[pcr as usize];
+        if actual != *want {
+            mismatched += 1;
+            warn!("evlog", "pcr{} differs between the TPM and the replayed log", pcr);
+        }
+        #[cfg(feature = "dump-eventlog")]
+        {
+            tcg2::hex32(&actual, &mut hex);
+            info!("evlog", "dump pcr{}={}", pcr, core::str::from_utf8(&hex).unwrap_or("?"));
+        }
+    }
+    let _ = &mut hex;
+    #[cfg(feature = "dump-eventlog")]
+    {
+        info!("evlog", "dump last_offset={} len={}", last_off, len);
+        for (i, chunk) in log.chunks(40).enumerate() {
+            let mut line = [0u8; 80];
+            for (j, b) in chunk.iter().enumerate() {
+                line[j * 2] = b"0123456789abcdef"[(b >> 4) as usize];
+                line[j * 2 + 1] = b"0123456789abcdef"[(b & 15) as usize];
+            }
+            info!("evlog", "dump hex {:04} {}", i, core::str::from_utf8(&line[..chunk.len() * 2]).unwrap_or("?"));
+        }
+    }
+    let b = boot_info();
+    b.evlog_checked = true;
+    b.evlog_records = rp.records as u32;
+    b.evlog_compared = compared;
+    b.evlog_mismatched = mismatched;
+    info!(
+        "evlog",
+        "replayed {} records ({} extends); compared {} PCRs with the TPM, {} differ",
+        rp.records,
+        rp.extended,
+        compared,
+        mismatched
+    );
+}
+
 /// Revocation metadata (SBAT, see the shim project's SBAT.md): lets firmware or tooling revoke old
 /// Aeon builds by generation number without touching the signing key. Raise the number after a
 /// security fix that old images must not be trusted without.
@@ -345,6 +459,51 @@ static SBAT: [u8; SBAT_TEXT.len()] = {
     a
 };
 
+/// Reads the config file `\EFI\BOOT\aeon.cfg` from the volume the image was loaded from into `out`.
+/// Returns the byte count, 0 when there is no file or no readable volume.
+fn read_config_file(bs: &BootServices, device: Handle, out: &mut [u8]) -> usize {
+    const PATH: [u16; 19] = uefi::utf16(b"\\EFI\\BOOT\\aeon.cfg\0");
+    let mut fs: *mut c_void = core::ptr::null_mut();
+    if device.is_null() || (bs.handle_protocol)(device, &uefi::SIMPLE_FS_GUID, &mut fs) != uefi::SUCCESS || fs.is_null() {
+        return 0;
+    }
+    let fs = fs as *mut uefi::SimpleFs;
+    let mut root: *mut uefi::File = core::ptr::null_mut();
+    // SAFETY: handle_protocol returned a live EFI_SIMPLE_FILE_SYSTEM_PROTOCOL.
+    if unsafe { ((*fs).open_volume)(fs, &mut root) } != uefi::SUCCESS || root.is_null() {
+        return 0;
+    }
+    let mut file: *mut uefi::File = core::ptr::null_mut();
+    // SAFETY: `root` is the volume's open root directory; PATH is a NUL-terminated UTF-16 string.
+    let s = unsafe { ((*root).open)(root, &mut file, PATH.as_ptr(), uefi::FILE_MODE_READ, 0) };
+    let mut n = 0;
+    if s == uefi::SUCCESS && !file.is_null() {
+        let mut size = out.len();
+        // SAFETY: `file` is open for reading; `out` is valid for `size` bytes, which is its length.
+        if unsafe { ((*file).read)(file, &mut size, out.as_mut_ptr()) } == uefi::SUCCESS {
+            n = size.min(out.len());
+        }
+        // SAFETY: `file` was opened above and is closed exactly once.
+        unsafe { ((*file).close)(file) };
+    }
+    // SAFETY: `root` was opened above and is closed exactly once.
+    unsafe { ((*root).close)(root) };
+    n
+}
+
+fn read_var_bytes(rt: &RuntimeServices, name: &[u16], guid: &Guid, buf: &mut [u8]) -> Option<usize> {
+    let mut size = buf.len();
+    let mut attr = 0u32;
+    let s = (rt.get_variable)(name.as_ptr(), guid, &mut attr, &mut size, buf.as_mut_ptr());
+    (s == uefi::SUCCESS).then_some(size.min(buf.len()))
+}
+
+const BOOT_COUNT_NAME: [u16; 14] = uefi::utf16(b"AeonBootCount\0");
+
+fn write_boot_count(rt: &RuntimeServices, value: u8) -> Status {
+    (rt.set_variable)(BOOT_COUNT_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, 1, &value)
+}
+
 /// Image base/size and the command line (UEFI load options), copied into `BootInfo`.
 fn read_loaded_image(bs: &BootServices, image: Handle) {
     let b = boot_info();
@@ -363,6 +522,22 @@ fn read_loaded_image(bs: &BootServices, image: Handle) {
                 b.cmdline[i] = if (0x20..0x7F).contains(&c) { c as u8 } else { b'?' };
             }
             b.cmdline_len = units;
+        }
+        // Options from `\EFI\BOOT\aeon.cfg` follow the load options, like loader.conf for systemd-boot.
+        let mut raw = [0u8; 256];
+        let got = read_config_file(bs, li.device_handle, &mut raw);
+        if got > 0 {
+            let mut flat = [0u8; 120];
+            let n = bootopts::flatten_config(&raw[..got], &mut flat);
+            let mut at = b.cmdline_len;
+            if n > 0 && at > 0 && at < b.cmdline.len() - 1 {
+                b.cmdline[at] = b' ';
+                at += 1;
+            }
+            let take = n.min(b.cmdline.len() - 1 - at);
+            b.cmdline[at..at + take].copy_from_slice(&flat[..take]);
+            b.cmdline_len = at + take;
+            b.cfg_len = take;
         }
     }
 }
@@ -619,7 +794,33 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         log::set_max_level(Level::Trace);
     }
 
-    let fb = init_gop(bs);
+    // Boot counting: raise the counter now, clear it once the kernel is up. Enough failed boots in a
+    // row switch this boot to recovery mode (log on screen, menu waits, no timer or scheduler).
+    {
+        let mut buf = [0u8; 4];
+        let stored = read_var_bytes(rt, &BOOT_COUNT_NAME, &uefi::AEON_GUID, &mut buf);
+        let count = bootcount::decode(stored.map(|n| &buf[..n]));
+        let d = bootcount::decide(count, opts.nocount);
+        let mut counting = d.write.is_some();
+        if let Some(v) = d.write {
+            let s = write_boot_count(rt, v);
+            if s != uefi::SUCCESS {
+                counting = false;
+                warn!("bootcount", "could not store the boot counter, status={:#x}; counting is off for this boot", s);
+            }
+        }
+        let b = boot_info();
+        b.boot_count = count;
+        b.count_enabled = counting;
+        b.recovery = d.recovery || opts.recovery;
+        if b.recovery {
+            opts.verbose = true;
+            opts.menu_timeout = opts.menu_timeout.max(10);
+        }
+        info!("bootcount", "failed_boots={} counting={} recovery={}", count, counting, b.recovery);
+    }
+
+    let fb = init_gop(bs, opts.mode);
     if let Some(f) = fb {
         // SAFETY: GOP reported this linear framebuffer; it is mapped by the firmware and stays
         // valid across ExitBootServices, and nothing else draws to it after this point.
@@ -654,6 +855,12 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         let b = boot_info();
         b.fb = fb;
         b.tsc_hz = log::tsc_hz();
+    }
+    if boot_info().recovery {
+        warn!("boot", "RECOVERY MODE: {} failed boot(s) in a row. Log on screen, no timer, no scheduler, single-task shell.", boot_info().boot_count);
+    }
+    if boot_info().cfg_len > 0 {
+        info!("boot", "options from aeon.cfg: {} bytes; effective options \"{}\"", boot_info().cfg_len, boot_info().cmdline_str());
     }
     {
         // Catch the bar up with the stages that ran before the console existed.
@@ -741,7 +948,8 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
 
     // ---- Stage 5: ExitBootServices ----
     stage("exit-boot-services");
-    measure_phase(bs, tcg2::PHASE_EXIT_BOOT);
+    measure_phase(bs, if boot_info().recovery { tcg2::PHASE_RECOVERY } else { tcg2::PHASE_EXIT_BOOT });
+    verify_eventlog(bs);
     // Size the buffer from the firmware's own answer, with slack because the allocation below (and
     // the first failed ExitBootServices) can add descriptors.
     let probe = fetch_map(bs, core::ptr::null_mut(), 0);
@@ -954,21 +1162,28 @@ extern "C" fn kernel_main() -> ! {
     }
 
     // Tick source: PIC + PIT. If no interrupt arrives, fall back to polling instead of hanging.
-    // SAFETY: the IDT routes vector 32 to the tick stub (set up by `init_descriptors`).
-    unsafe { arch::start_timer() };
-    arch::enable_interrupts();
-    let t0 = arch::rdtsc();
-    let limit = log::tsc_hz() / 3; // 330 ms
-    while arch::ticks() < 3 && arch::rdtsc().wrapping_sub(t0) < limit {
-        arch::pause();
-    }
-    let irq_mode = arch::ticks() >= 3;
-    if irq_mode {
-        info!("timer", "pit irq0 ok hz={} ticks_seen={}", arch::TIMER_HZ, arch::ticks());
+    // Recovery mode never starts the timer: the point is to reach a shell with the fewest moving parts.
+    let irq_mode = if boot_info().recovery {
+        warn!("timer", "recovery mode: timer and scheduler are off; running the shell directly");
+        false
     } else {
-        arch::disable_interrupts();
-        warn!("timer", "no timer interrupt within 330 ms; no preemption, running the shell directly");
-    }
+        // SAFETY: the IDT routes vector 32 to the tick stub (set up by `init_descriptors`).
+        unsafe { arch::start_timer() };
+        arch::enable_interrupts();
+        let t0 = arch::rdtsc();
+        let limit = log::tsc_hz() / 3; // 330 ms
+        while arch::ticks() < 3 && arch::rdtsc().wrapping_sub(t0) < limit {
+            arch::pause();
+        }
+        let ok = arch::ticks() >= 3;
+        if ok {
+            info!("timer", "pit irq0 ok hz={} ticks_seen={}", arch::TIMER_HZ, arch::ticks());
+        } else {
+            arch::disable_interrupts();
+            warn!("timer", "no timer interrupt within 330 ms; no preemption, running the shell directly");
+        }
+        ok
+    };
 
     stage("kernel-tasks");
     // SAFETY: reads the stage table written during boot; no writer is active.
@@ -983,17 +1198,34 @@ extern "C" fn kernel_main() -> ! {
     }
     info!("boot", "boot complete uptime_us={} mode={}", log::uptime_us(), if irq_mode { "preemptive" } else { "single-task" });
 
-    // Finish the splash: bar to 100 %, a short hold so the eye sees it complete, then the shell screen.
+    // Finish the splash: bar to 100 %, a short hold so the eye sees it complete, a fade-out, then the shell.
     if log::with_console(|c| c.splash_active()).unwrap_or(false) {
-        let _ = log::with_console(|c| c.progress(1000));
-        let t0 = arch::rdtsc();
-        while arch::rdtsc().wrapping_sub(t0) < log::tsc_hz() / 5 {
-            arch::pause();
+        bar_to(1000);
+        wait_us(120_000);
+        for step in (0..10u32).rev() {
+            let _ = log::with_console(|c| c.fade_splash((step * 255 / 10) as u8));
+            wait_us(15_000);
         }
         let _ = log::with_console(|c| c.end_splash());
     }
 
     run_fault_tests();
+
+    // The kernel is up and the boot-time fault tests (if any) survived: this boot counts as good.
+    {
+        let b = boot_info();
+        if b.count_enabled && b.runtime_services != 0 {
+            // SAFETY: the firmware runtime-services table address was saved before ExitBootServices and
+            // runtime memory is identity-mapped by `paging::build`, as for ResetSystem in `power`.
+            let rt = unsafe { &*(b.runtime_services as *const RuntimeServices) };
+            let s = write_boot_count(rt, 0);
+            if s == uefi::SUCCESS {
+                info!("bootcount", "boot succeeded, counter cleared");
+            } else {
+                warn!("bootcount", "could not clear the boot counter, status={:#x}", s);
+            }
+        }
+    }
 
     if !irq_mode {
         shell::shell_task(0);

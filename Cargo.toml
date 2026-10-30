@@ -1,6 +1,6 @@
 [package]
 name = "aeon"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Aeon: UEFI x86_64 boot stage of an educational Rust micro-OS"
@@ -13,6 +13,8 @@ fault-stack = []
 fault-wx = []
 fault-nx = []
 fault-panic = []
+# Dumps the TCG event log as hex on the log sinks, to capture a golden fixture for the parser tests.
+dump-eventlog = []
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

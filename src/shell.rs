@@ -110,6 +110,11 @@ fn cmd_tpm() {
     out!("pcr12 (command line)   {}\n", core::str::from_utf8(&hex).unwrap_or("?"));
     crate::tcg2::hex32(&b.pcr11, &mut hex);
     out!("pcr11 (boot phase)     {}\n", core::str::from_utf8(&hex).unwrap_or("?"));
+    if b.evlog_checked {
+        out!("event log replay      {} records, {} of {} PCRs differ from the TPM\n", b.evlog_records, b.evlog_mismatched, b.evlog_compared);
+    } else {
+        out!("event log replay      not run\n");
+    }
     out!("values as read right after the measurements, before leaving the firmware\n");
 }
 
@@ -129,6 +134,17 @@ fn cmd_security() {
     out!("W^X page tables    yes, null page unmapped, guard pages under every stack\n");
     out!("shadow stack (CET) not enabled (cpu supports: {})\n", yes(f.cet_ss));
     out!("branch tracking    not enabled (cpu supports: {})\n", yes(f.cet_ibt));
+    out!("boot counter       {} failed boot(s) before this one; recovery mode: {}\n", b.boot_count, yes(b.recovery));
+    out!(
+        "event log          {}\n",
+        if !b.evlog_checked {
+            "not replayed"
+        } else if b.evlog_mismatched == 0 {
+            "replayed, matches the TPM"
+        } else {
+            "replayed, DIFFERS from the TPM"
+        }
+    );
     out!("ring 3             not implemented, everything runs in the kernel\n");
 }
 fn cmd_mem() {

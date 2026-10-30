@@ -389,3 +389,45 @@ impl SystemTable {
         None
     }
 }
+
+/// EFI_SIMPLE_FILE_SYSTEM_PROTOCOL and EFI_FILE_PROTOCOL: just enough to read one small file from the
+/// volume the image was loaded from.
+pub const SIMPLE_FS_GUID: Guid = Guid {
+    data1: 0x964e5b22,
+    data2: 0x6459,
+    data3: 0x11d2,
+    data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+
+/// Vendor GUID for Aeon's own variables (boot counter).
+pub const AEON_GUID: Guid = Guid {
+    data1: 0x5ae0a1c0,
+    data2: 0x6b1d,
+    data3: 0x4f0e,
+    data4: [0x9a, 0x3c, 0xae, 0xb0, 0x07, 0xc0, 0xde, 0x01],
+};
+
+pub const FILE_MODE_READ: u64 = 1;
+
+#[repr(C)]
+pub struct SimpleFs {
+    pub revision: u64,
+    pub open_volume: extern "efiapi" fn(*mut SimpleFs, *mut *mut File) -> Status,
+}
+
+#[repr(C)]
+pub struct File {
+    pub revision: u64,
+    pub open: extern "efiapi" fn(*mut File, *mut *mut File, *const u16, u64, u64) -> Status,
+    pub close: extern "efiapi" fn(*mut File) -> Status,
+    pub delete: usize,
+    pub read: extern "efiapi" fn(*mut File, *mut usize, *mut u8) -> Status,
+}
+
+const _: () = {
+    assert!(offset_of!(SimpleFs, open_volume) == 8);
+    assert!(offset_of!(File, open) == 8);
+    assert!(offset_of!(File, close) == 16);
+    assert!(offset_of!(File, read) == 32);
+    assert!(offset_of!(LoadedImage, device_handle) == 24);
+};

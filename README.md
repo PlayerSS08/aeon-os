@@ -25,8 +25,11 @@ While booting you see the logo fade in and a thin bar fill as the real boot stag
 in the first 2 seconds for the boot menu. The menu leaves the splash and shows the full boot log.
 
 Menu keys: `Enter` boot, `D` debug logging, `F` reboot into firmware setup, `R` reboot, `S` shut down.
-Boot options (image command line / UEFI load options): `quiet`, `debug`, `verbose` (log instead of
-splash), `nomenu`, `timeout=N`. `debug` implies `verbose`.
+Boot options (image command line / UEFI load options, plus the text file `EFI/BOOT/aeon.cfg` on the stick, one
+setting per line, `#` starts a comment): `quiet`, `debug`, `verbose` (log instead of
+splash), `nomenu`, `timeout=N`, `mode=WxH` (pick a screen mode, e.g. `mode=1920x1080`), `recovery` (force recovery
+mode), `nocount` (turn boot counting off). `debug` implies `verbose`. The effective options are what gets
+measured into the TPM.
 
 Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmware "legacy" mode).
 
@@ -62,6 +65,16 @@ or register values. Those go to serial and debugcon only.
   `EFI_TCG2_PROTOCOL`, then the PCR is read back and compared with the value computed from the previous
   one. The firmware's own event log stays valid. The firmware measures this image into PCR 4 itself.
 - **Revocation metadata (SBAT)**: the image carries an `.sbat` section (generation 1, component `aeon`), so firmware or tooling can revoke old builds by generation without touching the key.
+- **Boot counting and recovery mode**: a counter in the firmware's variable store is raised at the start of
+  every boot and cleared once the kernel is up and its boot-time self-tests survived. After 3 failed boots
+  in a row the next boot enters recovery mode: log on screen, the menu waits 10 s for a key, no timer
+  interrupt and no scheduler, a single-task shell, and a different boot-phase marker in PCR 11 so secrets
+  sealed to a normal boot stay shut. This helps with failures the recovery path avoids (splash, screen
+  mode, timer, scheduler, TPM calls); it is not a rollback, because there is only one image. `nocount`
+  turns the counter off if a firmware's variable writes ever misbehave.
+- **Event-log replay**: before leaving the firmware, Aeon reads the TPM event log, replays it and compares
+  the result with the TPM's PCRs 0 to 7, 11 and 12. `tpm` and `security` show the outcome. A mismatch
+  means the log, the TPM or a measurement is wrong.
 - **Boot-phase measurement**: a marker is extended into PCR 11 just before Aeon leaves the firmware, so a secret sealed to PCR 11 only opens for a boot that got that far.
 - **Boot random seed**: SHA-256 over the firmware RNG, four RDRAND words and timing. It seeds the kernel
   stack-overflow canary. The seed is never logged. If neither hardware source exists, the log warns.
@@ -111,6 +124,12 @@ The boot tests (`tests/boot_test.py`) need QEMU, OVMF, swtpm, sbsigntool and vir
 - measured boot with a software TPM: PCR 12 equals `SHA256(before || SHA256(cmdline))` computed
   independently, and the no-TPM path;
 - Secure Boot: a signed image boots, an unsigned image and an image from an unknown key are refused;
+- `aeon.cfg`: options are read, shown and measured into PCR 12 (checked against an independent calculation);
+- screen modes 640x480, 1024x768 and 1920x1080 (the logo and bar are centred and inside the screen);
+- boot counting: three panicking boots on one NVRAM image start recovery, a good boot clears the counter,
+  and `nocount` turns it off;
+- event-log replay: the parser is also unit-tested against a real OVMF + swtpm log (captured with
+  `tests/capture_eventlog.py`) whose replay must reproduce the PCRs the TPM reported;
 - the image file itself: `.sbat` present in the build and in the signed release, size budget;
 - the new shell commands (`version`, `security`, `tpm`) against a software TPM;
 - the shipped `usb/` folder: checksums, contents, and that it boots after enrolling its certificate;
@@ -132,7 +151,7 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 | `sched.rs` | preemptive round-robin tasks (registers + FXSAVE on each stack) |
 | `shell.rs`, `keymap.rs`, `power.rs` | shell and status bar, scancode decoder, reboot and ACPI power-off |
 | `fb.rs`, `font.rs`, `log.rs` | framebuffer console, splash and stop screen, public-domain 8x8 font, logger and sinks |
-| `sha256.rs`, `entropy.rs`, `tcg2.rs`, `splash.rs`, `logfmt.rs`, `memmap.rs`, `acpi.rs`, `cpuid.rs`, `pixel.rs`, `bootopts.rs`, `bootinfo.rs`, `boot.rs` | pure logic (unit-tested) and boot state |
+| `sha256.rs`, `entropy.rs`, `tcg2.rs`, `eventlog.rs`, `bootcount.rs`, `splash.rs`, `logfmt.rs`, `memmap.rs`, `acpi.rs`, `cpuid.rs`, `pixel.rs`, `bootopts.rs`, `bootinfo.rs`, `boot.rs` | pure logic (unit-tested) and boot state |
 | `tests/`, `tools/` | boot tests; release signing |
 
 ## Tested and not tested
@@ -142,11 +161,11 @@ Run on every change: QEMU 10.2 with EDK II OVMF (Ubuntu, WSL2, software emulatio
 
 **Not tested:** real hardware, USB-only keyboards, VirtualBox/Hyper-V/VMware, a hardware TPM, enrolling the
 certificate through a real firmware setup screen, SMEP/SMAP/UMIP effects on a CPU that has them under
-emulation limits, and screens other than 1280x800 (the 4K scale path is unit-tested but not seen).
+emulation limits, and 4K screens (the scale path is unit-tested but not seen; 640x480, 1024x768 and 1920x1080 are checked).
 
 ## Limits and roadmap
 
 Single CPU, identity mapping only, kernel threads only (no ring 3, syscalls, filesystem or networking).
-Boot counting with fallback and a kernel hash check need the kernel split from the loader into its own
-file; today both are one image, so a self-check would prove nothing. Next: split loader and kernel, user
-mode with syscalls, a ramdisk filesystem, a USB keyboard driver, APIC/SMP, and an `aarch64` port.
+A separate kernel hash check would add nothing today: loader and kernel are one image, and the firmware already
+verifies that whole image under Secure Boot. Splitting them only pays off for two kernels to choose between.
+Next: user mode with syscalls, a ramdisk filesystem, a USB keyboard driver, APIC/SMP, and an `aarch64` port.

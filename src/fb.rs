@@ -82,6 +82,8 @@ pub struct Console {
     cur_row: usize,
     /// While true the log is not painted: the screen shows only the logo and the progress bar.
     splash: bool,
+    /// Last bar position drawn, in thousandths.
+    bar_pm: u32,
     logo_row: usize,
 }
 
@@ -120,6 +122,7 @@ impl Console {
             cur_col: 0,
             cur_row: 0,
             splash: false,
+            bar_pm: 0,
             logo_row: 0,
         };
         c.logo_row = rows.saturating_sub(BANNER_ROWS) / 3;
@@ -241,13 +244,33 @@ impl Console {
     }
 
     /// Fills the progress bar to `permille` thousandths.
-    pub fn progress(&self, permille: u32) {
+    pub fn progress(&mut self, permille: u32) {
         if !self.splash {
             return;
         }
+        self.bar_pm = permille.min(1000);
         let (x, y, w, h) = self.bar_rect();
         let fg = self.px(LOGO_RGB);
-        self.fill_rect(x, y, splash::fill_width(w, permille), h, fg);
+        self.fill_rect(x, y, splash::fill_width(w, self.bar_pm), h, fg);
+    }
+
+    /// Where the bar currently stands, in thousandths.
+    pub fn bar(&self) -> u32 {
+        self.bar_pm
+    }
+
+    /// Dims the whole splash (logo, bar track and bar fill) to `level` / 255 for the fade-out.
+    pub fn fade_splash(&self, level: u8) {
+        if !self.splash {
+            return;
+        }
+        self.draw_logo_rgb(splash::dim(LOGO_RGB, level), BG);
+        let (x, y, w, h) = self.bar_rect();
+        let track = self.px(splash::dim(TRACK_RGB, level));
+        let fg = self.px(splash::dim(LOGO_RGB, level));
+        let filled = splash::fill_width(w, self.bar_pm);
+        self.fill_rect(x, y, w, h, track);
+        self.fill_rect(x, y, filled, h, fg);
     }
 
     /// Shows a short centred line under the bar (empty `text` removes it).

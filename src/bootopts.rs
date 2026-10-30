@@ -11,6 +11,12 @@ pub struct BootOpts {
     pub menu_timeout: u8,
     /// Show the log on screen during boot instead of the logo and progress bar.
     pub verbose: bool,
+    /// Boot in recovery mode: log on screen, menu waits for a key, no timer or scheduler.
+    pub recovery: bool,
+    /// Do not count boots (kill switch for firmware whose variable writes misbehave).
+    pub nocount: bool,
+    /// Requested screen mode `(width, height)`; ignored when the firmware has no such mode.
+    pub mode: Option<(u32, u32)>,
 }
 
 pub const DEFAULT_TIMEOUT: u8 = 2;
@@ -18,7 +24,7 @@ pub const MAX_TIMEOUT: u8 = 30;
 
 impl Default for BootOpts {
     fn default() -> Self {
-        Self { quiet: false, debug: false, menu_timeout: DEFAULT_TIMEOUT, verbose: false }
+        Self { quiet: false, debug: false, menu_timeout: DEFAULT_TIMEOUT, verbose: false, recovery: false, nocount: false, mode: None }
     }
 }
 
@@ -31,9 +37,14 @@ pub fn parse(cmdline: &str) -> BootOpts {
             "debug" => o.debug = true,
             "nomenu" => o.menu_timeout = 0,
             "verbose" => o.verbose = true,
+            "recovery" => o.recovery = true,
+            "nocount" => o.nocount = true,
             _ => {
                 if let Some(n) = w.strip_prefix("timeout=").and_then(|n| n.parse::<u8>().ok()) {
                     o.menu_timeout = n.min(MAX_TIMEOUT);
+                }
+                if let Some((w, h)) = w.strip_prefix("mode=").and_then(parse_mode) {
+                    o.mode = Some((w, h));
                 }
             }
         }
@@ -45,6 +56,42 @@ pub fn parse(cmdline: &str) -> BootOpts {
         o.verbose = true; // debug output is for reading, so the splash would hide it
     }
     o
+}
+
+/// `1920x1080` to `(1920, 1080)`; sizes outside 320..=7680 by 200..=4320 are rejected.
+fn parse_mode(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.split_once('x')?;
+    let (w, h) = (w.parse::<u32>().ok()?, h.parse::<u32>().ok()?);
+    ((320..=7680).contains(&w) && (200..=4320).contains(&h)).then_some((w, h))
+}
+
+/// Turns the text of a config file into one command-line string in `out`: lines starting with `#`
+/// are comments, line breaks become spaces, anything outside printable ASCII is dropped. Returns
+/// the number of bytes written (at most `out.len()`).
+pub fn flatten_config(text: &[u8], out: &mut [u8]) -> usize {
+    let mut n = 0;
+    for line in text.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.first() == Some(&b'#') {
+            continue;
+        }
+        let mut wrote = false;
+        for &b in line {
+            if (0x20..0x7F).contains(&b) && n < out.len() {
+                out[n] = b;
+                n += 1;
+                wrote = true;
+            }
+        }
+        if wrote && n < out.len() {
+            out[n] = b' ';
+            n += 1;
+        }
+    }
+    while n > 0 && out[n - 1] == b' ' {
+        n -= 1;
+    }
+    n
 }
 
 /// Hostile or garbage command lines must never panic the parser.
@@ -116,5 +163,43 @@ mod tests {
     fn quiet_and_debug_conflict() {
         let o = parse("quiet debug");
         assert!(o.debug && !o.quiet);
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn mode_parses_and_rejects_nonsense() {
+        assert_eq!(parse("mode=1920x1080").mode, Some((1920, 1080)));
+        for bad in ["mode=", "mode=1920", "mode=axb", "mode=10x10", "mode=99999x99999", "mode=1920x", "mode=-1x-1"] {
+            assert_eq!(parse(bad).mode, None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn recovery_and_nocount_words() {
+        let o = parse("recovery nocount");
+        assert!(o.recovery && o.nocount);
+        assert!(!parse("").recovery && !parse("").nocount);
+    }
+
+    #[test]
+    fn config_is_flattened() {
+        let mut out = [0u8; 64];
+        let n = flatten_config(b"# comment\nquiet\r\n\ntimeout=5\n  # not a comment start\n", &mut out);
+        assert_eq!(&out[..n], b"quiet timeout=5   # not a comment start");
+        assert_eq!(flatten_config(b"", &mut out), 0);
+        assert_eq!(flatten_config(b"\x00\x01\xff\n", &mut out), 0);
+    }
+
+    #[test]
+    fn config_never_overruns_the_buffer() {
+        let mut out = [0u8; 8];
+        let n = flatten_config(b"aaaaaaaaaaaaaaaa\nbbbb\n", &mut out);
+        assert!(n <= 8);
+        let mut empty: [u8; 0] = [];
+        assert_eq!(flatten_config(b"abc", &mut empty), 0);
     }
 }

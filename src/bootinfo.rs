@@ -74,6 +74,20 @@ pub struct BootInfo {
     /// PCR 12 (command line) and PCR 11 (boot phase) as read back right after the measurements.
     pub pcr12: [u8; 32],
     pub pcr11: [u8; 32],
+    /// Failed boots in a row before this one (0 when counting is off or the variable is absent).
+    pub boot_count: u8,
+    /// Counting is on, so the counter must be cleared when this boot succeeds.
+    pub count_enabled: bool,
+    /// This boot runs in recovery mode.
+    pub recovery: bool,
+    /// Bytes of options taken from the config file (0 if there is none).
+    pub cfg_len: usize,
+    /// Event-log replay was run (needs a TPM with a readable log).
+    pub evlog_checked: bool,
+    pub evlog_records: u32,
+    /// PCRs compared with the replay, and how many of them differed.
+    pub evlog_compared: u8,
+    pub evlog_mismatched: u8,
 }
 
 impl BootInfo {
@@ -132,6 +146,14 @@ impl BootInfo {
             tpm_present: false,
             pcr12: [0; 32],
             pcr11: [0; 32],
+            boot_count: 0,
+            count_enabled: false,
+            recovery: false,
+            cfg_len: 0,
+            evlog_checked: false,
+            evlog_records: 0,
+            evlog_compared: 0,
+            evlog_mismatched: 0,
         }
     }
 
