@@ -24,7 +24,9 @@ Check the copy with `SHA256.txt` (`sha256sum -c SHA256.txt` or `Get-FileHash`).
 While booting you see the logo fade in and a thin bar fill as the real boot stages complete. Press any key
 in the first 2 seconds for the boot menu. The menu leaves the splash and shows the full boot log.
 
-Menu keys: `Enter` boot, `D` debug logging, `F` reboot into firmware setup, `R` reboot, `S` shut down.
+Menu keys: `Enter` boot, `C` recovery mode, `S` firmware shell (a shell that runs before the kernel through the
+firmware's own input, so USB keyboards work; `boot` continues), `D` debug logging, `F` reboot into firmware
+setup, `R` reboot, `O` power off.
 Boot options (image command line / UEFI load options, plus the text file `EFI/BOOT/aeon.cfg` on the stick, one
 setting per line, `#` starts a comment): `quiet`, `debug`, `verbose` (log instead of
 splash), `nomenu`, `timeout=N`, `mode=WxH` (pick a screen mode, e.g. `mode=1920x1080`), `recovery` (force recovery
@@ -47,7 +49,7 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | kernel-env | copy the memory map, enable NX, GDT/TSS (double-fault stack), IDT, identity-mapped page tables with W^X, unmapped null page and stack guard pages, CR0.WP/SMEP/SMAP/UMIP when supported, own stack |
 | kernel-memory, kernel-tasks | frame allocator, 32 MB heap, PIT tick, scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
 
-Shell commands: `help info version security tpm uptime mem ps spawn counters kill memmap log echo sort clear panic reboot
+Shell commands: `help info version security tpm lastpanic uptime mem ps spawn counters kill memmap log echo sort clear panic reboot
 shutdown`. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
 timer interrupt preempting them. `log` prints the boot log, which the splash held back. Shutdown uses ACPI
 S5, then firmware `ResetSystem`.
@@ -76,6 +78,17 @@ or register values. Those go to serial and debugcon only.
   the result with the TPM's PCRs 0 to 7, 11 and 12. `tpm` and `security` show the outcome. A mismatch
   means the log, the TPM or a measurement is wrong.
 - **Boot-phase measurement**: a marker is extended into PCR 11 just before Aeon leaves the firmware, so a secret sealed to PCR 11 only opens for a boot that got that far.
+- **Last-panic record**: a panic or CPU exception stores a short text (no addresses) in a firmware variable;
+  the next boot logs it once and deletes it. `lastpanic` shows it, `security` says whether the previous boot
+  ended normally. This is a small version of Linux pstore.
+- **Seed history**: each boot stores a seed derived from its own (never the seed itself) and mixes the
+  previous one into the next, so a machine with no RNG hardware still varies between boots. It is readable
+  by anything that can read firmware variables, so it only adds to the hardware sources, never replaces them.
+- **Boot Loader Interface**: besides `LoaderInfo`, Aeon publishes `LoaderFirmwareType`, `LoaderFirmwareInfo`,
+  `LoaderImageIdentifier` and `LoaderTimeExecUSec` and reads them back, so `bootctl status` on Linux can
+  show what booted the machine. It claims no `LoaderFeatures`, because Aeon does not implement those.
+- **Secure Boot detail**: `security` shows whether a platform key is enrolled and how large the `dbx`
+  revocation list is, not only the on/off flag.
 - **Boot random seed**: SHA-256 over the firmware RNG, four RDRAND words and timing. It seeds the kernel
   stack-overflow canary. The seed is never logged. If neither hardware source exists, the log warns.
 - W^X page tables from the PE section headers, NX everywhere else, unmapped null page, `CR0.WP`, and
@@ -126,6 +139,11 @@ The boot tests (`tests/boot_test.py`) need QEMU, OVMF, swtpm, sbsigntool and vir
 - Secure Boot: a signed image boots, an unsigned image and an image from an unknown key are refused;
 - `aeon.cfg`: options are read, shown and measured into PCR 12 (checked against an independent calculation);
 - screen modes 640x480, 1024x768 and 1920x1080 (the logo and bar are centred and inside the screen);
+- the firmware shell (menu key `S`: `version`, `tpm`, `security` work before the kernel, kernel-only
+  commands are refused, `boot` continues) and recovery from the menu (`C`);
+- the last-panic record after a panic and after a CPU exception (shown once, no addresses);
+- seed history across two boots, the five Boot Loader Interface variables, and the platform-key report
+  with Secure Boot on;
 - boot counting: three panicking boots on one NVRAM image start recovery, a good boot clears the counter,
   and `nocount` turns it off;
 - event-log replay: the parser is also unit-tested against a real OVMF + swtpm log (captured with
@@ -159,7 +177,7 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 Run on every change: QEMU 10.2 with EDK II OVMF (Ubuntu, WSL2, software emulation), a software TPM 2.0
 (swtpm), OVMF Secure Boot with throwaway and release keys, and the host unit tests.
 
-**Not tested:** real hardware, USB-only keyboards, VirtualBox/Hyper-V/VMware, a hardware TPM, enrolling the
+**Not tested:** real hardware, USB-only keyboards (the firmware shell should work with them, but QEMU was driven with the PS/2 path), VirtualBox/Hyper-V/VMware, a hardware TPM, enrolling the
 certificate through a real firmware setup screen, SMEP/SMAP/UMIP effects on a CPU that has them under
 emulation limits, and 4K screens (the scale path is unit-tested but not seen; 640x480, 1024x768 and 1920x1080 are checked).
 

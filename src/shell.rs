@@ -62,6 +62,7 @@ const HELP: &str = "commands:
   version            Aeon version and revision
   security           which protections are active right now
   tpm                measured-boot PCR values
+  lastpanic          how the previous boot ended
   uptime             time since boot
   mem                frames, heap and RAM totals
   ps                 list tasks
@@ -124,8 +125,16 @@ fn cmd_security() {
     let s = arch::cpu_state();
     let f = &b.feat;
     out!("secure boot        {}\n", b.secure_boot.name());
+    out!("secure boot keys   platform key enrolled: {}; revocation list (dbx): {} bytes\n", yes(b.sb_pk_enrolled), b.sb_dbx_bytes);
+    out!("boot loader iface  {} of 5 variables published\n", b.loader_vars);
     out!("measured boot      {} (TPM present: {})\n", yes(b.tpm_measured), yes(b.tpm_present));
-    out!("boot seed          {} hardware source(s); canary randomised: {}\n", b.seed_sources, yes(b.seed_sources > 0));
+    out!(
+        "boot seed          {} hardware source(s), previous-boot seed mixed in: {}; canary randomised: {}\n",
+        b.seed_sources,
+        yes(b.seed_persisted),
+        yes(b.seed_sources > 0 || b.seed_persisted)
+    );
+    out!("previous boot      {}\n", if b.last_panic_len == 0 { "ended normally" } else { "ended in a panic or exception, see `lastpanic`" });
     out!("no-execute (NX)    {}\n", yes(s.efer & arch::EFER_NXE != 0));
     out!("write protect      {}\n", yes(s.cr0 & arch::CR0_WP != 0));
     out!("SMEP               {} (cpu supports: {})\n", yes(s.cr4 & arch::CR4_SMEP != 0), yes(f.smep));
@@ -146,6 +155,33 @@ fn cmd_security() {
         }
     );
     out!("ring 3             not implemented, everything runs in the kernel\n");
+}
+
+fn cmd_lastpanic() {
+    let b = boot::info();
+    if b.last_panic_len == 0 {
+        out!("the previous boot ended normally (or left no record)\n");
+    } else {
+        out!("the previous boot ended in: {}\n", core::str::from_utf8(&b.last_panic[..b.last_panic_len]).unwrap_or("?"));
+    }
+}
+
+/// Commands that work before the kernel exists (the firmware shell, boot services still active).
+/// Returns false for anything else so the caller can say so.
+pub fn run_firmware_command(line: &str) -> bool {
+    let line = line.trim();
+    let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
+    match cmd {
+        "info" => cmd_info(),
+        "version" => cmd_version(),
+        "security" => cmd_security(),
+        "tpm" => cmd_tpm(),
+        "lastpanic" => cmd_lastpanic(),
+        "log" => log::replay(log::print_raw),
+        "echo" => out!("{}\n", rest),
+        _ => return false,
+    }
+    true
 }
 fn cmd_mem() {
     let b = boot::info();
@@ -208,6 +244,7 @@ fn run(line: &str) {
         "version" => cmd_version(),
         "security" => cmd_security(),
         "tpm" => cmd_tpm(),
+        "lastpanic" => cmd_lastpanic(),
         "uptime" => {
             let s = log::uptime_us() / 1_000_000;
             out!("up {:02}:{:02}:{:02}\n", s / 3600, (s / 60) % 60, s % 60);

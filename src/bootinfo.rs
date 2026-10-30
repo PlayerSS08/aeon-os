@@ -88,6 +88,16 @@ pub struct BootInfo {
     /// PCRs compared with the replay, and how many of them differed.
     pub evlog_compared: u8,
     pub evlog_mismatched: u8,
+    /// What the previous boot recorded about how it ended (empty if it ended normally).
+    pub last_panic: [u8; 160],
+    pub last_panic_len: usize,
+    /// A seed stored by an earlier boot was mixed into this boot's seed.
+    pub seed_persisted: bool,
+    /// Secure Boot detail: a platform key is enrolled, size of the `dbx` revocation list in bytes.
+    pub sb_pk_enrolled: bool,
+    pub sb_dbx_bytes: u32,
+    /// Loader Interface variables that were published and read back correctly.
+    pub loader_vars: u8,
 }
 
 impl BootInfo {
@@ -154,6 +164,12 @@ impl BootInfo {
             evlog_records: 0,
             evlog_compared: 0,
             evlog_mismatched: 0,
+            last_panic: [0; 160],
+            last_panic_len: 0,
+            seed_persisted: false,
+            sb_pk_enrolled: false,
+            sb_dbx_bytes: 0,
+            loader_vars: 0,
         }
     }
 

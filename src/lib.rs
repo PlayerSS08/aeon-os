@@ -42,6 +42,8 @@ pub mod boot;
 #[cfg(target_os = "uefi")]
 pub mod mm;
 #[cfg(target_os = "uefi")]
+pub mod panicrec;
+#[cfg(target_os = "uefi")]
 pub mod paging;
 #[cfg(target_os = "uefi")]
 pub mod power;

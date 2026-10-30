@@ -271,7 +271,7 @@ def t_menu(ctx):
         r = ctx.r
         r.check("menu wait reached", vm.wait_for("press any key within"))
         vm.keys("spc")
-        r.check("menu opens on a key", vm.wait_for("Enter boot | D toggle debug"), vm.text()[-500:])
+        r.check("menu opens on a key", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-500:])
         time.sleep(0.5)
         w, h, pix = vm.shot(os.path.join(ctx.shots, "4-menu.png"))
         r.check("menu leaves the splash (log visible)", find_bar(pix, w, h) is None)
@@ -464,6 +464,107 @@ def t_bootcount(ctx):
         vm.close()
 
 
+def t_fwshell(ctx):
+    """Menu key S: a shell that runs before the kernel, through the firmware's input (USB keyboards work)."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="fwsh", tpm=True)
+    try:
+        r.check("menu wait reached", vm.wait_for("press any key within"))
+        vm.keys("spc")
+        r.check("menu offers the firmware shell", vm.wait_for("S firmware shell"), vm.text()[-500:])
+        vm.keys("s")
+        r.check("firmware shell prompt", vm.wait_for("fw> ", 30, "serial"), vm.serial_text()[-300:])
+        for cmd, expect in (("version", "sbat generation 1"), ("tpm", "pcr12 (command line)"), ("security", "secure boot keys")):
+            vm.type(cmd)
+            vm.keys("ret")
+            r.check(f"`{cmd}` works before the kernel", vm.wait_for(expect, 30, "serial"), vm.serial_text()[-300:])
+        vm.type("mem")
+        vm.keys("ret")
+        r.check("kernel-only commands are refused politely", vm.wait_for("not available before the kernel starts", 30, "serial"))
+        vm.type("boot")
+        vm.keys("ret")
+        r.check("`boot` continues into the kernel", vm.wait_for("boot complete", 150))
+        r.check("boot after the shell is a normal boot", "recovery=false" in vm.text())
+    finally:
+        vm.close()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-c"), ctx.work, name="menu-c")
+    try:
+        vm.wait_for("press any key within")
+        vm.keys("spc")
+        vm.wait_for("C recovery mode")
+        vm.keys("c")
+        r.check("menu key C boots recovery mode", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text(), vm.text()[-400:])
+    finally:
+        vm.close()
+
+
+def t_lastpanic(ctx):
+    """A panic or CPU exception leaves a record; the next boot shows it once."""
+    r = ctx.r
+    for name, expect in (("fault-panic", "deliberate panic (fault-panic feature)"), ("fault-ud", "CPU exception vector=6")):
+        bad = os.path.join(ctx.faults, name, "aeon.efi")
+        vm = Vm(make_esp(ctx.work, bad, f"esp-{name}"), ctx.work, name=f"lp-{name}")
+        vm.wait_for(expect, 150)
+        time.sleep(1)
+        vm.close()
+        vm2 = Vm(make_esp(ctx.work, ctx.efi, f"esp-ok-{name}"), ctx.work, vars_file=vm.vars, name=f"lp-ok-{name}")
+        try:
+            r.check(f"{name}: next boot reports the record", vm2.wait_for("previous boot ended in:", 150) and expect in vm2.text(), vm2.text()[:700])
+            r.check(f"{name}: record has no addresses", "0x" not in [l for l in vm2.text().splitlines() if "previous boot ended in" in l][0])
+            vm2.wait_for("aeon> ", 150, "serial")
+            vm2.type("lastpanic")
+            vm2.keys("ret")
+            r.check(f"{name}: `lastpanic` shows it", vm2.wait_for("the previous boot ended in:", 30, "serial"))
+        finally:
+            vm2.close()
+        vm3 = Vm(make_esp(ctx.work, ctx.efi, f"esp-ok2-{name}"), ctx.work, vars_file=vm2.vars, name=f"lp-ok2-{name}")
+        try:
+            r.check(f"{name}: the record is shown only once", vm3.wait_for("boot complete", 150) and "previous boot ended in" not in vm3.text())
+        finally:
+            vm3.close()
+
+
+def t_seed_history(ctx):
+    """The seed is carried to the next boot (derived, never raw) and the next boot reports using it."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="seed1")
+    try:
+        r.check("first boot: no earlier seed", vm.wait_for("boot complete", 150) and "mixed in: false" in vm.text())
+    finally:
+        vm.close()
+    vm2 = Vm(make_esp(ctx.work, ctx.efi, "esp2"), ctx.work, vars_file=vm.vars, name="seed2")
+    try:
+        r.check("second boot: previous seed mixed in", vm2.wait_for("boot complete", 150) and "mixed in: true" in vm2.text())
+        r.check("seed bytes never logged", "AeonSeed" not in vm2.text())
+    finally:
+        vm2.close()
+
+
+def t_loader_iface(ctx):
+    """Boot Loader Interface variables are published and read back; Secure Boot detail is reported."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="loader")
+    try:
+        r.check("5 loader variables published", vm.wait_for("Boot Loader Interface: 5 of 5 variables published", 150), vm.text()[:800])
+        vm.wait_for("aeon> ", 150, "serial")
+        vm.type("security")
+        vm.keys("ret")
+        r.check("security shows key detail", vm.wait_for("secure boot keys   platform key enrolled: no", 30, "serial"), vm.serial_text()[-900:])
+    finally:
+        vm.close()
+    key, crt, vars_out = sb_vars(ctx.work, "ldr")
+    signed = os.path.join(ctx.work, "ldr-signed.efi")
+    subprocess.run(["sbsign", "--key", key, "--cert", crt, "--output", signed, ctx.efi], check=True, capture_output=True)
+    vm = Vm(make_esp(ctx.work, signed, "esp-ldr-sb"), ctx.work, code=CODE_SB, vars_file=vars_out, name="loader-sb")
+    try:
+        vm.wait_for("aeon> ", 150, "serial")
+        vm.type("security")
+        vm.keys("ret")
+        r.check("Secure Boot on: platform key enrolled is reported", vm.wait_for("platform key enrolled: yes", 30, "serial"), vm.serial_text()[-900:])
+    finally:
+        vm.close()
+
+
 def t_no_tpm(ctx):
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="notpm")
     try:
@@ -580,7 +681,7 @@ def t_faults(ctx):
 
 TESTS = {
     "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "config": t_config, "modes": t_modes,
-    "bootcount": t_bootcount, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
+    "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
 

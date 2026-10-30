@@ -756,6 +756,14 @@ extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
     error!("exc", "r9 ={:#018x} r10={:#018x} r11={:#018x} r12={:#018x}", f.r9, f.r10, f.r11, f.r12);
     error!("exc", "r13={:#018x} r14={:#018x} r15={:#018x}", f.r13, f.r14, f.r15);
     error!("exc", "system halted");
+    {
+        // No addresses in the stored text: it is readable from the next OS.
+        use core::fmt::Write;
+        let mut rec = crate::logfmt::LineBuf::<{ crate::panicrec::MAX_LEN }>::new();
+        let _ = write!(rec, "CPU exception vector={} {}", f.vector, name);
+        let r = rec.finish();
+        crate::panicrec::record(&r[..r.len() - 1]);
+    }
     // The screen gets the cause only; addresses and registers stay on the serial and debug ports.
     let _ = crate::log::with_console(|c| {
         c.panic_screen(&[b"The processor reported an unrecoverable error:", name.as_bytes(), b"Details are in the serial log."])

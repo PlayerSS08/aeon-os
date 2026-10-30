@@ -235,7 +235,7 @@ fn tpm2_present(bs: &BootServices) -> bool {
 
 /// Builds the boot random seed from the firmware RNG and RDRAND (the strong sources) plus timing.
 /// Returns the seed and how many strong sources contributed. The seed is never logged.
-fn gather_seed(bs: &BootServices, rdrand: bool) -> ([u8; entropy::SEED_LEN], u8) {
+fn gather_seed(bs: &BootServices, rt: &RuntimeServices, rdrand: bool) -> ([u8; entropy::SEED_LEN], u8, bool) {
     let mut pool = entropy::Pool::new();
     let mut strong = 0u8;
 
@@ -263,9 +263,26 @@ fn gather_seed(bs: &BootServices, rdrand: bool) -> ([u8; entropy::SEED_LEN], u8)
             strong += 1;
         }
     }
+    // A seed left by the previous boot adds history, so a machine without RNG hardware still varies.
+    let mut old = [0u8; entropy::SEED_LEN];
+    let persisted = read_var_bytes(rt, &SEED_NAME, &uefi::AEON_GUID, &mut old) == Some(entropy::SEED_LEN);
+    if persisted {
+        pool.add(&old);
+    }
+    old.fill(0);
+    core::hint::black_box(&old);
     pool.add_u64(arch::rdtsc());
     pool.add_u64(boot_info().image_base);
-    (pool.finish(), strong)
+    let seed = pool.finish();
+    // The next boot's input is derived from this seed, never the seed itself.
+    let mut next = entropy::Pool::new();
+    next.add(b"aeon-next-seed");
+    next.add(&seed);
+    let mut next = next.finish();
+    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, next.len(), next.as_ptr());
+    next.fill(0);
+    core::hint::black_box(&next);
+    (seed, strong, persisted)
 }
 
 /// Reads one SHA-256 PCR through the TPM, or `None` if the TPM refuses or answers nonsense.
@@ -499,6 +516,7 @@ fn read_var_bytes(rt: &RuntimeServices, name: &[u16], guid: &Guid, buf: &mut [u8
 }
 
 const BOOT_COUNT_NAME: [u16; 14] = uefi::utf16(b"AeonBootCount\0");
+const SEED_NAME: [u16; 9] = uefi::utf16(b"AeonSeed\0");
 
 fn write_boot_count(rt: &RuntimeServices, value: u8) -> Status {
     (rt.set_variable)(BOOT_COUNT_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, 1, &value)
@@ -578,6 +596,45 @@ fn alloc_pool(bs: &BootServices, size: usize) -> Option<*mut u8> {
     ((bs.allocate_pool)(uefi::MEM_LOADER_DATA, size, &mut p) == uefi::SUCCESS && !p.is_null()).then_some(p)
 }
 
+/// Size of a variable in bytes, or `None` if it does not exist.
+fn var_size(rt: &RuntimeServices, name: &[u16], guid: &Guid) -> Option<usize> {
+    let mut size = 0usize;
+    let mut attr = 0u32;
+    let s = (rt.get_variable)(name.as_ptr(), guid, &mut attr, &mut size, core::ptr::null_mut());
+    (s == uefi::BUFFER_TOO_SMALL || s == uefi::SUCCESS).then_some(size)
+}
+
+/// Publishes the rest of the systemd Boot Loader Interface, so `bootctl status` on Linux can show what
+/// booted the machine and when. Claims no `LoaderFeatures`: Aeon does not implement those mechanisms.
+fn publish_loader_interface(rt: &RuntimeServices) {
+    const FW_TYPE: [u16; 19] = uefi::utf16(b"LoaderFirmwareType\0");
+    const FW_INFO: [u16; 19] = uefi::utf16(b"LoaderFirmwareInfo\0");
+    const IMAGE_ID: [u16; 22] = uefi::utf16(b"LoaderImageIdentifier\0");
+    const EXEC: [u16; 19] = uefi::utf16(b"LoaderTimeExecUSec\0");
+    const INFO: [u16; 11] = uefi::utf16(b"LoaderInfo\0");
+    let b = boot_info();
+    let rev = b.uefi_revision;
+    let mut buf = logfmt::LineBuf::<48>::new();
+    let _ = write!(buf, "UEFI {}.{}", rev >> 16, (rev & 0xFFFF) / 10);
+    let t = buf.finish();
+    set_loader_var(rt, &FW_TYPE, core::str::from_utf8(&t[..t.len() - 1]).unwrap_or("UEFI"));
+    let mut buf = logfmt::LineBuf::<48>::new();
+    let _ = write!(buf, "{} {:#x}", b.fw_vendor_str(), b.fw_revision);
+    let t = buf.finish();
+    set_loader_var(rt, &FW_INFO, core::str::from_utf8(&t[..t.len() - 1]).unwrap_or("?"));
+    set_loader_var(rt, &IMAGE_ID, r"\EFI\BOOT\BOOTX64.EFI");
+    let mut buf = logfmt::LineBuf::<24>::new();
+    let _ = write!(buf, "{}", log::uptime_us());
+    let t = buf.finish();
+    set_loader_var(rt, &EXEC, core::str::from_utf8(&t[..t.len() - 1]).unwrap_or("0"));
+    let published = [&INFO[..], &FW_TYPE[..], &FW_INFO[..], &IMAGE_ID[..], &EXEC[..]]
+        .iter()
+        .filter(|n| var_size(rt, n, &uefi::LOADER_GUID).is_some_and(|s| s > 0))
+        .count() as u8;
+    b.loader_vars = published;
+    info!("loader", "Boot Loader Interface: {} of 5 variables published and read back", published);
+}
+
 /// Publishes an ASCII string as a volatile NUL-terminated UTF-16 variable under the systemd Boot
 /// Loader Interface GUID, so Linux tools such as `bootctl` can see which loader started the system.
 fn set_loader_var(rt: &RuntimeServices, name: &[u16], value: &str) {
@@ -631,6 +688,51 @@ fn reboot_to_firmware_setup(rt: &RuntimeServices) {
     (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null());
 }
 
+/// A small shell that runs while the firmware's boot services are still active. Input goes through
+/// the firmware, so USB keyboards work here even though the kernel has no USB driver.
+fn firmware_shell(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices) {
+    const PROMPT: &[u8] = b"fw> ";
+    const HELP: &[u8] = b"commands: info version security tpm lastpanic log echo <text> | boot (continue) | reboot | shutdown\n";
+    info!("fwsh", "firmware shell: boot services are still active, so USB keyboards work. `help` lists commands, `boot` continues.");
+    let mut line = [0u8; 120];
+    let mut len = 0usize;
+    log::print_raw(PROMPT);
+    loop {
+        let _ = (bs.stall)(10_000);
+        let Some((_, ch)) = read_key(st) else { continue };
+        match ch {
+            0x0D => {
+                log::print_raw(b"\n");
+                let text = core::str::from_utf8(&line[..len]).unwrap_or("").trim();
+                match text {
+                    "boot" | "exit" => return,
+                    "" => {}
+                    "help" | "?" => log::print_raw(HELP),
+                    "reboot" => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
+                    "shutdown" => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
+                    other => {
+                        if !shell::run_firmware_command(other) {
+                            log::print_raw(b"not available before the kernel starts; try `help`\n");
+                        }
+                    }
+                }
+                len = 0;
+                log::print_raw(PROMPT);
+            }
+            0x08 if len > 0 => {
+                len -= 1;
+                log::print_raw(b"\x08 \x08");
+            }
+            0x20..=0x7E if len < line.len() => {
+                line[len] = ch as u8;
+                len += 1;
+                log::print_raw(&[ch as u8]);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Boot menu in the spirit of GRUB, systemd-boot and the Windows Boot Manager: wait a few seconds for
 /// a key (through the firmware, so USB keyboards work), otherwise continue booting. Returns the
 /// possibly updated options.
@@ -669,7 +771,7 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
         });
     }
     loop {
-        info!("menu", "Enter boot | D toggle debug logging | F firmware setup | R reboot | S shut down");
+        info!("menu", "Enter boot | C recovery mode | S firmware shell | D toggle debug | F firmware setup | R reboot | O power off");
         let (scan, ch) = loop {
             let _ = (bs.stall)(20_000);
             if let Some(k) = read_key(st) {
@@ -686,7 +788,16 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
             }
             (_, 'f' | 'F') => reboot_to_firmware_setup(rt),
             (_, 'r' | 'R') => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
-            (_, 's' | 'S') => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
+            (_, 'o' | 'O') => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
+            (_, 'c' | 'C') => {
+                boot_info().recovery = true;
+                info!("menu", "recovery mode selected: no timer, no scheduler");
+                return opts;
+            }
+            (_, 's' | 'S') => {
+                firmware_shell(st, bs, rt);
+                return opts;
+            }
             _ => {}
         }
     }
@@ -820,6 +931,18 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         info!("bootcount", "failed_boots={} counting={} recovery={}", count, counting, b.recovery);
     }
 
+    // What did the previous boot say before it died? Shown once, then deleted.
+    {
+        let mut text = [0u8; aeon::panicrec::MAX_LEN];
+        let n = aeon::panicrec::take(rt, &mut text);
+        if n > 0 {
+            let b = boot_info();
+            b.last_panic[..n].copy_from_slice(&text[..n]);
+            b.last_panic_len = n;
+            warn!("bootcount", "previous boot ended in: {}", core::str::from_utf8(&text[..n]).unwrap_or("?"));
+        }
+    }
+
     let fb = init_gop(bs, opts.mode);
     if let Some(f) = fb {
         // SAFETY: GOP reported this linear framebuffer; it is mapped by the firmware and stays
@@ -889,6 +1012,10 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
             .or_else(|| st.config_table(&uefi::SMBIOS_GUID))
             .map_or(0, |p| p as u64);
         b.secure_boot = secure_boot_state(rt);
+        const PK_NAME: [u16; 3] = uefi::utf16(b"PK\0");
+        const DBX_NAME: [u16; 4] = uefi::utf16(b"dbx\0");
+        b.sb_pk_enrolled = var_size(rt, &PK_NAME, &uefi::GLOBAL_VARIABLE_GUID).is_some_and(|n| n > 0);
+        b.sb_dbx_bytes = var_size(rt, &DBX_NAME, &uefi::IMAGE_SECURITY_DB_GUID).unwrap_or(0) as u32;
     }
     {
         let b = boot_info();
@@ -928,16 +1055,18 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     // ---- Stage 4: security init (random seed, measured boot) ----
     stage("security-init");
     {
-        let (seed, strong) = gather_seed(bs, feat.rdrand);
+        let (seed, strong, persisted) = gather_seed(bs, rt, feat.rdrand);
         let b = boot_info();
         b.seed = seed;
         b.seed_sources = strong;
+        b.seed_persisted = persisted;
         sched::set_canary(entropy::canary_from(&seed));
         if strong == 0 {
-            warn!("seed", "no hardware entropy source (firmware RNG, RDRAND): seed rests on timing only");
+            warn!("seed", "no hardware entropy source (firmware RNG, RDRAND): seed rests on timing and history only");
         } else {
             info!("seed", "boot seed ready from {} hardware source(s); stack canary randomised", strong);
         }
+        info!("seed", "seed from the previous boot mixed in: {}", persisted);
     }
     measure_cmdline(bs, boot_info().cmdline_str());
 
@@ -945,6 +1074,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     opts = boot_menu(st, bs, rt, opts);
     let _ = opts;
     set_loader_var(rt, &uefi::utf16(b"LoaderInfo\0"), concat!("Aeon ", env!("CARGO_PKG_VERSION")));
+    publish_loader_interface(rt);
 
     // ---- Stage 5: ExitBootServices ----
     stage("exit-boot-services");
@@ -1279,6 +1409,12 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
     let _ = write!(why, "{}", info.message());
     let (where_line, why_line) = (where_.finish().trim_ascii_end(), why.finish().trim_ascii_end());
+    {
+        let mut rec = logfmt::LineBuf::<{ aeon::panicrec::MAX_LEN }>::new();
+        let _ = write!(rec, "{} - {}", core::str::from_utf8(where_line).unwrap_or("?"), core::str::from_utf8(why_line).unwrap_or("?"));
+        let r = rec.finish();
+        aeon::panicrec::record(&r[..r.len() - 1]);
+    }
     let _ = log::with_console(|c| c.panic_screen(&[where_line, why_line, b"Details are in the serial log."]));
     arch::halt_forever()
 }

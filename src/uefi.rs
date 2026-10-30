@@ -82,6 +82,13 @@ pub const RNG_GUID: Guid = Guid {
     data3: 0x433d,
     data4: [0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44],
 };
+/// Image security database vendor GUID (`db`, `dbx`).
+pub const IMAGE_SECURITY_DB_GUID: Guid = Guid {
+    data1: 0xd719b2cb,
+    data2: 0x3d3a,
+    data3: 0x4596,
+    data4: [0xa3, 0xbc, 0xda, 0xd0, 0x0e, 0x67, 0x65, 0x6f],
+};
 pub const SMBIOS3_GUID: Guid = Guid {
     data1: 0xf2fd1544,
     data2: 0x9794,
