@@ -83,7 +83,8 @@ or register values. Those go to serial and debugcon only.
   ended normally. This is a small version of Linux pstore.
 - **Seed history**: each boot stores a seed derived from its own (never the seed itself) and mixes the
   previous one into the next, so a machine with no RNG hardware still varies between boots. It is readable
-  by anything that can read firmware variables, so it only adds to the hardware sources, never replaces them.
+  by the boot stage only (the variable has no runtime access, and the kernel checks that the OS side cannot
+  see it). It only adds to the hardware sources: with none of them, `security` does not call the canary random.
 - **Boot Loader Interface**: besides `LoaderInfo`, Aeon publishes `LoaderFirmwareType`, `LoaderFirmwareInfo`,
   `LoaderImageIdentifier` and `LoaderTimeExecUSec` and reads them back, so `bootctl status` on Linux can
   show what booted the machine. It claims no `LoaderFeatures`, because Aeon does not implement those.

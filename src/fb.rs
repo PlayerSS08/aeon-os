@@ -41,20 +41,20 @@ const BG: (u8, u8, u8) = (0, 0, 0);
 const BAR_BG: (u8, u8, u8) = (40, 60, 90);
 const BAR_FG: (u8, u8, u8) = (235, 240, 250);
 const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
-const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
+const TRACK_RGB: (u8, u8, u8) = (36, 40, 50);
 const PANIC_BG: (u8, u8, u8) = (28, 8, 10);
 const PANIC_LOGO: (u8, u8, u8) = (255, 110, 110);
 
 
-pub const BANNER_COLS: usize = 38;
+pub const BANNER_COLS: usize = 37;
 pub const BANNER_ROWS: usize = 6;
 pub const BANNER: [[u8; BANNER_COLS]; BANNER_ROWS] = [
-    [b' ', 0x80, 0x80, 0x80, 0x80, 0x80, 0x84, b' ', b' ', 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x84, b' ', b' ', 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x84, b' ', b' ', 0x80, 0x80, 0x80, 0x84, b' ', b' ', b' ', 0x80, 0x80, 0x84],
-    [0x80, 0x80, 0x83, 0x81, 0x81, 0x80, 0x80, 0x84, b' ', 0x80, 0x80, 0x83, 0x81, 0x81, 0x81, 0x81, 0x86, b' ', 0x80, 0x80, 0x83, 0x81, 0x81, 0x81, 0x80, 0x80, 0x84, b' ', 0x80, 0x80, 0x80, 0x80, 0x84, b' ', b' ', 0x80, 0x80, 0x82],
-    [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x82, b' ', 0x80, 0x80, 0x80, 0x80, 0x80, 0x84, b' ', b' ', b' ', 0x80, 0x80, 0x82, b' ', b' ', b' ', 0x80, 0x80, 0x82, b' ', 0x80, 0x80, 0x83, 0x80, 0x80, 0x84, b' ', 0x80, 0x80, 0x82],
-    [0x80, 0x80, 0x83, 0x81, 0x81, 0x80, 0x80, 0x82, b' ', 0x80, 0x80, 0x83, 0x81, 0x81, 0x86, b' ', b' ', b' ', 0x80, 0x80, 0x82, b' ', b' ', b' ', 0x80, 0x80, 0x82, b' ', 0x80, 0x80, 0x82, 0x85, 0x80, 0x80, 0x84, 0x80, 0x80, 0x82],
-    [0x80, 0x80, 0x82, b' ', b' ', 0x80, 0x80, 0x82, b' ', 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x84, b' ', 0x85, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x83, 0x86, b' ', 0x80, 0x80, 0x82, b' ', 0x85, 0x80, 0x80, 0x80, 0x80, 0x82],
-    [0x85, 0x81, 0x86, b' ', b' ', 0x85, 0x81, 0x86, b' ', 0x85, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x86, b' ', b' ', 0x85, 0x81, 0x81, 0x81, 0x81, 0x81, 0x86, b' ', b' ', 0x85, 0x81, 0x86, b' ', b' ', 0x85, 0x81, 0x81, 0x81, 0x86],
+    [b' ', b' ', 0x80, 0x80, 0x80, b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,   b' ', b' ', b' ',   b' ', 0x80, 0x80, 0x80, 0x80, 0x80, b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80],
+    [b' ', 0x80, 0x80, b' ', 0x80, 0x80, b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, 0x80, b' ', b' ', 0x80, 0x80],
+    [0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, 0x80, 0x80, 0x80, b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', 0x80, b' ', 0x80, 0x80],
+    [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', 0x80, 0x80, 0x80],
+    [0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80],
+    [0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,   b' ', b' ', b' ',   b' ', 0x80, 0x80, 0x80, 0x80, 0x80, b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80],
 ];
 
 pub fn color_for(level: Level) -> u8 {
@@ -217,10 +217,33 @@ impl Console {
 
     /// Bar rectangle `(x, y, width, height)` in pixels, centred under the logo.
     fn bar_rect(&self) -> (usize, usize, usize, usize) {
-        let w = (self.width * 2 / 5).clamp(120, 640 * self.scale).min(self.width);
+        let w = (240 * self.scale).clamp(160, self.width.saturating_sub(40));
         let x = (self.width - w) / 2;
         let y = (self.logo_row + BANNER_ROWS + 2) * self.cell_h();
-        (x, y, w, 3 * self.scale)
+        let h = (4 * self.scale).max(4);
+        (x, y, w, h)
+    }
+
+    /// Draws a sleek rounded pill shape for the progress bar and track.
+    fn draw_pill(&self, x: usize, y: usize, w: usize, h: usize, color: u32) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        for yy in 0..h {
+            let indent = if h >= 6 {
+                if yy == 0 || yy == h - 1 { 2 } else if yy == 1 || yy == h - 2 { 1 } else { 0 }
+            } else if h >= 3 {
+                if yy == 0 || yy == h - 1 { 1 } else { 0 }
+            } else {
+                0
+            };
+            if indent * 2 >= w {
+                continue;
+            }
+            if let Some(row) = self.row_mut(x + indent, y + yy, w - indent * 2) {
+                row.fill(color);
+            }
+        }
     }
 
     /// Clears the screen, centres the logo and draws the empty progress track. Log output is held
@@ -231,7 +254,7 @@ impl Console {
         self.logo_row = splash::splash_row(self.rows, BANNER_ROWS);
         let (x, y, w, h) = self.bar_rect();
         let track = self.px(TRACK_RGB);
-        self.fill_rect(x, y, w, h, track);
+        self.draw_pill(x, y, w, h, track);
     }
 
     pub fn splash_active(&self) -> bool {
@@ -251,7 +274,8 @@ impl Console {
         self.bar_pm = permille.min(1000);
         let (x, y, w, h) = self.bar_rect();
         let fg = self.px(LOGO_RGB);
-        self.fill_rect(x, y, splash::fill_width(w, self.bar_pm), h, fg);
+        let filled = splash::fill_width(w, self.bar_pm);
+        self.draw_pill(x, y, filled, h, fg);
     }
 
     /// Where the bar currently stands, in thousandths.
@@ -269,8 +293,8 @@ impl Console {
         let track = self.px(splash::dim(TRACK_RGB, level));
         let fg = self.px(splash::dim(LOGO_RGB, level));
         let filled = splash::fill_width(w, self.bar_pm);
-        self.fill_rect(x, y, w, h, track);
-        self.fill_rect(x, y, filled, h, fg);
+        self.draw_pill(x, y, w, h, track);
+        self.draw_pill(x, y, filled, h, fg);
     }
 
     /// Shows a short centred line under the bar (empty `text` removes it).

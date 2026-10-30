@@ -246,6 +246,8 @@ pub struct RuntimeServices {
 
 pub const VAR_BS_RT: u32 = 0x2 | 0x4;
 pub const VAR_NV_BS_RT: u32 = 0x1 | 0x2 | 0x4;
+/// Non-volatile, boot-services access only: invisible once the OS is running.
+pub const VAR_NV_BS: u32 = 0x1 | 0x2;
 pub const RESET_COLD: u32 = 0;
 pub const RESET_SHUTDOWN: u32 = 2;
 

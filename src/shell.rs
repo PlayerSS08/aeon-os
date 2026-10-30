@@ -132,7 +132,7 @@ fn cmd_security() {
         "boot seed          {} hardware source(s), previous-boot seed mixed in: {}; canary randomised: {}\n",
         b.seed_sources,
         yes(b.seed_persisted),
-        yes(b.seed_sources > 0 || b.seed_persisted)
+        yes(b.seed_sources > 0)
     );
     out!("previous boot      {}\n", if b.last_panic_len == 0 { "ended normally" } else { "ended in a panic or exception, see `lastpanic`" });
     out!("no-execute (NX)    {}\n", yes(s.efer & arch::EFER_NXE != 0));

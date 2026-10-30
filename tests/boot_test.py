@@ -536,6 +536,7 @@ def t_seed_history(ctx):
     try:
         r.check("second boot: previous seed mixed in", vm2.wait_for("boot complete", 150) and "mixed in: true" in vm2.text())
         r.check("seed bytes never logged", "AeonSeed" not in vm2.text())
+        r.check("stored seed is invisible once the kernel runs", vm2.wait_for("stored seed hidden from runtime access: true", 150), vm2.text()[-600:])
     finally:
         vm2.close()
 

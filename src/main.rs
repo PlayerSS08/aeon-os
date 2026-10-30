@@ -279,7 +279,9 @@ fn gather_seed(bs: &BootServices, rt: &RuntimeServices, rdrand: bool) -> ([u8; e
     next.add(b"aeon-next-seed");
     next.add(&seed);
     let mut next = next.finish();
-    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, next.len(), next.as_ptr());
+    // An older build stored this variable with runtime access; attributes cannot change in place, so delete first.
+    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::AEON_GUID, 0, 0, core::ptr::null());
+    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS, next.len(), next.as_ptr());
     next.fill(0);
     core::hint::black_box(&next);
     (seed, strong, persisted)
@@ -1344,15 +1346,23 @@ extern "C" fn kernel_main() -> ! {
     // The kernel is up and the boot-time fault tests (if any) survived: this boot counts as good.
     {
         let b = boot_info();
-        if b.count_enabled && b.runtime_services != 0 {
+        if b.runtime_services != 0 {
             // SAFETY: the firmware runtime-services table address was saved before ExitBootServices and
             // runtime memory is identity-mapped by `paging::build`, as for ResetSystem in `power`.
             let rt = unsafe { &*(b.runtime_services as *const RuntimeServices) };
-            let s = write_boot_count(rt, 0);
-            if s == uefi::SUCCESS {
-                info!("bootcount", "boot succeeded, counter cleared");
-            } else {
-                warn!("bootcount", "could not clear the boot counter, status={:#x}", s);
+            // The stored seed is boot-services-only: once the OS runs it must not be readable at all.
+            let mut probe = [0u8; 32];
+            let hidden = read_var_bytes(rt, &SEED_NAME, &uefi::AEON_GUID, &mut probe).is_none();
+            probe.fill(0);
+            core::hint::black_box(&probe);
+            info!("seed", "stored seed hidden from runtime access: {}", hidden);
+            if b.count_enabled {
+                let s = write_boot_count(rt, 0);
+                if s == uefi::SUCCESS {
+                    info!("bootcount", "boot succeeded, counter cleared");
+                } else {
+                    warn!("bootcount", "could not clear the boot counter, status={:#x}", s);
+                }
             }
         }
     }
