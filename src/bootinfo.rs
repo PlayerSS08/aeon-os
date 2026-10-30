@@ -2,6 +2,7 @@
 //! `ExitBootServices` so nothing depends on boot-services memory afterwards.
 
 use crate::acpi::Rsdp;
+use crate::cpuid::Features;
 use crate::memmap::{Region, Summary};
 use crate::pixel::PixelFormat;
 
@@ -64,6 +65,15 @@ pub struct BootInfo {
     pub seed: [u8; 32],
     /// How many independent sources went into `seed` (0 means the fixed fallback is in use).
     pub seed_sources: u8,
+    /// CPU features as decoded at boot.
+    pub feat: Features,
+    /// A TPM 2.0 was found and the command line was measured and verified by read-back.
+    pub tpm_measured: bool,
+    /// TPM 2.0 present (EFI_TCG2_PROTOCOL found).
+    pub tpm_present: bool,
+    /// PCR 12 (command line) and PCR 11 (boot phase) as read back right after the measurements.
+    pub pcr12: [u8; 32],
+    pub pcr11: [u8; 32],
 }
 
 impl BootInfo {
@@ -101,6 +111,27 @@ impl BootInfo {
             runtime_services: 0,
             seed: [0; 32],
             seed_sources: 0,
+            feat: Features {
+                tsc: false,
+                fxsr: false,
+                sse2: false,
+                apic: false,
+                rdrand: false,
+                hypervisor: false,
+                nx: false,
+                smep: false,
+                smap: false,
+                umip: false,
+                rdseed: false,
+                cet_ss: false,
+                cet_ibt: false,
+                phys_bits: 36,
+                virt_bits: 48,
+            },
+            tpm_measured: false,
+            tpm_present: false,
+            pcr12: [0; 32],
+            pcr11: [0; 32],
         }
     }
 

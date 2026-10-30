@@ -38,12 +38,13 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | early-init | bounds-checked CPUID, control-register state, GOP framebuffer in the firmware's own (native) mode, logo fade-in |
 | platform-discovery | firmware vendor/revision, image base/size, ACPI RSDP checksums, SMBIOS, Secure Boot / Setup Mode, TPM 2.0 presence |
 | security-init | boot random seed from the firmware RNG and RDRAND, randomised stack canary, command line measured into TPM PCR 12 and read back to verify |
+| exit-boot-services | a boot-phase marker is measured into PCR 11 just before leaving the firmware |
 | boot menu | wait for a key through the firmware (works with USB keyboards) |
-| exit-boot-services | size the memory-map buffer from the firmware, fetch map, exit, retry on a stale key; no logging in between |
+| (same stage) | size the memory-map buffer from the firmware, fetch map, exit, retry on a stale key; no logging in between |
 | kernel-env | copy the memory map, enable NX, GDT/TSS (double-fault stack), IDT, identity-mapped page tables with W^X, unmapped null page and stack guard pages, CR0.WP/SMEP/SMAP/UMIP when supported, own stack |
 | kernel-memory, kernel-tasks | frame allocator, 32 MB heap, PIT tick, scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
 
-Shell commands: `help info uptime mem ps spawn counters kill memmap log echo sort clear panic reboot
+Shell commands: `help info version security tpm uptime mem ps spawn counters kill memmap log echo sort clear panic reboot
 shutdown`. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
 timer interrupt preempting them. `log` prints the boot log, which the splash held back. Shutdown uses ACPI
 S5, then firmware `ResetSystem`.
@@ -60,6 +61,8 @@ or register values. Those go to serial and debugcon only.
 - **Measured boot**: the boot command line is hashed into TPM PCR 12 (event type `EV_IPL`) through
   `EFI_TCG2_PROTOCOL`, then the PCR is read back and compared with the value computed from the previous
   one. The firmware's own event log stays valid. The firmware measures this image into PCR 4 itself.
+- **Revocation metadata (SBAT)**: the image carries an `.sbat` section (generation 1, component `aeon`), so firmware or tooling can revoke old builds by generation without touching the key.
+- **Boot-phase measurement**: a marker is extended into PCR 11 just before Aeon leaves the firmware, so a secret sealed to PCR 11 only opens for a boot that got that far.
 - **Boot random seed**: SHA-256 over the firmware RNG, four RDRAND words and timing. It seeds the kernel
   stack-overflow canary. The seed is never logged. If neither hardware source exists, the log warns.
 - W^X page tables from the PE section headers, NX everywhere else, unmapped null page, `CR0.WP`, and
@@ -71,6 +74,7 @@ or register values. Those go to serial and debugcon only.
   required to lie inside firmware-described memory; memory-map sizes saturate instead of overflowing;
   command-line options parsed from a fixed grammar. The parsers are fuzzed in the unit tests.
 - Reports Secure Boot / Setup Mode and TPM presence honestly; makes no attestation claims.
+- CET (shadow stack, branch tracking) and RDSEED are detected and shown by `security`; CET is **not enabled**, because neither QEMU nor software emulation can run it, so it cannot be tested here.
 - Not yet: kernel signature check beyond the firmware's, ring 3.
 
 ## Compared with other boot systems
@@ -107,6 +111,8 @@ The boot tests (`tests/boot_test.py`) need QEMU, OVMF, swtpm, sbsigntool and vir
 - measured boot with a software TPM: PCR 12 equals `SHA256(before || SHA256(cmdline))` computed
   independently, and the no-TPM path;
 - Secure Boot: a signed image boots, an unsigned image and an image from an unknown key are refused;
+- the image file itself: `.sbat` present in the build and in the signed release, size budget;
+- the new shell commands (`version`, `security`, `tpm`) against a software TPM;
 - the shipped `usb/` folder: checksums, contents, and that it boots after enrolling its certificate;
 - every `fault-*` build ends in the expected exception or panic and shows the stop screen.
 

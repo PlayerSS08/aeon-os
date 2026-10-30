@@ -20,7 +20,7 @@ pub struct Leaves {
     pub ext8: Option<Regs>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Features {
     pub tsc: bool,
     pub fxsr: bool,
@@ -32,6 +32,10 @@ pub struct Features {
     pub smep: bool,
     pub smap: bool,
     pub umip: bool,
+    pub rdseed: bool,
+    /// Control-flow Enforcement Technology: supervisor shadow stacks and indirect-branch tracking.
+    pub cet_ss: bool,
+    pub cet_ibt: bool,
     pub phys_bits: u8,
     pub virt_bits: u8,
 }
@@ -61,6 +65,9 @@ pub fn decode(l: &Leaves) -> Features {
         smep: bit(f7.ebx, 7),
         smap: bit(f7.ebx, 20),
         umip: bit(f7.ecx, 2),
+        rdseed: bit(f7.ebx, 18),
+        cet_ss: bit(f7.ecx, 7),
+        cet_ibt: bit(f7.edx, 20),
         phys_bits,
         virt_bits,
     }
@@ -88,7 +95,7 @@ mod tests {
         // Garbage that would look like SMEP/SMAP if leaf 7 were read blindly.
         let l = Leaves { max_basic: 4, max_ext: 0x8000_0001, leaf1: regs(0, 0, 0, 1 << 4), ..Leaves::default() };
         let f = decode(&l);
-        assert!(f.tsc && !f.smep && !f.smap && !f.umip);
+        assert!(f.tsc && !f.smep && !f.smap && !f.umip && !f.cet_ss && !f.cet_ibt && !f.rdseed);
         assert_eq!((f.phys_bits, f.virt_bits), (36, 48));
     }
 
@@ -98,12 +105,13 @@ mod tests {
             max_basic: 7,
             max_ext: 0x8000_0008,
             leaf1: regs(0, 0, 1 << 31, 0),
-            leaf7: regs(0, (1 << 7) | (1 << 20), 1 << 2, 0),
+            leaf7: regs(0, (1 << 7) | (1 << 20) | (1 << 18), (1 << 2) | (1 << 7), 1 << 20),
             ext1: regs(0, 0, 0, 1 << 20),
             ext8: regs(39 | (48 << 8), 0, 0, 0),
         };
         let f = decode(&l);
         assert!(f.smep && f.smap && f.umip && f.nx && f.hypervisor);
+        assert!(f.rdseed && f.cet_ss && f.cet_ibt);
         assert_eq!((f.phys_bits, f.virt_bits), (39, 48));
     }
 

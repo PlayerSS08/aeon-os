@@ -241,15 +241,49 @@ fn pcr_read(tcg: *mut Tcg2, pcr: u32) -> Option<[u8; 32]> {
     tcg2::parse_pcr_read(&resp)
 }
 
-/// Measured boot: extends the boot command line into PCR 12 (and the firmware event log), then reads
-/// the PCR back to prove the extend happened. The firmware has already measured this image itself.
-fn measure_cmdline(bs: &BootServices, cmdline: &str) {
+fn locate_tcg2(bs: &BootServices) -> Option<*mut Tcg2> {
     let mut p: *mut c_void = core::ptr::null_mut();
-    if (bs.locate_protocol)(&uefi::TCG2_GUID, core::ptr::null_mut(), &mut p) != uefi::SUCCESS || p.is_null() {
+    ((bs.locate_protocol)(&uefi::TCG2_GUID, core::ptr::null_mut(), &mut p) == uefi::SUCCESS && !p.is_null()).then_some(p as *mut Tcg2)
+}
+
+/// Extends `data` into `pcr` as an `EV_IPL` event and reads the PCR back before and after. Returns
+/// `(before, after, verified)`; `verified` means `after == SHA256(before || SHA256(data))`.
+fn measure_event(tcg: *mut Tcg2, pcr: u32, data: &[u8]) -> Option<([u8; 32], [u8; 32], bool)> {
+    let before = pcr_read(tcg, pcr)?;
+    let mut ev = [0u8; tcg2::EVENT_OVERHEAD + 2 * 130];
+    tcg2::build_event(&mut ev, pcr, tcg2::EV_IPL, data)?;
+    // SAFETY: live protocol; `data` and `ev` stay valid for the call and `ev` is a well-formed
+    // EFI_TCG2_EVENT built by `tcg2::build_event`.
+    let s = unsafe { ((*tcg).hash_log_extend_event)(tcg, 0, data.as_ptr() as u64, data.len() as u64, ev.as_ptr()) };
+    if s != uefi::SUCCESS {
+        warn!("tpm", "HashLogExtendEvent pcr={} status={:#x}", pcr, s);
+        return None;
+    }
+    let after = pcr_read(tcg, pcr)?;
+    Some((before, after, tcg2::expected_extend(&before, data) == after))
+}
+
+fn log_pcr(label: &str, pcr: u32, before: &[u8; 32], after: &[u8; 32], verified: bool, bytes: usize) {
+    let mut hex = [0u8; 64];
+    tcg2::hex32(before, &mut hex);
+    info!("tpm", "pcr{}_before={}", pcr, core::str::from_utf8(&hex).unwrap_or("?"));
+    tcg2::hex32(after, &mut hex);
+    info!("tpm", "pcr{}_after={}", pcr, core::str::from_utf8(&hex).unwrap_or("?"));
+    info!("tpm", "measured {} into pcr={} event=EV_IPL bytes={} verified={}", label, pcr, bytes, verified);
+    if !verified {
+        error!("tpm", "PCR {} does not hold the expected value after the extend", pcr);
+    }
+}
+
+/// Measured boot, part 1: the boot command line goes into PCR 12 (and the firmware event log), and
+/// the PCR is read back to prove the extend happened. The firmware has already measured this image
+/// itself into PCR 4.
+fn measure_cmdline(bs: &BootServices, cmdline: &str) {
+    let Some(tcg) = locate_tcg2(bs) else {
         info!("tpm", "measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)");
         return;
-    }
-    let tcg = p as *mut Tcg2;
+    };
+    boot_info().tpm_present = true;
 
     let (mut loc, mut last, mut truncated) = (0u64, 0u64, 0u8);
     // SAFETY: live protocol; format 2 is the crypto-agile log; the three out-pointers are valid.
@@ -260,40 +294,56 @@ fn measure_cmdline(bs: &BootServices, cmdline: &str) {
         warn!("tpm", "GetEventLog status={:#x}", s);
     }
 
-    let before = pcr_read(tcg, tcg2::PCR_CMDLINE);
     let mut data = [0u8; 2 * 130];
     let Some(dlen) = tcg2::utf16le_cmdline(cmdline, &mut data) else {
         warn!("tpm", "command line too long to measure");
         return;
     };
-    let mut ev = [0u8; tcg2::EVENT_OVERHEAD + 2 * 130];
-    let Some(elen) = tcg2::build_event(&mut ev, tcg2::PCR_CMDLINE, tcg2::EV_IPL, &data[..dlen]) else {
-        return;
-    };
-    let _ = elen;
-    // SAFETY: live protocol; `data` and `ev` stay valid for the call and `ev` is a well-formed
-    // EFI_TCG2_EVENT built by `tcg2::build_event`.
-    let s = unsafe { ((*tcg).hash_log_extend_event)(tcg, 0, data.as_ptr() as u64, dlen as u64, ev.as_ptr()) };
-    if s != uefi::SUCCESS {
-        warn!("tpm", "HashLogExtendEvent status={:#x}", s);
-        return;
-    }
-    let after = pcr_read(tcg, tcg2::PCR_CMDLINE);
-    let mut hex = [0u8; 64];
-    if let (Some(b), Some(a)) = (before, after) {
-        let verified = tcg2::expected_extend(&b, &data[..dlen]) == a;
-        tcg2::hex32(&b, &mut hex);
-        info!("tpm", "pcr{}_before={}", tcg2::PCR_CMDLINE, core::str::from_utf8(&hex).unwrap_or("?"));
-        tcg2::hex32(&a, &mut hex);
-        info!("tpm", "pcr{}_after={}", tcg2::PCR_CMDLINE, core::str::from_utf8(&hex).unwrap_or("?"));
-        info!("tpm", "measured cmdline into pcr={} event=EV_IPL bytes={} verified={}", tcg2::PCR_CMDLINE, dlen, verified);
-        if !verified {
-            error!("tpm", "PCR {} does not hold the expected value after the extend", tcg2::PCR_CMDLINE);
+    match measure_event(tcg, tcg2::PCR_CMDLINE, &data[..dlen]) {
+        Some((before, after, verified)) => {
+            log_pcr("cmdline", tcg2::PCR_CMDLINE, &before, &after, verified, dlen);
+            let b = boot_info();
+            b.pcr12 = after;
+            b.tpm_measured = verified;
         }
-    } else {
-        warn!("tpm", "measured cmdline into pcr={} but could not read the PCR back", tcg2::PCR_CMDLINE);
+        None => warn!("tpm", "could not measure the command line into pcr={}", tcg2::PCR_CMDLINE),
     }
 }
+
+/// Measured boot, part 2: marks the point where Aeon leaves the firmware, in PCR 11, so a secret
+/// sealed to PCR 11 only opens for a boot that got this far (the idea behind systemd's boot phases).
+fn measure_phase(bs: &BootServices, phase: &str) {
+    let Some(tcg) = locate_tcg2(bs) else { return };
+    match measure_event(tcg, tcg2::PCR_PHASE, phase.as_bytes()) {
+        Some((before, after, verified)) => {
+            log_pcr("phase", tcg2::PCR_PHASE, &before, &after, verified, phase.len());
+            boot_info().pcr11 = after;
+        }
+        None => warn!("tpm", "could not measure the boot phase into pcr={}", tcg2::PCR_PHASE),
+    }
+}
+
+/// Revocation metadata (SBAT, see the shim project's SBAT.md): lets firmware or tooling revoke old
+/// Aeon builds by generation number without touching the signing key. Raise the number after a
+/// security fix that old images must not be trusted without.
+const SBAT_TEXT: &str = concat!(
+    "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\n",
+    "aeon,1,Aeon,aeon,",
+    env!("CARGO_PKG_VERSION"),
+    ",-\n\0"
+);
+#[link_section = ".sbat"]
+#[used]
+static SBAT: [u8; SBAT_TEXT.len()] = {
+    let mut a = [0u8; SBAT_TEXT.len()];
+    let b = SBAT_TEXT.as_bytes();
+    let mut i = 0;
+    while i < a.len() {
+        a[i] = b[i];
+        i += 1;
+    }
+    a
+};
 
 /// Image base/size and the command line (UEFI load options), copied into `BootInfo`.
 fn read_loaded_image(bs: &BootServices, image: Handle) {
@@ -524,6 +574,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     stage("early-init");
     let leaves = arch::read_leaves();
     let feat = cpuid::decode(&leaves);
+    boot_info().feat = feat;
     let vendor = arch::vendor();
     info!(
         "cpu",
@@ -536,13 +587,16 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     );
     info!(
         "cpu",
-        "supported nx={} smep={} smap={} umip={} sse2={} rdrand={} hypervisor={}",
+        "supported nx={} smep={} smap={} umip={} sse2={} rdrand={} rdseed={} cet_ss={} cet_ibt={} hypervisor={}",
         feat.nx,
         feat.smep,
         feat.smap,
         feat.umip,
         feat.sse2,
         feat.rdrand,
+        feat.rdseed,
+        feat.cet_ss,
+        feat.cet_ibt,
         feat.hypervisor
     );
     let s = arch::cpu_state();
@@ -687,6 +741,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
 
     // ---- Stage 5: ExitBootServices ----
     stage("exit-boot-services");
+    measure_phase(bs, tcg2::PHASE_EXIT_BOOT);
     // Size the buffer from the firmware's own answer, with slack because the allocation below (and
     // the first failed ExitBootServices) can add descriptors.
     let probe = fetch_map(bs, core::ptr::null_mut(), 0);

@@ -59,6 +59,9 @@ fn ps2_byte() -> Option<u8> {
 const HELP: &str = "commands:
   help               this list
   info               firmware, CPU clock, Secure Boot
+  version            Aeon version and revision
+  security           which protections are active right now
+  tpm                measured-boot PCR values
   uptime             time since boot
   mem                frames, heap and RAM totals
   ps                 list tasks
@@ -82,6 +85,52 @@ fn cmd_info() {
     out!("image      base {:#x} size {} KiB\n", b.image_base, b.image_size / 1024);
 }
 
+
+fn cmd_version() {
+    out!("Aeon {} git={} x86_64 UEFI, sbat generation 1\n", crate::VERSION, crate::GIT_HASH);
+}
+
+fn yes(b: bool) -> &'static str {
+    if b {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn cmd_tpm() {
+    let b = boot::info();
+    if !b.tpm_present {
+        out!("no TPM 2.0 was found at boot, nothing was measured\n");
+        return;
+    }
+    let mut hex = [0u8; 64];
+    out!("measured and verified  {}\n", yes(b.tpm_measured));
+    crate::tcg2::hex32(&b.pcr12, &mut hex);
+    out!("pcr12 (command line)   {}\n", core::str::from_utf8(&hex).unwrap_or("?"));
+    crate::tcg2::hex32(&b.pcr11, &mut hex);
+    out!("pcr11 (boot phase)     {}\n", core::str::from_utf8(&hex).unwrap_or("?"));
+    out!("values as read right after the measurements, before leaving the firmware\n");
+}
+
+/// What protects this boot, read from the CPU as it is now, not from what the CPU claims to support.
+fn cmd_security() {
+    let b = boot::info();
+    let s = arch::cpu_state();
+    let f = &b.feat;
+    out!("secure boot        {}\n", b.secure_boot.name());
+    out!("measured boot      {} (TPM present: {})\n", yes(b.tpm_measured), yes(b.tpm_present));
+    out!("boot seed          {} hardware source(s); canary randomised: {}\n", b.seed_sources, yes(b.seed_sources > 0));
+    out!("no-execute (NX)    {}\n", yes(s.efer & arch::EFER_NXE != 0));
+    out!("write protect      {}\n", yes(s.cr0 & arch::CR0_WP != 0));
+    out!("SMEP               {} (cpu supports: {})\n", yes(s.cr4 & arch::CR4_SMEP != 0), yes(f.smep));
+    out!("SMAP               {} (cpu supports: {})\n", yes(s.cr4 & arch::CR4_SMAP != 0), yes(f.smap));
+    out!("UMIP               {} (cpu supports: {})\n", yes(s.cr4 & arch::CR4_UMIP != 0), yes(f.umip));
+    out!("W^X page tables    yes, null page unmapped, guard pages under every stack\n");
+    out!("shadow stack (CET) not enabled (cpu supports: {})\n", yes(f.cet_ss));
+    out!("branch tracking    not enabled (cpu supports: {})\n", yes(f.cet_ibt));
+    out!("ring 3             not implemented, everything runs in the kernel\n");
+}
 fn cmd_mem() {
     let b = boot::info();
     let m = &b.mem;
@@ -140,6 +189,9 @@ fn run(line: &str) {
         "" => {}
         "help" | "?" => out!("{}", HELP),
         "info" => cmd_info(),
+        "version" => cmd_version(),
+        "security" => cmd_security(),
+        "tpm" => cmd_tpm(),
         "uptime" => {
             let s = log::uptime_us() / 1_000_000;
             out!("up {:02}:{:02}:{:02}\n", s / 3600, (s / 60) % 60, s % 60);

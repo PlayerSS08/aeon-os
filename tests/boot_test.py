@@ -293,6 +293,64 @@ def t_tpm(ctx):
             r.check("PCR 12 equals SHA256(before || SHA256(cmdline)) computed independently", after[0] == expect, f"{after[0]} != {expect}")
             r.check("PCR 12 started at zero", before[0] == "0" * 64)
         r.check("event log located", "event log at" in t)
+        # PCR 11 holds the boot-phase marker measured just before leaving the firmware
+        p11a = [l.split("pcr11_after=")[1].strip() for l in t.splitlines() if "pcr11_after=" in l]
+        p11b = [l.split("pcr11_before=")[1].strip() for l in t.splitlines() if "pcr11_before=" in l]
+        r.check("PCR 11 read back", bool(p11a) and bool(p11b))
+        if p11a and p11b:
+            want = hashlib.sha256(bytes.fromhex(p11b[0]) + hashlib.sha256(b"aeon:exit-boot-services").digest()).hexdigest()
+            r.check("PCR 11 equals SHA256(before || SHA256(phase)) computed independently", p11a[0] == want, f"{p11a[0]} != {want}")
+        r.check("phase measured after the command line", t.find("measured cmdline") < t.find("measured phase"))
+    finally:
+        vm.close()
+
+
+def pe_sections(path):
+    """Name -> raw bytes of each PE section, read straight from the file."""
+    with open(path, "rb") as f:
+        d = f.read()
+    pe = struct.unpack_from("<I", d, 0x3C)[0]
+    nsec = struct.unpack_from("<H", d, pe + 6)[0]
+    opt = struct.unpack_from("<H", d, pe + 20)[0]
+    out = {}
+    for i in range(nsec):
+        o = pe + 24 + opt + i * 40
+        name = d[o:o + 8].rstrip(b"\0").decode()
+        vsize, _, rsize, roff = struct.unpack_from("<IIII", d, o + 8)
+        out[name] = d[roff:roff + min(vsize, rsize)]
+    return out
+
+
+def t_image(ctx):
+    """The image file: SBAT revocation metadata is present, in both the build and the signed release."""
+    r = ctx.r
+    usb = os.path.abspath(os.path.join(os.path.dirname(ctx.efi), "..", "..", "..", "usb", "EFI", "BOOT", "BOOTX64.EFI"))
+    for label, path in (("build", ctx.efi), ("signed release", usb)):
+        sec = pe_sections(path)
+        sbat = sec.get(".sbat", b"")
+        r.check(f"{label}: .sbat section present", ".sbat" in sec, str(list(sec)))
+        r.check(f"{label}: .sbat names the SBAT version and the aeon component",
+                sbat.startswith(b"sbat,1,SBAT Version,sbat,1,") and b"\naeon,1,Aeon,aeon," in sbat, repr(sbat[:120]))
+        r.check(f"{label}: .sbat is NUL-terminated", sbat.endswith(b"\n\0"))
+    r.check("image is small (under 128 KiB)", os.path.getsize(ctx.efi) < 128 * 1024, str(os.path.getsize(ctx.efi)))
+
+
+def t_commands(ctx):
+    """New shell commands: version, security, tpm."""
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="cmds", tpm=True)
+    try:
+        r = ctx.r
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        for cmd, expect in (("version", "sbat generation 1"), ("security", "ring 3"), ("tpm", "pcr11 (boot phase)")):
+            vm.type(cmd)
+            vm.keys("ret")
+            r.check(f"`{cmd}` prints", vm.wait_for(expect, 30, "serial"), vm.serial_text()[-400:])
+        s = vm.serial_text()
+        for needle in ("no-execute (NX)    yes", "write protect      yes", "measured boot      yes", "shadow stack (CET) not enabled"):
+            r.check(f"security shows: {needle}", needle in s)
+        pcr12 = [l.split()[-1] for l in s.splitlines() if l.startswith("pcr12 (command line)")]
+        pcr11 = [l.split()[-1] for l in s.splitlines() if l.startswith("pcr11 (boot phase)")]
+        r.check("tpm command shows non-zero PCR values", bool(pcr12) and bool(pcr11) and pcr12[0] != "0" * 64 and pcr11[0] != "0" * 64)
     finally:
         vm.close()
 
@@ -412,7 +470,7 @@ def t_faults(ctx):
 
 
 TESTS = {
-    "boot": t_boot_and_splash, "shell": t_shell, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
 

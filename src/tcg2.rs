@@ -6,6 +6,10 @@ use crate::sha256;
 
 /// PCR that holds the boot command line, the same slot systemd-stub uses for the kernel command line.
 pub const PCR_CMDLINE: u32 = 12;
+/// PCR that marks the boot phase Aeon reached (systemd uses PCR 11 for kernel and phase measurements).
+pub const PCR_PHASE: u32 = 11;
+/// The phase string measured just before Aeon leaves the firmware.
+pub const PHASE_EXIT_BOOT: &str = "aeon:exit-boot-services";
 /// `EV_IPL`: initial program loader data (TCG PC Client platform firmware profile).
 pub const EV_IPL: u32 = 0x0000_000D;
 /// `EFI_TCG2_EVENT_HEADER.HeaderSize`: 4 + 2 + 4 + 4.
