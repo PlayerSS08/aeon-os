@@ -60,6 +60,10 @@ pub struct BootInfo {
     pub tsc_hz: u64,
     /// Physical address of the firmware runtime-services table (valid after `ExitBootServices`).
     pub runtime_services: usize,
+    /// 32-byte boot random seed (hash of firmware RNG, RDRAND and timing). Never logged or printed.
+    pub seed: [u8; 32],
+    /// How many independent sources went into `seed` (0 means the fixed fallback is in use).
+    pub seed_sources: u8,
 }
 
 impl BootInfo {
@@ -95,6 +99,8 @@ impl BootInfo {
             },
             tsc_hz: 0,
             runtime_services: 0,
+            seed: [0; 32],
+            seed_sources: 0,
         }
     }
 

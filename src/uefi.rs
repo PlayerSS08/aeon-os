@@ -75,6 +75,13 @@ pub const TCG2_GUID: Guid = Guid {
     data3: 0x42be,
     data4: [0x93, 0x0b, 0xe4, 0xd7, 0x6d, 0xb2, 0x72, 0x0f],
 };
+/// EFI_RNG_PROTOCOL.
+pub const RNG_GUID: Guid = Guid {
+    data1: 0x3152bca5,
+    data2: 0xeade,
+    data3: 0x433d,
+    data4: [0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44],
+};
 pub const SMBIOS3_GUID: Guid = Guid {
     data1: 0xf2fd1544,
     data2: 0x9794,
@@ -305,7 +312,27 @@ pub struct LoadedImage {
     pub image_size: u64,
 }
 
+/// EFI_RNG_PROTOCOL: `GetRNG(this, algorithm (null = default), size, value)`.
+#[repr(C)]
+pub struct Rng {
+    pub get_info: usize,
+    pub get_rng: extern "efiapi" fn(*mut Rng, *const Guid, usize, *mut u8) -> Status,
+}
+
+/// EFI_TCG2_PROTOCOL (only the slots Aeon calls are typed).
+#[repr(C)]
+pub struct Tcg2 {
+    pub get_capability: usize,
+    pub get_event_log: extern "efiapi" fn(*mut Tcg2, u32, *mut u64, *mut u64, *mut u8) -> Status,
+    pub hash_log_extend_event: extern "efiapi" fn(*mut Tcg2, u64, u64, u64, *const u8) -> Status,
+    pub submit_command: extern "efiapi" fn(*mut Tcg2, in_size: u32, in_block: *const u8, out_size: u32, out_block: *mut u8) -> Status,
+}
+
 const _: () = {
+    assert!(offset_of!(Rng, get_rng) == 8);
+    assert!(offset_of!(Tcg2, get_event_log) == 8);
+    assert!(offset_of!(Tcg2, hash_log_extend_event) == 16);
+    assert!(offset_of!(Tcg2, submit_command) == 24);
     assert!(offset_of!(Gop, mode) == 24);
     assert!(offset_of!(GopMode, frame_buffer_base) == 24);
     assert!(offset_of!(LoadedImage, load_options_size) == 48);

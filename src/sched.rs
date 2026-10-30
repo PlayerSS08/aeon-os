@@ -5,6 +5,8 @@
 //! whichever stack pointer it returns (see the stubs in `arch`). Task 0 is the boot thread and doubles
 //! as the idle task: it only runs when nothing else is ready.
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use crate::arch;
 use crate::global::Global;
 use crate::mm;
@@ -12,7 +14,17 @@ use crate::mm;
 pub const MAX_TASKS: usize = 16;
 const STACK_PAGES: usize = 8; // 32 KiB per task
 const STACK_BYTES: usize = STACK_PAGES * 4096;
-const CANARY: u64 = 0xAE0A_5AFE_C0DE_D00D;
+/// Stack-overflow canary. Starts as a fixed value and is replaced by a boot-seed-derived one before
+/// the first task is created (`set_canary`), so it cannot be guessed from the binary.
+static CANARY_VALUE: AtomicU64 = AtomicU64::new(0xAE0A_5AFE_C0DE_D00D);
+
+pub fn set_canary(v: u64) {
+    CANARY_VALUE.store(v, Ordering::Relaxed);
+}
+
+fn canary() -> u64 {
+    CANARY_VALUE.load(Ordering::Relaxed)
+}
 const NAME_LEN: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -111,7 +123,7 @@ pub fn spawn(name: &str, entry: extern "C" fn(usize), arg: usize) -> Option<usiz
     let sp = (top - 64 - 8 * FRAME_QWORDS as u64) & !0xF;
     // SAFETY: the frames were just allocated and are identity-mapped, writable and exclusively ours.
     unsafe {
-        (stack as *mut u64).write(CANARY);
+        (stack as *mut u64).write(canary());
         // Return address for an entry function that returns: terminate the task.
         ((entry_rsp) as *mut u64).write(task_exit as *const () as u64);
         core::ptr::copy_nonoverlapping(FX_TEMPLATE.as_ptr(), sp as *mut u8, 512);
@@ -168,7 +180,7 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     if cur != 0 && s.tasks[cur].stack != 0 {
         // SAFETY: the canary word is the first word of the task's stack allocation.
         let c = unsafe { (s.tasks[cur].stack as *const u64).read() };
-        if c != CANARY {
+        if c != canary() {
             panic!("kernel stack overflow in task {} ({})", cur, core::str::from_utf8(&s.tasks[cur].name[..s.tasks[cur].name_len]).unwrap_or("?"));
         }
     }

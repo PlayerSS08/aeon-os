@@ -131,28 +131,28 @@ pub fn pages_to_mb(pages: u64) -> u64 {
     pages.saturating_mul(PAGE_SIZE) / (1024 * 1024)
 }
 
-/// Totals over `regions`. Adjacent usable regions are merged before looking for the largest block.
+/// Totals over `regions` (saturating: a hostile page count must not overflow and panic). Adjacent usable regions are merged before looking for the largest block.
 pub fn summarize(regions: &[Region]) -> Summary {
     let mut s = Summary { regions: regions.len(), ..Summary::default() };
     let mut run_end = 0u64;
     let mut run_pages = 0u64;
     for r in regions {
         match r.kind {
-            Kind::Usable => s.usable_pages += r.pages,
-            Kind::Reclaimable => s.reclaimable_pages += r.pages,
-            Kind::AcpiReclaim | Kind::AcpiNvs => s.acpi_pages += r.pages,
-            Kind::Runtime => s.runtime_pages += r.pages,
-            Kind::Mmio => s.mmio_pages += r.pages,
+            Kind::Usable => s.usable_pages = s.usable_pages.saturating_add(r.pages),
+            Kind::Reclaimable => s.reclaimable_pages = s.reclaimable_pages.saturating_add(r.pages),
+            Kind::AcpiReclaim | Kind::AcpiNvs => s.acpi_pages = s.acpi_pages.saturating_add(r.pages),
+            Kind::Runtime => s.runtime_pages = s.runtime_pages.saturating_add(r.pages),
+            Kind::Mmio => s.mmio_pages = s.mmio_pages.saturating_add(r.pages),
             Kind::Persistent => {}
-            Kind::Reserved => s.reserved_pages += r.pages,
+            Kind::Reserved => s.reserved_pages = s.reserved_pages.saturating_add(r.pages),
         }
         if r.kind.is_ram() {
-            s.ram_pages += r.pages;
+            s.ram_pages = s.ram_pages.saturating_add(r.pages);
             s.top_of_ram = s.top_of_ram.max(r.end());
         }
         if r.kind == Kind::Usable {
             if run_pages != 0 && r.start == run_end {
-                run_pages += r.pages;
+                run_pages = run_pages.saturating_add(r.pages);
             } else {
                 run_pages = r.pages;
             }
@@ -283,5 +283,33 @@ mod tests {
         }
         let mut out = [Region::EMPTY; 3];
         assert_eq!(collect_regions(&raw, 40, &mut out), (3, 2));
+    }
+}
+
+/// A hostile memory map must never panic or overrun the output table.
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+
+    fn xorshift(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+
+    #[test]
+    fn random_maps_never_panic_or_overflow() {
+        let mut s = 0x1234_5678_9ABC_DEF1u64;
+        let mut out = [Region::EMPTY; 16];
+        for _ in 0..20_000 {
+            let len = (xorshift(&mut s) % 600) as usize;
+            let raw: Vec<u8> = (0..len).map(|_| xorshift(&mut s) as u8).collect();
+            let desc = [0usize, 1, 16, 40, 48, 64, 4096, usize::MAX][(xorshift(&mut s) % 8) as usize];
+            let (n, _dropped) = collect_regions(&raw, desc, &mut out);
+            assert!(n <= out.len());
+            let sm = summarize(&out[..n]);
+            assert!(sm.regions == n);
+        }
     }
 }

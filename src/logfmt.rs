@@ -194,3 +194,49 @@ mod tests {
         assert_eq!(r.len(), 4);
     }
 }
+
+/// The log ring and line buffer take arbitrary bytes from anywhere in the kernel.
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+    use core::fmt::Write;
+
+    fn xorshift(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+
+    #[test]
+    fn ring_keeps_exactly_the_newest_bytes() {
+        let mut s = 7u64;
+        let mut ring = Ring::<64>::new();
+        let mut all: Vec<u8> = Vec::new();
+        for _ in 0..2_000 {
+            let n = (xorshift(&mut s) % 100) as usize;
+            let chunk: Vec<u8> = (0..n).map(|_| xorshift(&mut s) as u8).collect();
+            ring.push(&chunk);
+            all.extend_from_slice(&chunk);
+            let (a, b) = ring.slices();
+            let got: Vec<u8> = a.iter().chain(b).copied().collect();
+            let want = &all[all.len().saturating_sub(64)..];
+            assert_eq!(got, want);
+        }
+    }
+
+    #[test]
+    fn line_buffer_is_always_single_line_ascii() {
+        let mut s = 99u64;
+        for _ in 0..5_000 {
+            let mut lb = LineBuf::<32>::new();
+            let n = (xorshift(&mut s) % 80) as usize;
+            let text: String = (0..n).map(|_| char::from_u32((xorshift(&mut s) % 0x300) as u32).unwrap_or('?')).collect();
+            let _ = lb.write_str(&text);
+            let out = lb.finish();
+            assert!(out.len() <= 32);
+            assert_eq!(out.last(), Some(&b'\n'));
+            assert!(out[..out.len() - 1].iter().all(|b| (0x20..0x7F).contains(b) && *b != b'\n'));
+        }
+    }
+}

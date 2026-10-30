@@ -1,0 +1,2 @@
+b0f12e5830957e23cfbabd39d962ae21e59c3dc0cae29954e9def4a40eb26aa4  EFI/BOOT/BOOTX64.EFI
+1cf889a27bd126a7346f316ec9f1d5804d9c6f3e715c57bcc3b892cac62c106c  aeon-secureboot.cer

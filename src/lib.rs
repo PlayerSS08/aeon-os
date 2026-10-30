@@ -13,6 +13,7 @@ pub mod acpi;
 pub mod bootinfo;
 pub mod bootopts;
 pub mod cpuid;
+pub mod entropy;
 pub mod font;
 pub mod frames;
 pub mod heapalloc;
@@ -20,6 +21,9 @@ pub mod keymap;
 pub mod logfmt;
 pub mod memmap;
 pub mod pixel;
+pub mod sha256;
+pub mod splash;
+pub mod tcg2;
 
 // `log` defines the logging macros, so it must come before the modules that use them.
 #[cfg(target_os = "uefi")]

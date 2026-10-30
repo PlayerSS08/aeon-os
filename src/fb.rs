@@ -9,7 +9,7 @@ use crate::global::Global;
 use crate::logfmt::Level;
 use crate::pixel::PixelFormat;
 
-const MAX_SCALE: usize = 2;
+use crate::splash::{self, MAX_SCALE};
 const MAX_COLS: usize = 256;
 const MAX_ROWS: usize = 128;
 
@@ -41,6 +41,10 @@ const BG: (u8, u8, u8) = (0, 0, 0);
 const BAR_BG: (u8, u8, u8) = (40, 60, 90);
 const BAR_FG: (u8, u8, u8) = (235, 240, 250);
 const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
+const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
+const PANIC_BG: (u8, u8, u8) = (28, 8, 10);
+const PANIC_LOGO: (u8, u8, u8) = (255, 110, 110);
+
 
 pub const BANNER_COLS: usize = 38;
 pub const BANNER_ROWS: usize = 6;
@@ -76,6 +80,9 @@ pub struct Console {
     log_rows: usize,
     cur_col: usize,
     cur_row: usize,
+    /// While true the log is not painted: the screen shows only the logo and the progress bar.
+    splash: bool,
+    logo_row: usize,
 }
 
 impl Console {
@@ -93,7 +100,7 @@ impl Console {
         if info.size < needed {
             return None;
         }
-        let scale = if info.width >= 1600 { 2 } else { 1 };
+        let scale = splash::scale_for_width(info.width);
         let cols = (info.width / (8 * scale)).min(MAX_COLS);
         let rows = (info.height / (16 * scale)).min(MAX_ROWS);
         if cols < 20 || rows < 6 {
@@ -112,7 +119,10 @@ impl Console {
             log_rows: rows - 1,
             cur_col: 0,
             cur_row: 0,
+            splash: false,
+            logo_row: 0,
         };
+        c.logo_row = rows.saturating_sub(BANNER_ROWS) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
         let _ = info.width;
         let first = (rows.saturating_sub(BANNER_ROWS)) / 3 + BANNER_ROWS + 2;
@@ -183,18 +193,120 @@ impl Console {
     }
 
     pub fn draw_logo(&self) {
+        self.draw_logo_rgb(LOGO_RGB, BG);
+    }
+
+    fn draw_logo_rgb(&self, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
         if self.cols < BANNER_COLS || self.rows < BANNER_ROWS {
             return;
         }
         let start_col = (self.cols - BANNER_COLS) / 2;
-        let start_row = (self.rows.saturating_sub(BANNER_ROWS)) / 3;
         for (r, line) in BANNER.iter().enumerate() {
             for (c, &ch) in line.iter().enumerate() {
                 if ch != b' ' {
-                    self.draw_glyph(start_col + c, start_row + r, ch, LOGO_RGB, BG);
+                    self.draw_glyph(start_col + c, self.logo_row + r, ch, fg, bg);
                 }
             }
         }
+    }
+
+    // ---- splash: logo, fade-in and progress bar instead of the scrolling log ----
+
+    /// Bar rectangle `(x, y, width, height)` in pixels, centred under the logo.
+    fn bar_rect(&self) -> (usize, usize, usize, usize) {
+        let w = (self.width * 2 / 5).clamp(120, 640 * self.scale).min(self.width);
+        let x = (self.width - w) / 2;
+        let y = (self.logo_row + BANNER_ROWS + 2) * self.cell_h();
+        (x, y, w, 3 * self.scale)
+    }
+
+    /// Clears the screen, centres the logo and draws the empty progress track. Log output is held
+    /// back (it stays in the ring buffer and on serial) until `end_splash`.
+    pub fn begin_splash(&mut self) {
+        self.clear();
+        self.splash = true;
+        self.logo_row = splash::splash_row(self.rows, BANNER_ROWS);
+        let (x, y, w, h) = self.bar_rect();
+        let track = self.px(TRACK_RGB);
+        self.fill_rect(x, y, w, h, track);
+    }
+
+    pub fn splash_active(&self) -> bool {
+        self.splash
+    }
+
+    /// Draws the logo at brightness `level` (0 = black, 255 = full), for a fade-in.
+    pub fn fade_logo(&self, level: u8) {
+        self.draw_logo_rgb(splash::dim(LOGO_RGB, level), BG);
+    }
+
+    /// Fills the progress bar to `permille` thousandths.
+    pub fn progress(&self, permille: u32) {
+        if !self.splash {
+            return;
+        }
+        let (x, y, w, h) = self.bar_rect();
+        let fg = self.px(LOGO_RGB);
+        self.fill_rect(x, y, splash::fill_width(w, permille), h, fg);
+    }
+
+    /// Shows a short centred line under the bar (empty `text` removes it).
+    pub fn hint(&self, text: &[u8]) {
+        if !self.splash {
+            return;
+        }
+        let row = self.logo_row + BANNER_ROWS + 4;
+        if row >= self.rows {
+            return;
+        }
+        let n = text.len().min(self.cols);
+        if n == 0 {
+            self.fill_rect(0, row * self.cell_h(), self.width, self.cell_h(), self.px(BG));
+            return;
+        }
+        let col = (self.cols - n) / 2;
+        for (i, &b) in text[..n].iter().enumerate() {
+            self.draw_glyph(col + i, row, b, (120, 130, 145), BG);
+        }
+    }
+
+    /// Leaves the splash: the screen returns to logo at the top, log area and status bar.
+    pub fn end_splash(&mut self) {
+        if !self.splash {
+            return;
+        }
+        self.splash = false;
+        self.clear();
+        self.logo_row = self.rows.saturating_sub(BANNER_ROWS) / 3;
+        self.draw_logo();
+    }
+
+    /// Full-screen stop screen for an unrecoverable error. Shows only what the user needs: where it
+    /// failed and what to do. No addresses or register values are printed to the screen.
+    pub fn panic_screen(&mut self, lines: &[&[u8]]) {
+        self.splash = false;
+        let bg = self.px(PANIC_BG);
+        self.fill_rect(0, 0, self.width, self.height, bg);
+        self.logo_row = self.rows.saturating_sub(BANNER_ROWS + 10) / 3;
+        self.draw_logo_rgb(PANIC_LOGO, PANIC_BG);
+        let mut row = self.logo_row + BANNER_ROWS + 2;
+        let put = |this: &Self, row: usize, text: &[u8], fg: (u8, u8, u8)| {
+            if row >= this.rows {
+                return;
+            }
+            let n = text.len().min(this.cols);
+            let col = (this.cols - n) / 2;
+            for (i, &b) in text[..n].iter().enumerate() {
+                this.draw_glyph(col + i, row, b, fg, PANIC_BG);
+            }
+        };
+        put(self, row, b"AEON STOPPED", (255, 200, 200));
+        row += 2;
+        for l in lines {
+            put(self, row, l, (230, 190, 190));
+            row += 1;
+        }
+        put(self, row + 1, b"The system is halted. Power off or press reset to restart.", (160, 120, 120));
     }
 
     fn draw_glyph(&self, col: usize, row: usize, ch: u8, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
@@ -273,6 +385,9 @@ impl Console {
     }
 
     pub fn write_line(&mut self, level: Level, bytes: &[u8]) {
+        if self.splash {
+            return;
+        }
         let color = color_for(level);
         for &b in bytes {
             self.put_byte(b, color);

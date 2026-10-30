@@ -52,6 +52,22 @@ pub fn rdtsc() -> u64 {
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
+/// One 64-bit value from the CPU's hardware generator, or `None` if it keeps reporting "not ready".
+/// Callers must check the RDRAND CPUID bit first.
+pub fn rdrand64() -> Option<u64> {
+    for _ in 0..10 {
+        let v: u64;
+        let ok: u8;
+        // SAFETY: `rdrand` is unprivileged, touches no memory and sets CF on success; the caller
+        // checked CPUID for support, so it cannot raise #UD.
+        unsafe { asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack)) };
+        if ok != 0 {
+            return Some(v);
+        }
+    }
+    None
+}
+
 pub fn cpuid(leaf: u32, sub: u32) -> Regs {
     let r = core::arch::x86_64::__cpuid_count(leaf, sub);
     Regs { eax: r.eax, ebx: r.ebx, ecx: r.ecx, edx: r.edx }
@@ -740,6 +756,10 @@ extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
     error!("exc", "r9 ={:#018x} r10={:#018x} r11={:#018x} r12={:#018x}", f.r9, f.r10, f.r11, f.r12);
     error!("exc", "r13={:#018x} r14={:#018x} r15={:#018x}", f.r13, f.r14, f.r15);
     error!("exc", "system halted");
+    // The screen gets the cause only; addresses and registers stay on the serial and debug ports.
+    let _ = crate::log::with_console(|c| {
+        c.panic_screen(&[b"The processor reported an unrecoverable error:", name.as_bytes(), b"Details are in the serial log."])
+    });
     halt_forever();
 }
 

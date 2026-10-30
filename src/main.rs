@@ -8,6 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use core::ffi::c_void;
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use aeon::acpi::{self, Rsdp};
@@ -15,7 +16,10 @@ use aeon::arch;
 use aeon::bootinfo::{BootInfo, FbInfo, SecureBoot, MAX_REGIONS};
 use aeon::bootopts::{self, BootOpts};
 use aeon::cpuid;
+use aeon::entropy;
 use aeon::fb::Console;
+use aeon::splash;
+use aeon::tcg2;
 use aeon::log;
 use aeon::global::Global;
 use aeon::logfmt::{self, Level};
@@ -26,7 +30,8 @@ use aeon::sched;
 use aeon::shell;
 use aeon::pixel::PixelFormat;
 use aeon::uefi::{
-    self, BootServices, Gop, GopModeInfo, Guid, Handle, InputKey, LoadedImage, RuntimeServices, Status, SystemTable,
+    self, BootServices, Gop, GopModeInfo, Guid, Handle, InputKey, LoadedImage, Rng, RuntimeServices, Status, SystemTable,
+    Tcg2,
 };
 use aeon::{debug, error, info, warn};
 
@@ -42,22 +47,28 @@ struct KernelStack([u8; KSTACK_SIZE]);
 /// The kernel stack. Its lowest page is unmapped by `paging::build` as a guard page.
 static KSTACK: Global<KernelStack> = Global::new(KernelStack([0; KSTACK_SIZE]));
 
+/// Boot stages that move the splash progress bar: firmware-entry, early-init, platform-discovery,
+/// security-init, exit-boot-services, kernel-env, kernel-memory, kernel-tasks.
+const TOTAL_STAGES: usize = 8;
+
 struct Stages {
     n: usize,
-    items: [(&'static str, u64); 8],
+    items: [(&'static str, u64); 12],
 }
 
-static STAGES: Global<Stages> = Global::new(Stages { n: 0, items: [("", 0); 8] });
+static STAGES: Global<Stages> = Global::new(Stages { n: 0, items: [("", 0); 12] });
 
 fn stage(name: &'static str) {
     // SAFETY: single-threaded boot; the reference is dropped before logging.
-    unsafe {
+    let done = unsafe {
         let s = STAGES.get();
         if s.n < s.items.len() {
             s.items[s.n] = (name, arch::rdtsc());
             s.n += 1;
         }
-    }
+        s.n - 1
+    };
+    let _ = log::with_console(|c| c.progress(splash::stage_permille(done, TOTAL_STAGES)));
     info!("stage", "enter {}", name);
 }
 
@@ -84,6 +95,17 @@ fn calibrate_tsc(bs: &BootServices) -> u64 {
 fn pick_gop_mode(gop: &Gop) -> Option<u32> {
     // SAFETY: `gop.mode` is set by firmware and valid for the protocol's lifetime.
     let (max_mode, current) = unsafe { ((*gop.mode).max_mode, (*gop.mode).mode) };
+    // The firmware's current mode is normally the panel's native one: keep it when it has a linear
+    // framebuffer, so the image is sharp instead of scaled by the display.
+    let mut size = 0usize;
+    let mut cur: *const GopModeInfo = core::ptr::null();
+    if (gop.query_mode)(gop as *const Gop as *mut Gop, current, &mut size, &mut cur) == uefi::SUCCESS && !cur.is_null() {
+        // SAFETY: query_mode succeeded, so `cur` points at a firmware-allocated GopModeInfo.
+        let i = unsafe { &*cur };
+        if i.pixel_format != 3 && i.horizontal_resolution >= 640 && i.vertical_resolution >= 480 {
+            return Some(current);
+        }
+    }
     let mut best: Option<(u32, u64)> = None;
     for m in 0..max_mode {
         let mut size = 0usize;
@@ -168,6 +190,131 @@ fn secure_boot_state(rt: &RuntimeServices) -> SecureBoot {
 fn tpm2_present(bs: &BootServices) -> bool {
     let mut p: *mut c_void = core::ptr::null_mut();
     (bs.locate_protocol)(&uefi::TCG2_GUID, core::ptr::null_mut(), &mut p) == uefi::SUCCESS && !p.is_null()
+}
+
+/// Builds the boot random seed from the firmware RNG and RDRAND (the strong sources) plus timing.
+/// Returns the seed and how many strong sources contributed. The seed is never logged.
+fn gather_seed(bs: &BootServices, rdrand: bool) -> ([u8; entropy::SEED_LEN], u8) {
+    let mut pool = entropy::Pool::new();
+    let mut strong = 0u8;
+
+    let mut p: *mut c_void = core::ptr::null_mut();
+    if (bs.locate_protocol)(&uefi::RNG_GUID, core::ptr::null_mut(), &mut p) == uefi::SUCCESS && !p.is_null() {
+        let mut bytes = [0u8; 32];
+        let rng = p as *mut Rng;
+        // SAFETY: locate_protocol returned a live EFI_RNG_PROTOCOL; a null algorithm selects the default.
+        let s = unsafe { ((*rng).get_rng)(rng, core::ptr::null(), bytes.len(), bytes.as_mut_ptr()) };
+        if s == uefi::SUCCESS {
+            pool.add(&bytes);
+            strong += 1;
+        } else {
+            debug!("seed", "firmware RNG returned status={:#x}", s);
+        }
+        bytes.fill(0);
+        core::hint::black_box(&bytes);
+    }
+    if rdrand {
+        let words = [arch::rdrand64(), arch::rdrand64(), arch::rdrand64(), arch::rdrand64()];
+        if words.iter().all(Option::is_some) {
+            for w in words.into_iter().flatten() {
+                pool.add_u64(w);
+            }
+            strong += 1;
+        }
+    }
+    pool.add_u64(arch::rdtsc());
+    pool.add_u64(boot_info().image_base);
+    (pool.finish(), strong)
+}
+
+/// Reads one SHA-256 PCR through the TPM, or `None` if the TPM refuses or answers nonsense.
+fn pcr_read(tcg: *mut Tcg2, pcr: u32) -> Option<[u8; 32]> {
+    let mut cmd = [0u8; 20];
+    let n = tcg2::build_pcr_read(&mut cmd, pcr);
+    let mut resp = [0u8; 128];
+    // SAFETY: `tcg` is a live EFI_TCG2_PROTOCOL; both blocks are valid for the sizes passed.
+    let s = unsafe { ((*tcg).submit_command)(tcg, n as u32, cmd.as_ptr(), resp.len() as u32, resp.as_mut_ptr()) };
+    if s != uefi::SUCCESS {
+        debug!("tpm", "PCR_Read submit status={:#x}", s);
+        return None;
+    }
+    tcg2::parse_pcr_read(&resp)
+}
+
+/// Measured boot: extends the boot command line into PCR 12 (and the firmware event log), then reads
+/// the PCR back to prove the extend happened. The firmware has already measured this image itself.
+fn measure_cmdline(bs: &BootServices, cmdline: &str) {
+    let mut p: *mut c_void = core::ptr::null_mut();
+    if (bs.locate_protocol)(&uefi::TCG2_GUID, core::ptr::null_mut(), &mut p) != uefi::SUCCESS || p.is_null() {
+        info!("tpm", "measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)");
+        return;
+    }
+    let tcg = p as *mut Tcg2;
+
+    let (mut loc, mut last, mut truncated) = (0u64, 0u64, 0u8);
+    // SAFETY: live protocol; format 2 is the crypto-agile log; the three out-pointers are valid.
+    let s = unsafe { ((*tcg).get_event_log)(tcg, 2, &mut loc, &mut last, &mut truncated) };
+    if s == uefi::SUCCESS {
+        info!("tpm", "event log at {:#x}, last entry {:#x}, truncated={}", loc, last, truncated != 0);
+    } else {
+        warn!("tpm", "GetEventLog status={:#x}", s);
+    }
+
+    let before = pcr_read(tcg, tcg2::PCR_CMDLINE);
+    let mut data = [0u8; 2 * 130];
+    let Some(dlen) = tcg2::utf16le_cmdline(cmdline, &mut data) else {
+        warn!("tpm", "command line too long to measure");
+        return;
+    };
+    let mut ev = [0u8; tcg2::EVENT_OVERHEAD + 2 * 130];
+    let Some(elen) = tcg2::build_event(&mut ev, tcg2::PCR_CMDLINE, tcg2::EV_IPL, &data[..dlen]) else {
+        return;
+    };
+    let _ = elen;
+    // SAFETY: live protocol; `data` and `ev` stay valid for the call and `ev` is a well-formed
+    // EFI_TCG2_EVENT built by `tcg2::build_event`.
+    let s = unsafe { ((*tcg).hash_log_extend_event)(tcg, 0, data.as_ptr() as u64, dlen as u64, ev.as_ptr()) };
+    if s != uefi::SUCCESS {
+        warn!("tpm", "HashLogExtendEvent status={:#x}", s);
+        return;
+    }
+    let after = pcr_read(tcg, tcg2::PCR_CMDLINE);
+    let mut hex = [0u8; 64];
+    if let (Some(b), Some(a)) = (before, after) {
+        let verified = tcg2::expected_extend(&b, &data[..dlen]) == a;
+        tcg2::hex32(&b, &mut hex);
+        info!("tpm", "pcr{}_before={}", tcg2::PCR_CMDLINE, core::str::from_utf8(&hex).unwrap_or("?"));
+        tcg2::hex32(&a, &mut hex);
+        info!("tpm", "pcr{}_after={}", tcg2::PCR_CMDLINE, core::str::from_utf8(&hex).unwrap_or("?"));
+        info!("tpm", "measured cmdline into pcr={} event=EV_IPL bytes={} verified={}", tcg2::PCR_CMDLINE, dlen, verified);
+        if !verified {
+            error!("tpm", "PCR {} does not hold the expected value after the extend", tcg2::PCR_CMDLINE);
+        }
+    } else {
+        warn!("tpm", "measured cmdline into pcr={} but could not read the PCR back", tcg2::PCR_CMDLINE);
+    }
+}
+
+/// Image base/size and the command line (UEFI load options), copied into `BootInfo`.
+fn read_loaded_image(bs: &BootServices, image: Handle) {
+    let b = boot_info();
+    let mut li: *mut c_void = core::ptr::null_mut();
+    if (bs.handle_protocol)(image, &uefi::LOADED_IMAGE_GUID, &mut li) == uefi::SUCCESS && !li.is_null() {
+        // SAFETY: handle_protocol returned the LoadedImage of our own image handle.
+        let li = unsafe { &*(li as *const LoadedImage) };
+        b.image_base = li.image_base as u64;
+        b.image_size = li.image_size;
+        let units = (li.load_options_size as usize / 2).min(b.cmdline.len() - 1);
+        if !li.load_options.is_null() {
+            let opts = li.load_options as *const u16;
+            for i in 0..units {
+                // SAFETY: `units` 16-bit words lie within load_options_size bytes.
+                let c = unsafe { opts.add(i).read_unaligned() };
+                b.cmdline[i] = if (0x20..0x7F).contains(&c) { c as u8 } else { b'?' };
+            }
+            b.cmdline_len = units;
+        }
+    }
 }
 
 fn find_acpi(st: &SystemTable) -> (u64, Rsdp) {
@@ -269,6 +416,7 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
     info!("menu", "press any key within {} s for the boot menu", opts.menu_timeout);
+    let _ = log::with_console(|c| c.hint(b"press any key for the boot menu"));
     let mut pressed = false;
     let t0 = aeon::arch::rdtsc();
     let budget = log::tsc_hz().saturating_mul(u64::from(opts.menu_timeout));
@@ -279,8 +427,21 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
             break;
         }
     }
+    let _ = log::with_console(|c| c.hint(b""));
     if !pressed {
         return opts;
+    }
+    // The menu is text: leave the splash and show everything logged so far.
+    if log::with_console(|c| {
+        let was = c.splash_active();
+        c.end_splash();
+        was
+    })
+    .unwrap_or(false)
+    {
+        log::replay(|bytes| {
+            let _ = log::with_console(|c| c.write_line(Level::Info, bytes));
+        });
     }
     loop {
         info!("menu", "Enter boot | D toggle debug logging | F firmware setup | R reboot | S shut down");
@@ -395,13 +556,31 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         s.efer & arch::EFER_NXE != 0
     );
 
+    // Image info and boot options come first: they decide whether the screen shows the splash or the log.
+    read_loaded_image(bs, image);
+    let mut opts = bootopts::parse(boot_info().cmdline_str());
+    if opts.quiet {
+        log::set_max_level(Level::Warn);
+    } else if opts.debug {
+        log::set_max_level(Level::Trace);
+    }
+
     let fb = init_gop(bs);
     if let Some(f) = fb {
         // SAFETY: GOP reported this linear framebuffer; it is mapped by the firmware and stays
         // valid across ExitBootServices, and nothing else draws to it after this point.
         if let Some(mut c) = unsafe { Console::new(&f) } {
-            c.clear();
-            c.draw_logo();
+            if opts.verbose {
+                c.clear();
+                c.draw_logo();
+            } else {
+                // Splash: the logo fades in, a thin bar tracks the real boot stages, the log is held back.
+                c.begin_splash();
+                for step in 1..=10u32 {
+                    c.fade_logo((step * 255 / 10) as u8);
+                    let _ = (bs.stall)(18_000);
+                }
+            }
             let (cols, rows) = c.size();
             log::detach_conout();
             log::attach_console(c);
@@ -422,6 +601,12 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         b.fb = fb;
         b.tsc_hz = log::tsc_hz();
     }
+    {
+        // Catch the bar up with the stages that ran before the console existed.
+        // SAFETY: single-threaded boot; plain read of the stage counter.
+        let done = unsafe { (*STAGES.as_ptr()).n }.saturating_sub(1);
+        let _ = log::with_console(|c| c.progress(splash::stage_permille(done, TOTAL_STAGES)));
+    }
 
     // ---- Stage 3: platform discovery ----
     stage("platform-discovery");
@@ -435,23 +620,6 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         b.uefi_revision = st.hdr.revision;
         b.runtime_services = st.runtime_services as usize;
 
-        let mut li: *mut c_void = core::ptr::null_mut();
-        if (bs.handle_protocol)(image, &uefi::LOADED_IMAGE_GUID, &mut li) == uefi::SUCCESS && !li.is_null() {
-            // SAFETY: handle_protocol returned the LoadedImage of our own image handle.
-            let li = unsafe { &*(li as *const LoadedImage) };
-            b.image_base = li.image_base as u64;
-            b.image_size = li.image_size;
-            let units = (li.load_options_size as usize / 2).min(b.cmdline.len() - 1);
-            if !li.load_options.is_null() {
-                let opts = li.load_options as *const u16;
-                for i in 0..units {
-                    // SAFETY: `units` 16-bit words lie within load_options_size bytes.
-                    let c = unsafe { opts.add(i).read_unaligned() };
-                    b.cmdline[i] = if (0x20..0x7F).contains(&c) { c as u8 } else { b'?' };
-                }
-                b.cmdline_len = units;
-            }
-        }
         let (rsdp, parsed) = find_acpi(st);
         b.acpi_rsdp = rsdp;
         b.acpi = parsed;
@@ -496,20 +664,28 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         }
     }
 
-    // Boot options and menu (through the firmware console, so USB keyboards work here).
-    let opts = {
-        let parsed = bootopts::parse(boot_info().cmdline_str());
-        if parsed.quiet {
-            log::set_max_level(Level::Warn);
-        } else if parsed.debug {
-            log::set_max_level(Level::Trace);
+    // ---- Stage 4: security init (random seed, measured boot) ----
+    stage("security-init");
+    {
+        let (seed, strong) = gather_seed(bs, feat.rdrand);
+        let b = boot_info();
+        b.seed = seed;
+        b.seed_sources = strong;
+        sched::set_canary(entropy::canary_from(&seed));
+        if strong == 0 {
+            warn!("seed", "no hardware entropy source (firmware RNG, RDRAND): seed rests on timing only");
+        } else {
+            info!("seed", "boot seed ready from {} hardware source(s); stack canary randomised", strong);
         }
-        boot_menu(st, bs, rt, parsed)
-    };
+    }
+    measure_cmdline(bs, boot_info().cmdline_str());
+
+    // Boot menu (through the firmware console, so USB keyboards work here).
+    opts = boot_menu(st, bs, rt, opts);
     let _ = opts;
     set_loader_var(rt, &uefi::utf16(b"LoaderInfo\0"), concat!("Aeon ", env!("CARGO_PKG_VERSION")));
 
-    // ---- Stage 4: ExitBootServices ----
+    // ---- Stage 5: ExitBootServices ----
     stage("exit-boot-services");
     // Size the buffer from the firmware's own answer, with slack because the allocation below (and
     // the first failed ExitBootServices) can add descriptors.
@@ -703,6 +879,7 @@ extern "C" fn kernel_main() -> ! {
     unsafe { core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack, preserves_flags)) };
     info!("kernel", "kernel_main entered on kernel stack rsp={:#x}", rsp);
 
+    stage("kernel-memory");
     // Memory management: physical frames first, then the heap carved from them.
     // SAFETY: boot services have exited, the map in BootInfo is final, and this runs once.
     let fs = unsafe { mm::init_frames(boot_info()) };
@@ -738,6 +915,7 @@ extern "C" fn kernel_main() -> ! {
         warn!("timer", "no timer interrupt within 330 ms; no preemption, running the shell directly");
     }
 
+    stage("kernel-tasks");
     // SAFETY: reads the stage table written during boot; no writer is active.
     let stages = unsafe { &*STAGES.as_ptr() };
     let hz = log::tsc_hz();
@@ -749,6 +927,16 @@ extern "C" fn kernel_main() -> ! {
         info!("stage", "{} took {} us", last.0, logfmt::ticks_to_us(arch::rdtsc() - last.1, hz));
     }
     info!("boot", "boot complete uptime_us={} mode={}", log::uptime_us(), if irq_mode { "preemptive" } else { "single-task" });
+
+    // Finish the splash: bar to 100 %, a short hold so the eye sees it complete, then the shell screen.
+    if log::with_console(|c| c.splash_active()).unwrap_or(false) {
+        let _ = log::with_console(|c| c.progress(1000));
+        let t0 = arch::rdtsc();
+        while arch::rdtsc().wrapping_sub(t0) < log::tsc_hz() / 5 {
+            arch::pause();
+        }
+        let _ = log::with_console(|c| c.end_splash());
+    }
 
     run_fault_tests();
 
@@ -790,5 +978,20 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
     error!("panic", "{}", info.message());
     error!("panic", "cr2={:#x} cr3={:#x} system halted", arch::read_cr2(), arch::read_cr3());
+    // The screen gets where and why, never addresses or registers (those stay on serial/debugcon).
+    let mut where_ = logfmt::LineBuf::<96>::new();
+    let mut why = logfmt::LineBuf::<160>::new();
+    match info.location() {
+        Some(l) => {
+            let file = l.file().rsplit(['/', '\\']).next().unwrap_or("?");
+            let _ = write!(where_, "panicked at {}:{}", file, l.line());
+        }
+        None => {
+            let _ = write!(where_, "panicked at an unknown location");
+        }
+    }
+    let _ = write!(why, "{}", info.message());
+    let (where_line, why_line) = (where_.finish().trim_ascii_end(), why.finish().trim_ascii_end());
+    let _ = log::with_console(|c| c.panic_screen(&[where_line, why_line, b"Details are in the serial log."]));
     arch::halt_forever()
 }

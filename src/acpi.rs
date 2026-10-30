@@ -246,3 +246,38 @@ mod tests {
         assert_eq!(sdt_entries(&t, false).count(), 4);
     }
 }
+
+/// Hostile firmware tables must be rejected, never crash the parser.
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+
+    fn xorshift(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+
+    #[test]
+    fn random_and_mutated_tables_never_panic() {
+        let mut s = 0xDEAD_BEEF_CAFE_F00Du64;
+        let mut valid = [0u8; 36];
+        valid[..8].copy_from_slice(b"RSD PTR ");
+        valid[15] = 2;
+        valid[20..24].copy_from_slice(&36u32.to_le_bytes());
+        for _ in 0..50_000 {
+            let len = (xorshift(&mut s) % 80) as usize;
+            let mut buf: Vec<u8> = (0..len).map(|_| xorshift(&mut s) as u8).collect();
+            if xorshift(&mut s) % 2 == 0 && len >= 8 {
+                buf[..8].copy_from_slice(b"RSD PTR "); // get past the signature check
+            }
+            let _ = peek_header(&buf);
+            let _ = validate(&buf);
+            let mut m = valid.to_vec();
+            let i = (xorshift(&mut s) % 36) as usize;
+            m[i] ^= 1 << (xorshift(&mut s) % 8);
+            let _ = validate(&m); // single bit flips must be caught or handled, never panic
+        }
+    }
+}
