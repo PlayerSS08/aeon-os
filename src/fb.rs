@@ -41,7 +41,7 @@ const BG: (u8, u8, u8) = (0, 0, 0);
 const BAR_BG: (u8, u8, u8) = (40, 60, 90);
 const BAR_FG: (u8, u8, u8) = (235, 240, 250);
 const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
-const TRACK_RGB: (u8, u8, u8) = (36, 40, 50);
+const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
 const PANIC_BG: (u8, u8, u8) = (28, 8, 10);
 const PANIC_LOGO: (u8, u8, u8) = (255, 110, 110);
 
@@ -215,9 +215,9 @@ impl Console {
 
     // ---- splash: logo, fade-in and progress bar instead of the scrolling log ----
 
-    /// Bar rectangle `(x, y, width, height)` in pixels, centred under the logo.
+    /// Bar rectangle (x, y, width, height) in pixels, centred under the logo.
     fn bar_rect(&self) -> (usize, usize, usize, usize) {
-        let w = (240 * self.scale).clamp(160, self.width.saturating_sub(40));
+        let w = (self.width * 2 / 5).clamp(240, 640 * self.scale).min(self.width);
         let x = (self.width - w) / 2;
         let y = (self.logo_row + BANNER_ROWS + 2) * self.cell_h();
         let h = (4 * self.scale).max(4);
@@ -247,7 +247,7 @@ impl Console {
     }
 
     /// Clears the screen, centres the logo and draws the empty progress track. Log output is held
-    /// back (it stays in the ring buffer and on serial) until `end_splash`.
+    /// back (it stays in the ring buffer and on serial) until end_splash.
     pub fn begin_splash(&mut self) {
         self.clear();
         self.splash = true;
@@ -261,12 +261,12 @@ impl Console {
         self.splash
     }
 
-    /// Draws the logo at brightness `level` (0 = black, 255 = full), for a fade-in.
+    /// Draws the logo at brightness level (0 = black, 255 = full), for a fade-in.
     pub fn fade_logo(&self, level: u8) {
         self.draw_logo_rgb(splash::dim(LOGO_RGB, level), BG);
     }
 
-    /// Fills the progress bar to `permille` thousandths.
+    /// Fills the progress bar to permille thousandths.
     pub fn progress(&mut self, permille: u32) {
         if !self.splash {
             return;
@@ -283,7 +283,7 @@ impl Console {
         self.bar_pm
     }
 
-    /// Dims the whole splash (logo, bar track and bar fill) to `level` / 255 for the fade-out.
+    /// Dims the whole splash (logo, bar track and bar fill) to level / 255 for the fade-out.
     pub fn fade_splash(&self, level: u8) {
         if !self.splash {
             return;
@@ -296,7 +296,6 @@ impl Console {
         self.draw_pill(x, y, w, h, track);
         self.draw_pill(x, y, filled, h, fg);
     }
-
     /// Shows a short centred line under the bar (empty `text` removes it).
     pub fn hint(&self, text: &[u8]) {
         if !self.splash {
