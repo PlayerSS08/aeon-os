@@ -14,4 +14,5 @@ for f in fault-ud fault-pf fault-stack fault-wx fault-nx fault-panic; do
     cp "target/fault-build/$f/x86_64-unknown-uefi/release/aeon.efi" "target/fault-images/$f/aeon.efi"
 done
 
-wsl -d Ubuntu -- bash -c "cd '$(wslpath -a . 2>/dev/null || echo /mnt/g/Aeon)' && python3 tests/boot_test.py $*"
+here=$(pwd -W)
+wsl -d Ubuntu -- bash -c "cd \"\$(wslpath -a '$here')\" && python3 tests/boot_test.py $*"
