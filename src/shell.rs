@@ -1,0 +1,246 @@
+//! Interactive kernel shell and the status-bar task. Both run as scheduler tasks.
+
+use alloc::vec::Vec;
+use core::fmt::{self, Write};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use crate::arch;
+use crate::boot;
+use crate::fb::Console;
+use crate::keymap::{Key, Keyboard};
+use crate::log;
+use crate::logfmt::LineBuf;
+use crate::memmap;
+use crate::mm;
+use crate::power;
+use crate::sched;
+
+struct Out;
+
+impl Write for Out {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        log::print_raw(s.as_bytes());
+        Ok(())
+    }
+}
+
+macro_rules! out {
+    ($($a:tt)*) => {{
+        let _ = write!(Out, $($a)*);
+    }};
+}
+
+/// Counters bumped by the demo workers, to make preemption visible.
+static COUNTERS: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+extern "C" fn worker(slot: usize) {
+    loop {
+        COUNTERS[slot % COUNTERS.len()].fetch_add(1, Ordering::Relaxed);
+        // Busy work with no sleep: only the timer interrupt can take the CPU away from this loop.
+        for _ in 0..20_000 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Reads one raw byte from the PS/2 controller, if any (mouse bytes are skipped).
+fn ps2_byte() -> Option<u8> {
+    // SAFETY: standard PS/2 controller ports; reading the data port pops one byte from its buffer.
+    unsafe {
+        let status = arch::inb(0x64);
+        if status == 0xFF || status & 1 == 0 {
+            return None;
+        }
+        let b = arch::inb(0x60);
+        (status & 0x20 == 0).then_some(b)
+    }
+}
+
+const HELP: &str = "commands:
+  help               this list
+  info               firmware, CPU clock, Secure Boot
+  uptime             time since boot
+  mem                frames, heap and RAM totals
+  ps                 list tasks
+  spawn              start 2 busy workers (watch `ps` and `counters`)
+  counters           worker progress
+  kill <id>          stop a task
+  memmap             firmware memory map
+  log                replay the boot log
+  echo <text>        print text
+  sort <n> <n> ...   sort numbers (uses the heap)
+  clear              clear the log area (or Ctrl+L)
+  panic              trigger a kernel panic
+  reboot | shutdown
+";
+
+fn cmd_info() {
+    let b = boot::info();
+    out!("firmware   {} rev {:#x}, UEFI {}.{}\n", b.fw_vendor_str(), b.fw_revision, b.uefi_revision >> 16, (b.uefi_revision & 0xFFFF) / 10);
+    out!("secure boot {}\n", b.secure_boot.name());
+    out!("tsc        {} MHz\n", log::tsc_hz() / 1_000_000);
+    out!("image      base {:#x} size {} KiB\n", b.image_base, b.image_size / 1024);
+}
+
+fn cmd_mem() {
+    let b = boot::info();
+    let m = &b.mem;
+    let f = mm::frame_stats();
+    let h = mm::heap_stats();
+    out!("ram        {} MB total, {} MB usable at boot, top {} MB\n", memmap::pages_to_mb(m.ram_pages), memmap::pages_to_mb(m.usable_pages), m.top_of_ram >> 20);
+    out!("frames     {} free of {} ({} MB free, largest run {} MB)\n", f.free, f.total, f.free as u64 * 4 / 1024, f.largest_run as u64 * 4 / 1024);
+    out!("heap       {} KiB used of {} KiB, {} free holes\n", h.used / 1024, h.capacity / 1024, h.holes);
+}
+
+fn cmd_ps() {
+    out!("id name             state     cpu-ticks\n");
+    sched::for_each(|t| {
+        out!("{:<2} {:<16} {:<9} {}\n", t.id, t.name, t.state.name(), t.ticks);
+    });
+}
+
+fn cmd_memmap() {
+    let b = boot::info();
+    for (i, r) in b.regions().iter().enumerate() {
+        out!("{:3} {:#012x}-{:#012x} {:>8} KiB {:<8} type={}\n", i, r.start, r.end(), r.pages * 4, r.kind.name(), r.mem_type);
+    }
+}
+
+fn cmd_sort(args: &str) {
+    let mut v: Vec<i64> = Vec::new();
+    for w in args.split_whitespace() {
+        match w.parse::<i64>() {
+            Ok(n) => v.push(n),
+            Err(_) => {
+                out!("not a number: {}\n", w);
+                return;
+            }
+        }
+    }
+    v.sort_unstable();
+    for (i, n) in v.iter().enumerate() {
+        out!("{}{}", if i > 0 { " " } else { "" }, n);
+    }
+    out!("\n");
+}
+
+fn cmd_spawn() {
+    for (i, name) in ["worker-a", "worker-b"].into_iter().enumerate() {
+        match sched::spawn(name, worker, i) {
+            Some(id) => out!("started {} as task {}\n", name, id),
+            None => out!("cannot start {}: no free task slot or memory\n", name),
+        }
+    }
+}
+
+fn run(line: &str) {
+    let line = line.trim();
+    let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
+    match cmd {
+        "" => {}
+        "help" | "?" => out!("{}", HELP),
+        "info" => cmd_info(),
+        "uptime" => {
+            let s = log::uptime_us() / 1_000_000;
+            out!("up {:02}:{:02}:{:02}\n", s / 3600, (s / 60) % 60, s % 60);
+        }
+        "mem" => cmd_mem(),
+        "ps" => cmd_ps(),
+        "spawn" => cmd_spawn(),
+        "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),
+        "kill" => match rest.parse::<usize>() {
+            Ok(id) if sched::kill(id) => out!("task {} stopped\n", id),
+            Ok(id) => out!("no killable task {}\n", id),
+            Err(_) => out!("usage: kill <id>\n"),
+        },
+        "memmap" => cmd_memmap(),
+        "log" => log::replay(log::print_raw),
+        "echo" => out!("{}\n", rest),
+        "sort" => cmd_sort(rest),
+        "clear" => {
+            log::with_console(Console::clear_log);
+        }
+        "panic" => panic!("panic requested from the shell"),
+        "reboot" => power::reboot(),
+        "shutdown" => power::shutdown(),
+        other => out!("unknown command '{}', try `help`\n", other),
+    }
+}
+
+/// The interactive shell task.
+pub extern "C" fn shell_task(_: usize) {
+    const PROMPT: &str = "aeon> ";
+    let mut kbd = Keyboard::new();
+    let mut line = [0u8; 120];
+    let mut len = 0usize;
+    out!("\nAeon shell. Type `help`.\n{}", PROMPT);
+    loop {
+        let mut idle = true;
+        while let Some(code) = ps2_byte() {
+            idle = false;
+            let Some(key) = kbd.feed(code) else { continue };
+            match key {
+                Key::Char(c) if len < line.len() => {
+                    line[len] = c;
+                    len += 1;
+                    log::print_raw(&[c]);
+                }
+                Key::Backspace if len > 0 => {
+                    len -= 1;
+                    log::print_raw(b"\x08 \x08");
+                }
+                Key::Enter => {
+                    log::print_raw(b"\n");
+                    let text = core::str::from_utf8(&line[..len]).unwrap_or("");
+                    run(text);
+                    len = 0;
+                    out!("{}", PROMPT);
+                }
+                Key::Interrupt => {
+                    len = 0;
+                    out!("^C\n{}", PROMPT);
+                }
+                Key::ClearScreen => {
+                    log::with_console(Console::clear_log);
+                    out!("{}", PROMPT);
+                    log::print_raw(&line[..len]);
+                }
+                _ => {}
+            }
+        }
+        if idle {
+            sched::sleep_ms(10);
+        }
+    }
+}
+
+/// Redraws the status bar twice a second.
+pub extern "C" fn status_task(_: usize) {
+    loop {
+        let secs = log::uptime_us() / 1_000_000;
+        let mut line = LineBuf::<256>::new();
+        let h = mm::heap_stats();
+        let f = mm::frame_stats();
+        let _ = write!(
+            line,
+            " AEON {} | up {:02}:{:02}:{:02} | {} MB free | heap {}K | tasks {} | type `help`",
+            crate::VERSION,
+            secs / 3600,
+            (secs / 60) % 60,
+            secs % 60,
+            f.free as u64 * 4 / 1024,
+            h.used / 1024,
+            task_count()
+        );
+        let bytes = line.finish();
+        let bytes = &bytes[..bytes.len() - 1];
+        log::with_console(|c| c.status(bytes));
+        sched::sleep_ms(500);
+    }
+}
+
+fn task_count() -> usize {
+    let mut n = 0;
+    sched::for_each(|_| n += 1);
+    n
+}

@@ -1,12 +1,37 @@
 [package]
 name = "aeon"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+rust-version = "1.85"
+description = "Aeon: UEFI x86_64 boot stage of an educational Rust micro-OS"
+
+[features]
+# Deliberate-failure switches for exercising the fault paths (TC5).
+fault-ud = []
+fault-pf = []
+fault-stack = []
+fault-wx = []
+fault-nx = []
+fault-panic = []
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
+[profile.dev]
+panic = "abort"
+opt-level = "s"
+overflow-checks = true
+debug = true
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = true
-overflow-checks = false
+overflow-checks = true
+debug = false
+strip = "debuginfo"

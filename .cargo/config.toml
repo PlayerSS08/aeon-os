@@ -1,13 +1,7 @@
 [build]
 target = "x86_64-unknown-uefi"
 
+# `cargo run --release` builds the image and refreshes the `usb/` folder: copy its contents to the
+# root of a FAT32 USB stick and boot it in UEFI mode (Secure Boot off).
 [target.x86_64-unknown-uefi]
-runner = "powershell -ExecutionPolicy Bypass -File scripts/run.ps1"
-rustflags = [
-    "-C", "linker=rust-lld",
-    "-C", "link-arg=/SUBSYSTEM:EFI_APPLICATION",
-    "-C", "link-arg=/ENTRY:efi_main",
-    "-C", "link-arg=/OPT:REF",
-    "-C", "link-arg=/OPT:ICF",
-    "-C", "link-arg=/MERGE:.rdata=.text",
-]
+runner = ["powershell", "-NoProfile", "-Command", '''& { param($p) $d = 'usb\EFI\BOOT'; New-Item -Force -ItemType Directory $d | Out-Null; Copy-Item -Force $p ($d + '\BOOTX64.EFI'); $h = (Get-FileHash $p -Algorithm SHA256).Hash; Set-Content -Encoding ascii usb\SHA256.txt ($h + '  EFI/BOOT/BOOTX64.EFI'); Write-Host ('usb\ ready, SHA-256 ' + $h) }''']
