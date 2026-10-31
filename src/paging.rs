@@ -14,6 +14,7 @@ const P: u64 = 1;
 const RW: u64 = 1 << 1;
 const PWT: u64 = 1 << 3;
 const PCD: u64 = 1 << 4;
+const US: u64 = 1 << 2;
 const PS: u64 = 1 << 7;
 /// PAT selector bit in a 2 MiB page entry (bit 7 is PS there, so PAT lives at bit 12).
 const PAT_LARGE: u64 = 1 << 12;
@@ -193,6 +194,32 @@ impl Builder {
     }
 }
 
+impl Builder {
+    /// Maps one 4 KiB page for ring 3: user-accessible, with the given write/execute rights. The
+    /// entries above the leaf get the user bit too, but every other leaf stays supervisor-only, so
+    /// the rest of the kernel is still out of reach.
+    fn set_user_page(&mut self, addr: u64, writable: bool, exec: bool) -> bool {
+        let Some(pt) = self.split(addr) else {
+            return false;
+        };
+        let idx = ((addr % SZ_2M) / SZ_4K) as usize;
+        let Some(pd_slot) = self.pd_slot(addr & !(SZ_2M - 1)) else {
+            return false;
+        };
+        // SAFETY: `idx < 512` inside the page table from `split`; `pd_slot`, the PDPT entry and PML4
+        // entry 0 are live table entries owned by this builder (`addr` is below 512 GiB).
+        unsafe {
+            let e = pt.add(idx);
+            let keep = *e & (PWT | PCD);
+            *e = (addr & ADDR) | P | US | keep | if writable { RW } else { 0 } | if exec { 0 } else { self.nx };
+            *pd_slot |= US;
+            *self.pdpt.cast::<u64>().add((addr / GIB) as usize) |= US;
+            *self.pml4.cast::<u64>() |= US;
+        }
+        true
+    }
+}
+
 fn rd16(b: &[u8], o: usize) -> Option<usize> {
     Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?) as usize)
 }
@@ -328,6 +355,14 @@ pub fn guard_page(addr: u64) -> bool {
 /// Maps a page previously unmapped with [`guard_page`] back as read-write, no-execute.
 pub fn restore_page(addr: u64) -> bool {
     let ok = with_builder(|b| b.set_page(addr, Some((true, false))));
+    invlpg(addr);
+    ok
+}
+
+/// Maps one 4 KiB page so that ring 3 can use it (`writable` and `exec` are never both true).
+pub fn user_page(addr: u64, writable: bool, exec: bool) -> bool {
+    debug_assert!(!(writable && exec));
+    let ok = with_builder(|b| b.set_user_page(addr, writable, exec));
     invlpg(addr);
     ok
 }

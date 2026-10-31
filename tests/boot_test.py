@@ -8,6 +8,7 @@ screenshots in --shots (default: target/test-shots).
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import socket
@@ -718,8 +719,39 @@ def t_fs(ctx):
         vm.close()
 
 
+def t_user(ctx):
+    """Ring 3: hello, faulting and bad programs are contained, a spinning program is preempted and killable."""
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="user")
+    try:
+        r = ctx.r
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("security", "ring 3             yes"),
+            ("run hello", "hello from ring 3"),
+            ("ps", "aeon> "),
+            ("run fault", "[user] task killed: #PF"),
+            ("uptime", "up 00:"),
+            ("run gp", "[user] task killed: #GP"),
+            ("run badcall", "exited with code 0"),
+            ("run nosuch", "unknown program"),
+        ])
+        run_cmds(vm, r, [("run spin", "started spin as task")])
+        s = vm.serial_text()
+        m = re.search(r"started spin as task (\d+)", s)
+        r.check("spin task id reported", bool(m))
+        run_cmds(vm, r, [("uptime", "up 00:"), ("run hello", "already running")])
+        if m:
+            run_cmds(vm, r, [("kill " + m.group(1), "stopped")])
+            time.sleep(1.0)
+            before = len(vm.serial_text())
+            run_cmds(vm, r, [("run hello", "hello from ring 3")])
+        r.check("no kernel panic or exception", "EXCEPTION" not in vm.serial_text() and "panic" not in vm.serial_text().lower().replace("lastpanic", ""))
+    finally:
+        vm.close()
+
+
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

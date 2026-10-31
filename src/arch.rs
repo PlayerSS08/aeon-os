@@ -350,7 +350,12 @@ pub fn debugcon_write(bytes: &[u8]) {
 
 pub const KERNEL_CS: u16 = 0x08;
 pub const KERNEL_DS: u16 = 0x10;
-const TSS_SEL: u16 = 0x18;
+/// User data and code selectors (RPL 3). The layout `[null, kcode, kdata, spare, udata, ucode, TSS]` is
+/// what `SYSRET` needs: with STAR[63:48] = 0x18 it loads SS = 0x20|3 and CS = 0x28|3.
+pub const USER_DS: u16 = 0x23;
+pub const USER_CS: u16 = 0x2B;
+pub const SYSRET_BASE: u16 = 0x18;
+const TSS_SEL: u16 = 0x30;
 const IST_DOUBLE_FAULT: u8 = 1;
 
 #[repr(C, packed)]
@@ -375,7 +380,7 @@ struct IstStack([u8; 16 * 1024]);
 
 static TSS: Global<Tss> =
     Global::new(Tss { _r0: 0, rsp: [0; 3], _r1: 0, ist: [0; 7], _r2: 0, _r3: 0, iomap_base: 0 });
-static GDT: Global<[u64; 5]> = Global::new([0; 5]);
+static GDT: Global<[u64; 8]> = Global::new([0; 8]);
 static DF_STACK: Global<IstStack> = Global::new(IstStack([0; 16 * 1024]));
 
 #[derive(Clone, Copy)]
@@ -415,6 +420,23 @@ extern "C" {
     fn aeon_irq_ignore_stub();
 }
 
+/// Sets the stack the CPU switches to when an interrupt or exception arrives from ring 3 (TSS.rsp0).
+///
+/// # Safety
+/// `top` must be the 16-byte-aligned top of a mapped kernel stack, and interrupts must be off.
+pub unsafe fn set_rsp0(top: u64) {
+    let tss = TSS.as_ptr();
+    // SAFETY: `tss` points at the static TSS (packed, so the write is unaligned); see the contract.
+    unsafe { core::ptr::addr_of_mut!((*tss).rsp).cast::<u64>().write_unaligned(top) };
+}
+
+/// The value currently in TSS.rsp0.
+pub fn rsp0() -> u64 {
+    let tss = TSS.as_ptr();
+    // SAFETY: plain unaligned read of a field of the static TSS.
+    unsafe { core::ptr::addr_of!((*tss).rsp).cast::<u64>().read_unaligned() }
+}
+
 /// Builds and loads the GDT (kernel code/data + TSS), the TSS (double-fault IST stack) and the IDT
 /// (CPU exceptions 0-31 plus the timer IRQ). `kernel_stack_top` becomes TSS.rsp0.
 ///
@@ -443,14 +465,17 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
     gdt[0] = 0;
     gdt[1] = 0x00AF_9A00_0000_FFFF; // 64-bit code, DPL 0
     gdt[2] = 0x00CF_9200_0000_FFFF; // data, DPL 0
-    gdt[3] = (tss_limit & 0xFFFF)
+    gdt[3] = 0; // spare: the SYSRET base
+    gdt[4] = 0x00CF_F200_0000_FFFF; // user data, DPL 3
+    gdt[5] = 0x00AF_FA00_0000_FFFF; // user 64-bit code, DPL 3
+    gdt[6] = (tss_limit & 0xFFFF)
         | ((tss_base & 0xFF_FFFF) << 16)
         | (0x89u64 << 40) // present, available 64-bit TSS
         | (((tss_limit >> 16) & 0xF) << 48)
         | (((tss_base >> 24) & 0xFF) << 56);
-    gdt[4] = tss_base >> 32;
+    gdt[7] = tss_base >> 32;
 
-    let gdtr = DescPtr { limit: (core::mem::size_of::<[u64; 5]>() - 1) as u16, base: gdt.as_ptr() as u64 };
+    let gdtr = DescPtr { limit: (core::mem::size_of::<[u64; 8]>() - 1) as u16, base: gdt.as_ptr() as u64 };
 
     // SAFETY: `gdtr` describes the static GDT built above. After `lgdt` we reload CS with a far
     // return and the data selectors, then load the task register with the TSS descriptor.
@@ -727,6 +752,10 @@ static IN_EXCEPTION: AtomicBool = AtomicBool::new(false);
 extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
     // SAFETY: `aeon_isr_common` passes the address of the frame it just built on the stack.
     let f = unsafe { &*frame };
+    if f.cs & 3 == 3 {
+        // A user program faulted: end that task, the kernel carries on.
+        crate::usermode::user_fault(f, EXC_NAMES.get(f.vector as usize).copied().unwrap_or("unknown"), read_cr2());
+    }
     if IN_EXCEPTION.swap(true, Ordering::SeqCst) {
         crate::log::raw_panic_line("[AEON] nested exception, halting\n");
         halt_forever();

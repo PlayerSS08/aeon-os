@@ -30,6 +30,7 @@ use aeon::mm;
 use aeon::paging;
 use aeon::sched;
 use aeon::shell;
+use aeon::usermode;
 use aeon::pixel::PixelFormat;
 use aeon::uefi::{
     self, BootServices, Gop, GopModeInfo, Guid, Handle, InputKey, LoadedImage, Rng, RuntimeServices, Status, SystemTable,
@@ -1372,6 +1373,8 @@ extern "C" fn kernel_main() -> ! {
         arch::halt_forever();
     }
     sched::init();
+    // SAFETY: the GDT from `init_descriptors` is loaded and interrupts are still off for the scheduler start.
+    unsafe { usermode::init() };
     for (name, entry) in [("status", shell::status_task as extern "C" fn(usize)), ("shell", shell::shell_task)] {
         match sched::spawn(name, entry, 0) {
             Some(id) => info!("sched", "task {} started as id {}", name, id),

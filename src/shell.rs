@@ -16,6 +16,7 @@ use crate::mm;
 use crate::power;
 use crate::ramfs::{FsError, RamFs, MAX_NAME};
 use crate::sched;
+use crate::usermode;
 
 struct Out;
 
@@ -87,6 +88,7 @@ const HELP: &str = "commands:
   cat <file>         print a file
   write <file> <txt> create or replace a file in RAM
   rm <file>          delete a file
+  run <program>      run a built-in program in ring 3: hello fault gp spin badcall
   clear              clear the log area (or Ctrl+L)
   panic              trigger a kernel panic
   reboot | shutdown
@@ -168,7 +170,7 @@ fn cmd_security() {
             "replayed, DIFFERS from the TPM"
         }
     );
-    out!("ring 3             not implemented, everything runs in the kernel\n");
+    out!("ring 3             yes: user programs run unprivileged, only the syscall gate leads back (try `run hello`)\n");
 }
 
 fn cmd_lastpanic() {
@@ -292,6 +294,19 @@ fn cmd_rm(name: &str) {
     }
 }
 
+fn cmd_run(name: &str) {
+    match usermode::run(name) {
+        Ok(id) => out!("started {} as task {}
+", name, id),
+        Err(usermode::RunError::Unknown) => out!("unknown program '{}', available: {}
+", name, usermode::PROGRAMS.join(" ")),
+        Err(usermode::RunError::Busy) => out!("a user program is already running (see `ps`, `kill <id>`)
+"),
+        Err(usermode::RunError::NoMemory) => out!("cannot start {}: out of memory or task slots
+", name),
+    }
+}
+
 fn run(line: &str) {
     let line = line.trim();
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
@@ -320,6 +335,7 @@ fn run(line: &str) {
         "log" => log::replay(log::print_raw),
         "echo" => out!("{}\n", rest),
         "sort" => cmd_sort(rest),
+        "run" => cmd_run(rest),
         "ls" => cmd_ls(),
         "df" => cmd_df(),
         "cat" => cmd_cat(rest),

@@ -58,18 +58,23 @@ struct Task {
     ticks: u64,
     name: [u8; NAME_LEN],
     name_len: usize,
+    /// Runs in ring 3 (see `usermode`).
+    user: bool,
 }
 
 const FREE_TASK: Task =
-    Task { state: State::Free, rsp: 0, stack: 0, wake_tick: 0, ticks: 0, name: [0; NAME_LEN], name_len: 0 };
+    Task { state: State::Free, rsp: 0, stack: 0, wake_tick: 0, ticks: 0, name: [0; NAME_LEN], name_len: 0, user: false };
 
 struct Sched {
     tasks: [Task; MAX_TASKS],
     current: usize,
     active: bool,
+    /// Top of the boot thread's stack: the kernel stack ring-3 entries use while task 0 runs.
+    boot_stack_top: u64,
 }
 
-static SCHED: Global<Sched> = Global::new(Sched { tasks: [FREE_TASK; MAX_TASKS], current: 0, active: false });
+static SCHED: Global<Sched> =
+    Global::new(Sched { tasks: [FREE_TASK; MAX_TASKS], current: 0, active: false, boot_stack_top: 0 });
 
 /// Initial x87/SSE state for new tasks: FCW = 0x037F, MXCSR = 0x1F80, everything else zero.
 const fn fx_template() -> [u8; 512] {
@@ -93,6 +98,7 @@ pub fn init() {
         let s = unsafe { SCHED.get() };
         s.tasks[0] = Task { state: State::Running, name: *b"idle\0\0\0\0\0\0\0\0\0\0\0\0", name_len: 4, ..FREE_TASK };
         s.current = 0;
+        s.boot_stack_top = arch::rsp0();
         s.active = true;
     });
 }
@@ -112,6 +118,16 @@ extern "C" fn task_exit() -> ! {
 
 /// Creates a kernel thread running `entry(arg)`. Returns its task id.
 pub fn spawn(name: &str, entry: extern "C" fn(usize), arg: usize) -> Option<usize> {
+    create(name, entry as *const () as u64, arg, None)
+}
+
+/// Creates a task that starts in ring 3 at `rip` with stack pointer `user_rsp`. It runs on its own
+/// kernel stack whenever it enters the kernel.
+pub fn spawn_user(name: &str, rip: u64, user_rsp: u64) -> Option<usize> {
+    create(name, rip, 0, Some(user_rsp))
+}
+
+fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usize> {
     // One extra page below the stack is unmapped as a guard, so an overflow faults immediately.
     let base = mm::alloc_frames(STACK_PAGES + 1)?;
     let guarded = crate::paging::guard_page(base);
@@ -135,11 +151,11 @@ pub fn spawn(name: &str, entry: extern "C" fn(usize), arg: usize) -> Option<usiz
         g.add(8).write(arg as u64); // rdi (unused by win64, kept for clarity)
         g.add(13).write(arg as u64); // rcx: first argument in the Microsoft x64 ABI
         let f = g.add(GPR_COUNT);
-        f.write(entry as *const () as u64); // rip
-        f.add(1).write(arch::KERNEL_CS as u64); // cs
+        f.write(rip);
+        f.add(1).write(if user_rsp.is_some() { arch::USER_CS } else { arch::KERNEL_CS } as u64); // cs
         f.add(2).write(0x202); // rflags: IF set
-        f.add(3).write(entry_rsp); // rsp
-        f.add(4).write(arch::KERNEL_DS as u64); // ss
+        f.add(3).write(user_rsp.unwrap_or(entry_rsp)); // rsp
+        f.add(4).write(if user_rsp.is_some() { arch::USER_DS } else { arch::KERNEL_DS } as u64); // ss
     }
 
     arch::without_interrupts(|| {
@@ -149,7 +165,7 @@ pub fn spawn(name: &str, entry: extern "C" fn(usize), arg: usize) -> Option<usiz
         let mut nm = [0u8; NAME_LEN];
         let n = name.len().min(NAME_LEN);
         nm[..n].copy_from_slice(&name.as_bytes()[..n]);
-        s.tasks[slot] = Task { state: State::Ready, rsp: sp, stack, wake_tick: 0, ticks: 0, name: nm, name_len: n };
+        s.tasks[slot] = Task { state: State::Ready, rsp: sp, stack, wake_tick: 0, ticks: 0, name: nm, name_len: n, user: user_rsp.is_some() };
         Some(slot)
     })
     .or_else(|| {
@@ -209,6 +225,9 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     }
     s.current = next;
     s.tasks[next].state = State::Running;
+    let ktop = if next == 0 { s.boot_stack_top } else { s.tasks[next].stack + STACK_BYTES as u64 };
+    // SAFETY: interrupt context (interrupts off); `ktop` is the top of the incoming task's mapped kernel stack.
+    unsafe { crate::usermode::set_kernel_stack(ktop) };
     s.tasks[next].rsp
 }
 
@@ -265,6 +284,15 @@ pub fn kill(id: usize) -> bool {
         }
         s.tasks[id].state = State::Dead;
         true
+    })
+}
+
+/// True while task `id` is a live ring-3 task.
+pub fn user_alive(id: usize) -> bool {
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        let s = unsafe { SCHED.get() };
+        id < MAX_TASKS && s.tasks[id].user && !matches!(s.tasks[id].state, State::Free | State::Dead)
     })
 }
 

@@ -56,6 +56,8 @@ pub mod sched;
 pub mod shell;
 #[cfg(target_os = "uefi")]
 pub mod uefi;
+#[cfg(target_os = "uefi")]
+pub mod usermode;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Set `AEON_GIT_HASH` in the build environment to embed a revision in the boot banner.
