@@ -680,8 +680,46 @@ def t_faults(ctx):
             vm.close()
 
 
+def run_cmds(vm, r, steps):
+    """Type each command, wait for its expected output (searched after the command's echo)."""
+    for cmd, expect in steps:
+        before = len(vm.serial_text())
+        vm.type(cmd)
+        vm.keys("ret")
+        end = time.time() + 30
+        ok = False
+        while time.time() < end:
+            if expect in vm.serial_text()[before:]:
+                ok = True
+                break
+            time.sleep(0.2)
+        r.check(f"`{cmd}` -> {expect!r}", ok, vm.serial_text()[before:][-300:])
+
+
+def t_fs(ctx):
+    """RAM filesystem: write, cat, ls, df, rm, bad names."""
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="fs")
+    try:
+        r = ctx.r
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("ls", "(no files)"),
+            ("write note hello world", "wrote 11 byte(s) to note"),
+            ("cat note", "hello world"),
+            ("ls", "11  note"),
+            ("df", "1 file(s), used 11 of 1048576 bytes"),
+            ("write " + "x" * 40 + " a", "bad name"),
+            ("cat nothere", "no such file 'nothere'"),
+            ("rm note", "removed note"),
+            ("cat note", "no such file 'note'"),
+            ("df", "0 file(s), used 0 of"),
+        ])
+    finally:
+        vm.close()
+
+
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

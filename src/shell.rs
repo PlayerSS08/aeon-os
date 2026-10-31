@@ -7,12 +7,14 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch;
 use crate::boot;
 use crate::fb::Console;
+use crate::global::Global;
 use crate::keymap::{Key, Keyboard};
 use crate::log;
 use crate::logfmt::LineBuf;
 use crate::memmap;
 use crate::mm;
 use crate::power;
+use crate::ramfs::{FsError, RamFs, MAX_NAME};
 use crate::sched;
 
 struct Out;
@@ -28,6 +30,14 @@ macro_rules! out {
     ($($a:tt)*) => {{
         let _ = write!(Out, $($a)*);
     }};
+}
+
+/// The RAM filesystem. Only the shell task touches it, so no second reference to it ever exists.
+static FS: Global<RamFs> = Global::new(RamFs::new(64, 1 << 20));
+
+fn fs() -> &'static mut RamFs {
+    // SAFETY: only the single shell task calls this, and no result is held across another command.
+    unsafe { FS.get() }
 }
 
 /// Counters bumped by the demo workers, to make preemption visible.
@@ -73,6 +83,10 @@ const HELP: &str = "commands:
   log                replay the boot log
   echo <text>        print text
   sort <n> <n> ...   sort numbers (uses the heap)
+  ls | df            list files | space used
+  cat <file>         print a file
+  write <file> <txt> create or replace a file in RAM
+  rm <file>          delete a file
   clear              clear the log area (or Ctrl+L)
   panic              trigger a kernel panic
   reboot | shutdown
@@ -234,6 +248,50 @@ fn cmd_spawn() {
     }
 }
 
+fn cmd_ls() {
+    let mut n = 0;
+    for (name, size) in fs().names() {
+        out!("{:>8}  {}\n", size, name);
+        n += 1;
+    }
+    if n == 0 {
+        out!("(no files)\n");
+    }
+}
+
+fn cmd_df() {
+    let f = fs();
+    out!("{} file(s), used {} of {} bytes\n", f.count(), f.used_bytes(), f.max_bytes());
+}
+
+fn cmd_cat(name: &str) {
+    match fs().read(name) {
+        Some(data) => {
+            log::print_raw(data);
+            out!("\n");
+        }
+        None => out!("no such file '{}'\n", name),
+    }
+}
+
+fn cmd_write(args: &str) {
+    let (name, text) = args.split_once(' ').map_or((args, ""), |(n, t)| (n, t.trim_start()));
+    match fs().write(name, text.as_bytes()) {
+        Ok(()) => out!("wrote {} byte(s) to {}\n", text.len(), name),
+        Err(FsError::BadName) => out!("bad name '{}' (1-{} chars, no / or control characters)\n", name, MAX_NAME),
+        Err(FsError::Full) => out!("filesystem full: too many files\n"),
+        Err(FsError::TooBig) => out!("filesystem full: out of space\n"),
+    }
+}
+
+fn cmd_rm(name: &str) {
+    if fs().remove(name) {
+        out!("removed {}\n", name);
+    } else {
+        out!("no such file '{}'\n", name);
+    }
+}
+
 fn run(line: &str) {
     let line = line.trim();
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
@@ -262,6 +320,11 @@ fn run(line: &str) {
         "log" => log::replay(log::print_raw),
         "echo" => out!("{}\n", rest),
         "sort" => cmd_sort(rest),
+        "ls" => cmd_ls(),
+        "df" => cmd_df(),
+        "cat" => cmd_cat(rest),
+        "write" => cmd_write(rest),
+        "rm" => cmd_rm(rest),
         "clear" => {
             log::with_console(Console::clear_log);
         }
