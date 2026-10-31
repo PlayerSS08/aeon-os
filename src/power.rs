@@ -46,6 +46,19 @@ fn read_sdt(b: &BootInfo, addr: u64) -> Option<&'static [u8]> {
     acpi::sdt_checksum_ok(table).then_some(table)
 }
 
+/// Finds the first ACPI table with signature `sig` that passes the length, placement and checksum
+/// checks, walking the XSDT (or RSDT).
+pub fn find_table(sig: &[u8; 4]) -> Option<&'static [u8]> {
+    let b = boot::info();
+    let (root, xsdt) = match b.acpi {
+        Rsdp::V2 { xsdt, .. } if xsdt != 0 => (xsdt, true),
+        Rsdp::V1 { rsdt } => (rsdt as u64, false),
+        _ => return None,
+    };
+    let root_table = read_sdt(b, root)?;
+    acpi::sdt_entries(root_table, xsdt).filter_map(|a| read_sdt(b, a)).find(|t| t.get(0..4) == Some(&sig[..]))
+}
+
 /// Powers the machine off through ACPI (FADT PM1 control block + the DSDT's `_S5_` sleep type).
 /// Returns only if that is not possible or did not take effect.
 fn acpi_poweroff(b: &BootInfo) -> bool {

@@ -719,6 +719,24 @@ def t_fs(ctx):
         vm.close()
 
 
+def t_cpu(ctx):
+    """CPU setup: the MADT is parsed and `cpu` reports it."""
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="cpu")
+    try:
+        r = ctx.r
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("cpu", "cpus        1 usable (ACPI MADT)"),
+            ("cpu", "local APIC  0xfee00000"),
+            ("cpu", "I/O APIC    0xfec00000"),
+            ("cpu", "APIC flag   yes"),
+            ("cpu", "running on  CPU 0 only"),
+            ("help", "cpu                CPUs"),
+        ])
+    finally:
+        vm.close()
+
+
 def t_user(ctx):
     """Ring 3: hello, faulting and bad programs are contained, a spinning program is preempted and killable."""
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="user")
@@ -751,7 +769,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

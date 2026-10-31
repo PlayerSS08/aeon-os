@@ -135,6 +135,52 @@ pub fn find_s5(dsdt: &[u8]) -> Option<(u8, u8)> {
     Some((vals[0], vals[1]))
 }
 
+/// What the MADT tells us about the interrupt hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Madt {
+    /// Physical address of the local APIC registers (same for every CPU).
+    pub lapic_base: u32,
+    /// Usable CPUs: entries marked enabled or online-capable.
+    pub cpus: u8,
+    /// Address of the first I/O APIC, if any.
+    pub ioapic_base: Option<u32>,
+}
+
+/// Parses a MADT ("APIC"). Returns `None` for a wrong signature, no usable CPU, or any entry that
+/// is truncated or has a length below 2 (which would otherwise loop forever).
+pub fn parse_madt(t: &[u8]) -> Option<Madt> {
+    if t.get(0..4)? != b"APIC" || t.len() < 44 {
+        return None;
+    }
+    let mut lapic_base = u32::from_le_bytes(t.get(36..40)?.try_into().ok()?);
+    let (mut cpus, mut ioapic_base) = (0u8, None);
+    let mut i = 44;
+    while i < t.len() {
+        let (kind, len) = (*t.get(i)?, *t.get(i + 1)? as usize);
+        let e = t.get(i..i.checked_add(len)?)?;
+        if len < 2 {
+            return None;
+        }
+        match kind {
+            0 if len >= 8 => {
+                let flags = u32::from_le_bytes(e[4..8].try_into().ok()?);
+                if flags & 0b11 != 0 {
+                    cpus = cpus.saturating_add(1);
+                }
+            }
+            1 if len >= 12 && ioapic_base.is_none() => ioapic_base = Some(u32::from_le_bytes(e[4..8].try_into().ok()?)),
+            5 if len >= 12 => {
+                if let Ok(a) = u32::try_from(u64::from_le_bytes(e[4..12].try_into().ok()?)) {
+                    lapic_base = a;
+                }
+            }
+            _ => {}
+        }
+        i += len;
+    }
+    (cpus > 0).then_some(Madt { lapic_base, cpus, ioapic_base })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +200,84 @@ mod tests {
         fix(&mut b, 8, 20);
         fix(&mut b, 32, len as usize);
         b
+    }
+
+
+    /// A MADT with the given entries after the 44-byte fixed part.
+    fn madt(lapic: u32, entries: &[&[u8]]) -> std::vec::Vec<u8> {
+        let mut t = std::vec![0u8; 44];
+        t[0..4].copy_from_slice(b"APIC");
+        t[36..40].copy_from_slice(&lapic.to_le_bytes());
+        for e in entries {
+            t.extend_from_slice(e);
+        }
+        let len = t.len() as u32;
+        t[4..8].copy_from_slice(&len.to_le_bytes());
+        t
+    }
+    fn cpu(id: u8, flags: u32) -> [u8; 8] {
+        let mut e = [0u8; 8];
+        e[0] = 0;
+        e[1] = 8;
+        e[3] = id;
+        e[4..8].copy_from_slice(&flags.to_le_bytes());
+        e
+    }
+    fn ioapic(addr: u32) -> [u8; 12] {
+        let mut e = [0u8; 12];
+        e[0] = 1;
+        e[1] = 12;
+        e[4..8].copy_from_slice(&addr.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn madt_two_cpus_one_ioapic() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &cpu(1, 1), &ioapic(0xFEC0_0000)]);
+        assert_eq!(parse_madt(&t), Some(Madt { lapic_base: 0xFEE0_0000, cpus: 2, ioapic_base: Some(0xFEC0_0000) }));
+    }
+
+    #[test]
+    fn madt_disabled_cpu_not_counted() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &cpu(1, 0)]);
+        assert_eq!(parse_madt(&t).unwrap().cpus, 1);
+        let online_capable = madt(0xFEE0_0000, &[&cpu(0, 2)]);
+        assert_eq!(parse_madt(&online_capable).unwrap().cpus, 1);
+    }
+
+    #[test]
+    fn madt_zero_length_entry_is_none() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &[0u8, 0u8]]);
+        assert_eq!(parse_madt(&t), None);
+    }
+
+    #[test]
+    fn madt_truncated_is_none() {
+        let mut t = madt(0xFEE0_0000, &[&cpu(0, 1)]);
+        t.truncate(t.len() - 3); // entry claims 8 bytes, only 5 remain
+        assert_eq!(parse_madt(&t), None);
+        assert_eq!(parse_madt(&t[..30]), None);
+    }
+
+    #[test]
+    fn madt_wrong_signature_or_no_cpu_is_none() {
+        let mut t = madt(0xFEE0_0000, &[&cpu(0, 1)]);
+        t[0] = b'X';
+        assert_eq!(parse_madt(&t), None);
+        assert_eq!(parse_madt(&madt(0xFEE0_0000, &[])), None);
+    }
+
+    #[test]
+    fn madt_lapic_override_is_used_when_it_fits() {
+        let mut o = [0u8; 12];
+        o[0] = 5;
+        o[1] = 12;
+        o[4..12].copy_from_slice(&0xFEE1_0000u64.to_le_bytes());
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &o]);
+        assert_eq!(parse_madt(&t).unwrap().lapic_base, 0xFEE1_0000);
+        o[4..12].copy_from_slice(&0x1_0000_0000u64.to_le_bytes());
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &o]);
+        assert_eq!(parse_madt(&t).unwrap().lapic_base, 0xFEE0_0000, "an override above 4 GiB is ignored");
     }
 
     #[test]
@@ -278,6 +402,20 @@ mod fuzz {
             let i = (xorshift(&mut s) % 36) as usize;
             m[i] ^= 1 << (xorshift(&mut s) % 8);
             let _ = validate(&m); // single bit flips must be caught or handled, never panic
+        }
+    }
+
+    #[test]
+    fn random_and_mutated_madts_never_panic() {
+        let mut s = 0x1234_5678_9ABC_DEF1u64;
+        for _ in 0..50_000 {
+            let len = 44 + (xorshift(&mut s) % 60) as usize;
+            let mut t: Vec<u8> = (0..len).map(|_| xorshift(&mut s) as u8).collect();
+            t[..4].copy_from_slice(b"APIC");
+            if xorshift(&mut s) % 3 == 0 {
+                t.truncate(30 + (xorshift(&mut s) % 40) as usize);
+            }
+            let _ = parse_madt(&t); // must return, whatever the entry lengths say
         }
     }
 }

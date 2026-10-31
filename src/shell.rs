@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crate::acpi;
 use crate::arch;
 use crate::boot;
 use crate::fb::Console;
@@ -71,6 +72,7 @@ const HELP: &str = "commands:
   help               this list
   info               firmware, CPU clock, Secure Boot
   version            Aeon version and revision
+  cpu                CPUs, interrupt controllers, address sizes
   security           which protections are active right now
   tpm                measured-boot PCR values
   lastpanic          how the previous boot ended
@@ -102,6 +104,35 @@ fn cmd_info() {
     out!("image      base {:#x} size {} KiB\n", b.image_base, b.image_size / 1024);
 }
 
+
+fn cmd_cpu() {
+    let b = boot::info();
+    let f = &b.feat;
+    match power::find_table(b"APIC").and_then(acpi::parse_madt) {
+        Some(m) => {
+            out!("cpus        {} usable (ACPI MADT)
+", m.cpus);
+            out!("local APIC  {:#x}
+", m.lapic_base);
+            match m.ioapic_base {
+                Some(a) => out!("I/O APIC    {:#x}
+", a),
+                None => out!("I/O APIC    none listed
+"),
+            }
+        }
+        None => out!("cpus        unknown (no usable ACPI MADT)
+"),
+    }
+    out!("APIC flag   {} (CPUID)
+", yes(f.apic));
+    out!("address     {} physical bits, {} virtual bits
+", f.phys_bits, f.virt_bits);
+    out!("hypervisor  {}
+", yes(f.hypervisor));
+    out!("running on  CPU 0 only (other CPUs are not started yet)
+");
+}
 
 fn cmd_version() {
     out!("Aeon {} git={} x86_64 UEFI, sbat generation 1\n", crate::VERSION, crate::GIT_HASH);
@@ -190,6 +221,7 @@ pub fn run_firmware_command(line: &str) -> bool {
     match cmd {
         "info" => cmd_info(),
         "version" => cmd_version(),
+        "cpu" => cmd_cpu(),
         "security" => cmd_security(),
         "tpm" => cmd_tpm(),
         "lastpanic" => cmd_lastpanic(),
@@ -315,6 +347,7 @@ fn run(line: &str) {
         "help" | "?" => out!("{}", HELP),
         "info" => cmd_info(),
         "version" => cmd_version(),
+        "cpu" => cmd_cpu(),
         "security" => cmd_security(),
         "tpm" => cmd_tpm(),
         "lastpanic" => cmd_lastpanic(),
