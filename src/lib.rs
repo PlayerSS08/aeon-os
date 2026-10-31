@@ -23,6 +23,7 @@ pub mod keymap;
 pub mod logfmt;
 pub mod memmap;
 pub mod pixel;
+pub mod ramfs;
 pub mod sha256;
 pub mod splash;
 pub mod tcg2;
