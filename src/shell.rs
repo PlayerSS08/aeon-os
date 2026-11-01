@@ -7,6 +7,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::acpi;
 use crate::arch;
 use crate::boot;
+use crate::cmdhelp;
 use crate::fb::Console;
 use crate::global::Global;
 use crate::keymap::{Key, Keyboard};
@@ -68,39 +69,33 @@ fn ps2_byte() -> Option<u8> {
     }
 }
 
-const HELP: &str = "commands:
-  help               this list
-  info               firmware, CPU clock, Secure Boot
-  version            Aeon version and revision
-  cpu                CPUs, interrupt controllers, address sizes
-  pci                devices on the PCI bus
-  disks              the disk, if there is one
-  dread <n> [off]    32 bytes of sector n as hex
-  dls [path]         list a directory on the disk (FAT16/FAT32)
-  dcat <path>        print a file from the disk
-  security           which protections are active right now
-  tpm                measured-boot PCR values
-  lastpanic          how the previous boot ended
-  uptime             time since boot
-  mem                frames, heap and RAM totals
-  ps                 list tasks
-  spawn              start 2 busy workers (watch `ps` and `counters`)
-  counters           worker progress
-  block | wake       start a task that waits on a queue | wake it
-  kill <id>          stop a task
-  memmap             firmware memory map
-  log                replay the boot log
-  echo <text>        print text
-  sort <n> <n> ...   sort numbers (uses the heap)
-  ls | df            list files | space used
-  cat <file>         print a file
-  write <file> <txt> create or replace a file in RAM
-  rm <file>          delete a file
-  run <program>      run a built-in program in ring 3: hello fault gp spin badcall
-  clear              clear the log area (or Ctrl+L)
-  panic              trigger a kernel panic
-  reboot | shutdown
-";
+fn cmd_help(arg: &str) {
+    match arg {
+        "" => {
+            out!("Aeon shell. `help <command>` explains one command, `help all` lists them with descriptions.\n");
+            out!("Keys: PgUp/PgDn scroll, Home/End top/bottom, Up/Down recall commands, Ctrl+L clear, Ctrl+C cancel.\n\n");
+            for g in cmdhelp::GROUPS {
+                out!("{:<9}", g);
+                for c in cmdhelp::COMMANDS.iter().filter(|c| c.group == *g) {
+                    out!(" {}", c.name);
+                }
+                out!("\n");
+            }
+        }
+        "all" => {
+            for g in cmdhelp::GROUPS {
+                out!("{}:\n", g);
+                for c in cmdhelp::COMMANDS.iter().filter(|c| c.group == *g) {
+                    out!("  {:<20} {}\n", c.usage, c.about);
+                }
+            }
+        }
+        name => match cmdhelp::find(name) {
+            Some(c) => out!("{}\n  {}\n", c.usage, c.about),
+            None => out!("no command '{}', try `help`\n", name),
+        },
+    }
+}
 
 fn cmd_info() {
     let b = boot::info();
@@ -483,7 +478,7 @@ fn run(line: &str) {
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
     match cmd {
         "" => {}
-        "help" | "?" => out!("{}", HELP),
+        "help" | "?" => cmd_help(rest),
         "info" => cmd_info(),
         "version" => cmd_version(),
         "cpu" => cmd_cpu(),
@@ -530,18 +525,101 @@ fn run(line: &str) {
     }
 }
 
+/// Commands remembered for Up/Down.
+const HISTORY: usize = 8;
+const LINE_MAX: usize = 120;
+
+/// The last few command lines, newest last.
+struct History {
+    lines: [[u8; LINE_MAX]; HISTORY],
+    lens: [usize; HISTORY],
+    count: usize,
+    /// 0 while typing a fresh line; k = showing the k-th newest remembered line.
+    shown: usize,
+}
+
+impl History {
+    const fn new() -> Self {
+        Self { lines: [[0; LINE_MAX]; HISTORY], lens: [0; HISTORY], count: 0, shown: 0 }
+    }
+
+    fn push(&mut self, line: &[u8]) {
+        self.shown = 0;
+        if line.is_empty() || (self.count > 0 && &self.lines[self.count - 1][..self.lens[self.count - 1]] == line) {
+            return;
+        }
+        if self.count == HISTORY {
+            self.lines.copy_within(1.., 0);
+            self.lens.copy_within(1.., 0);
+            self.count -= 1;
+        }
+        self.lines[self.count][..line.len()].copy_from_slice(line);
+        self.lens[self.count] = line.len();
+        self.count += 1;
+    }
+
+    /// Moves toward older (`older`) or newer lines; returns the line to show, or None at the ends.
+    fn step(&mut self, older: bool) -> Option<&[u8]> {
+        let next = if older { self.shown + 1 } else { self.shown.checked_sub(1)? };
+        if next > self.count {
+            return None;
+        }
+        self.shown = next;
+        if next == 0 {
+            return Some(&[]);
+        }
+        let i = self.count - next;
+        Some(&self.lines[i][..self.lens[i]])
+    }
+}
+
+/// Erases `len` typed characters on screen and types `new` in their place.
+fn replace_input(line: &mut [u8; LINE_MAX], len: &mut usize, new: &[u8]) {
+    for _ in 0..*len {
+        log::print_raw(b"\x08 \x08");
+    }
+    let n = new.len().min(LINE_MAX);
+    line[..n].copy_from_slice(&new[..n]);
+    *len = n;
+    log::print_raw(&line[..n]);
+}
+
 /// The interactive shell task.
 pub extern "C" fn shell_task(_: usize) {
     const PROMPT: &str = "aeon> ";
     let mut kbd = Keyboard::new();
-    let mut line = [0u8; 120];
+    let mut line = [0u8; LINE_MAX];
     let mut len = 0usize;
+    let mut hist = History::new();
+    // The wordmark is for the splash and the menu; from here the log gets the whole screen.
+    log::with_console(Console::fullscreen_log);
     out!("\nAeon shell. Type `help`.\n{}", PROMPT);
     loop {
         let mut idle = true;
         while let Some(code) = ps2_byte() {
             idle = false;
             let Some(key) = kbd.feed(code) else { continue };
+            match key {
+                Key::PageUp => {
+                    log::with_console(|c| c.scroll_up(c.page()));
+                    continue;
+                }
+                Key::PageDown => {
+                    log::with_console(|c| c.scroll_down(c.page()));
+                    continue;
+                }
+                Key::Home => {
+                    log::with_console(|c| c.scroll_up(usize::MAX));
+                    continue;
+                }
+                Key::End => {
+                    log::with_console(Console::scroll_bottom);
+                    continue;
+                }
+                _ => {}
+            }
+            // Any other key brings the view back to the live bottom first.
+            log::with_console(Console::scroll_bottom);
             match key {
                 Key::Char(c) if len < line.len() => {
                     line[len] = c;
@@ -552,8 +630,20 @@ pub extern "C" fn shell_task(_: usize) {
                     len -= 1;
                     log::print_raw(b"\x08 \x08");
                 }
+                Key::Up | Key::Down => {
+                    // Copy the line out first: `step` borrows the history.
+                    let mut buf = [0u8; LINE_MAX];
+                    let n = hist.step(key == Key::Up).map(|l| {
+                        buf[..l.len()].copy_from_slice(l);
+                        l.len()
+                    });
+                    if let Some(n) = n {
+                        replace_input(&mut line, &mut len, &buf[..n]);
+                    }
+                }
                 Key::Enter => {
                     log::print_raw(b"\n");
+                    hist.push(&line[..len]);
                     let text = core::str::from_utf8(&line[..len]).unwrap_or("");
                     run(text);
                     len = 0;
@@ -561,6 +651,7 @@ pub extern "C" fn shell_task(_: usize) {
                 }
                 Key::Interrupt => {
                     len = 0;
+                    hist.shown = 0;
                     out!("^C\n{}", PROMPT);
                 }
                 Key::ClearScreen => {
@@ -581,19 +672,21 @@ pub extern "C" fn shell_task(_: usize) {
 pub extern "C" fn status_task(_: usize) {
     loop {
         let secs = log::uptime_us() / 1_000_000;
+        let back = log::with_console(|c| c.scrolled()).unwrap_or(0);
         let mut line = LineBuf::<256>::new();
         let h = mm::heap_stats();
         let f = mm::frame_stats();
         let _ = write!(
             line,
-            " AEON {} | up {:02}:{:02}:{:02} | {} MB free | heap {}K | tasks {} | type `help`",
+            " AEON {} | up {:02}:{:02}:{:02} | {} MB free | heap {}K | tasks {} | {}",
             crate::VERSION,
             secs / 3600,
             (secs / 60) % 60,
             secs % 60,
             f.free as u64 * 4 / 1024,
             h.used / 1024,
-            task_count()
+            task_count(),
+            if back > 0 { "SCROLLED (End = live)" } else { "help | PgUp/PgDn scroll" }
         );
         let bytes = line.finish();
         let bytes = &bytes[..bytes.len() - 1];

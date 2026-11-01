@@ -16,6 +16,7 @@ pub mod block;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;
+pub mod cmdhelp;
 pub mod cpuid;
 pub mod entropy;
 pub mod fat;

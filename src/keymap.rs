@@ -11,6 +11,12 @@ pub enum Key {
     Interrupt,
     /// Ctrl+L
     ClearScreen,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
 }
 
 #[derive(Default)]
@@ -53,8 +59,24 @@ impl Keyboard {
             }
             _ => {}
         }
-        if release || ext {
-            return None; // arrows and other extended keys are not mapped yet
+        if ext {
+            if release {
+                return None;
+            }
+            // The dedicated cursor block sends E0 + these codes (Num Lock and Shift add fake E0 2A / E0 AA
+            // prefixes, which fall through the shift arm above because of `!ext`).
+            return match make {
+                0x48 => Some(Key::Up),
+                0x50 => Some(Key::Down),
+                0x49 => Some(Key::PageUp),
+                0x51 => Some(Key::PageDown),
+                0x47 => Some(Key::Home),
+                0x4F => Some(Key::End),
+                _ => None,
+            };
+        }
+        if release {
+            return None;
         }
         let table = if self.shift { UPPER } else { LOWER };
         let mut c = *table.get(make as usize)?;
@@ -118,8 +140,40 @@ mod tests {
     fn extended_and_unknown_codes_are_ignored() {
         let mut k = Keyboard::new();
         assert_eq!(k.feed(0xE0), None);
-        assert_eq!(k.feed(0x48), None); // up arrow
+        assert_eq!(k.feed(0x5F), None); // unknown extended key
         assert_eq!(k.feed(0x5F), None); // beyond the table
         assert_eq!(k.feed(0x1E), Some(Key::Char(b'a')));
+    }
+
+    #[test]
+    fn cursor_block_keys() {
+        let mut k = Keyboard::new();
+        for (code, key) in [(0x48, Key::Up), (0x50, Key::Down), (0x49, Key::PageUp), (0x51, Key::PageDown), (0x47, Key::Home), (0x4F, Key::End)] {
+            assert_eq!(k.feed(0xE0), None);
+            assert_eq!(k.feed(code), Some(key));
+            assert_eq!(k.feed(0xE0), None);
+            assert_eq!(k.feed(code | 0x80), None, "release gives nothing");
+        }
+    }
+
+    #[test]
+    fn fake_shift_prefix_does_not_stick_or_swallow_the_key() {
+        // With Num Lock on the keyboard sends E0 2A before E0 49 and E0 B7 after the release.
+        let mut k = Keyboard::new();
+        assert_eq!(k.feed(0xE0), None);
+        assert_eq!(k.feed(0x2A), None);
+        assert_eq!(k.feed(0xE0), None);
+        assert_eq!(k.feed(0x49), Some(Key::PageUp));
+        assert_eq!(k.feed(0xE0), None);
+        assert_eq!(k.feed(0xC9), None);
+        assert_eq!(k.feed(0xE0), None);
+        assert_eq!(k.feed(0xAA), None);
+        assert_eq!(k.feed(0x1E), Some(Key::Char(b'a')), "shift is not left on");
+    }
+
+    #[test]
+    fn keypad_digits_are_not_arrows_when_not_extended() {
+        let mut k = Keyboard::new();
+        assert_eq!(k.feed(0x48), None); // keypad 8 without the E0 prefix
     }
 }

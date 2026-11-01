@@ -1,7 +1,8 @@
 //! GOP framebuffer text console: smooth fonts, scrolling log area, splash wordmark and a status bar.
 //!
 //! The console never reads the framebuffer (it may be uncached or write-combined, where reads are
-//! very slow). Text lives in a RAM cell grid and scrolling redraws from it.
+//! very slow). Text lives in a RAM history ring (the last `HIST_ROWS` lines); the screen shows a
+//! window of it, so the log can be scrolled back and redrawn at will.
 
 use crate::bootinfo::FbInfo;
 use crate::gfont::{self, Face};
@@ -21,7 +22,11 @@ struct Cell {
 // All-zero so the grid lives in .bss instead of bloating the image.
 const BLANK: Cell = Cell { ch: 0, color: 0 };
 
-static CELLS: Global<[Cell; MAX_COLS * MAX_ROWS]> = Global::new([BLANK; MAX_COLS * MAX_ROWS]);
+/// Lines of history kept (512 x 256 cells x 2 bytes = 256 KiB of .bss).
+const HIST_ROWS: usize = 512;
+const _: () = assert!(HIST_ROWS > MAX_ROWS);
+
+static HIST: Global<[Cell; MAX_COLS * HIST_ROWS]> = Global::new([BLANK; MAX_COLS * HIST_ROWS]);
 
 pub const COLOR_ERROR: u8 = 0;
 pub const COLOR_WARN: u8 = 1;
@@ -83,7 +88,10 @@ pub struct Console {
     first_row: usize,
     log_rows: usize,
     cur_col: usize,
-    cur_row: usize,
+    /// Absolute number of the line the cursor is on (lines count from 0 since the last clear).
+    newest: usize,
+    /// How many lines the view is scrolled back from the live bottom (0 = following the output).
+    scroll: usize,
     /// While true the log is not painted: the screen shows only the logo and the progress bar.
     splash: bool,
     /// While true the boot menu owns the screen and the log is not painted.
@@ -134,7 +142,8 @@ impl Console {
             first_row: 0,
             log_rows: rows - 1,
             cur_col: 0,
-            cur_row: 0,
+            newest: 0,
+            scroll: 0,
             splash: false,
             menu: false,
             bar_pm: 0,
@@ -191,22 +200,82 @@ impl Console {
     pub fn clear(&mut self) {
         let bg = self.px(BG);
         self.fill_rect(0, 0, self.width, self.height, bg);
-        // SAFETY: single-threaded; no other reference to the cell grid is live here.
-        let cells = unsafe { CELLS.get() };
+        // SAFETY: single-threaded; no other reference to the history is live here.
+        let cells = unsafe { HIST.get() };
         cells.fill(BLANK);
         self.cur_col = 0;
-        self.cur_row = 0;
+        self.newest = 0;
+        self.scroll = 0;
     }
 
     /// Clears only the scrolling log area, keeping the logo and status bar.
     pub fn clear_log(&mut self) {
-        // SAFETY: single-threaded (interrupts off in callers); no other reference to the grid is live.
-        let cells = unsafe { CELLS.get() };
-        let top = self.first_row * MAX_COLS;
-        cells[top..top + self.log_rows * MAX_COLS].fill(BLANK);
+        // SAFETY: single-threaded (interrupts off in callers); no other reference to the history is live.
+        let cells = unsafe { HIST.get() };
+        cells.fill(BLANK);
         self.cur_col = 0;
-        self.cur_row = 0;
+        self.newest = 0;
+        self.scroll = 0;
         self.redraw_log();
+    }
+
+    /// Gives the log the whole screen above the status bar (the wordmark belongs to the splash and
+    /// the menu). The history stays, so the boot log is still there to scroll back to.
+    pub fn fullscreen_log(&mut self) {
+        if self.splash || self.menu {
+            return;
+        }
+        self.first_row = 0;
+        self.log_rows = self.rows - 1;
+        self.scroll = self.scroll.min(self.max_scroll());
+        self.redraw_log();
+    }
+
+    /// First history line of the live view (the one that shows when not scrolled back).
+    fn live_top(&self) -> usize {
+        (self.newest + 1).saturating_sub(self.log_rows)
+    }
+
+    /// How far back the view can go: to the oldest line still in the ring.
+    fn max_scroll(&self) -> usize {
+        let oldest = (self.newest + 1).saturating_sub(HIST_ROWS);
+        self.live_top() - oldest
+    }
+
+    /// Lines the view is scrolled back (0 when following the output).
+    pub fn scrolled(&self) -> usize {
+        self.scroll
+    }
+
+    /// Shows older lines (`n` lines further back), stopping at the oldest.
+    pub fn scroll_up(&mut self, n: usize) {
+        self.set_scroll(self.scroll.saturating_add(n));
+    }
+
+    /// Shows newer lines, stopping at the live bottom.
+    pub fn scroll_down(&mut self, n: usize) {
+        self.set_scroll(self.scroll.saturating_sub(n));
+    }
+
+    /// Jumps back to the live bottom.
+    pub fn scroll_bottom(&mut self) {
+        self.set_scroll(0);
+    }
+
+    /// One page minus a couple of lines of overlap, so the eye keeps its place.
+    pub fn page(&self) -> usize {
+        self.log_rows.saturating_sub(2).max(1)
+    }
+
+    fn set_scroll(&mut self, want: usize) {
+        if self.splash || self.menu {
+            return;
+        }
+        let want = want.min(self.max_scroll());
+        if want != self.scroll {
+            self.scroll = want;
+            self.redraw_log();
+        }
     }
 
     pub fn draw_logo(&self) {
@@ -492,11 +561,16 @@ impl Console {
     fn redraw_log(&self) {
         let bg = self.px(BG);
         self.fill_rect(0, self.first_row * self.cell_h(), self.width, self.log_rows * self.cell_h(), bg);
-        // SAFETY: single-threaded; the grid is only read here and no mutable reference is live.
-        let cells = unsafe { &*CELLS.as_ptr() };
+        // SAFETY: single-threaded; the history is only read here and no mutable reference is live.
+        let cells = unsafe { &*HIST.as_ptr() };
+        let top = self.live_top() - self.scroll;
         for r in 0..self.log_rows {
+            let line = top + r;
+            if line > self.newest {
+                break;
+            }
             for c in 0..self.cols {
-                let cell = cells[(self.first_row + r) * MAX_COLS + c];
+                let cell = cells[(line % HIST_ROWS) * MAX_COLS + c];
                 if !matches!(cell.ch, 0 | b' ') {
                     self.draw_glyph(c, self.first_row + r, cell.ch, PALETTE[cell.color as usize % PALETTE.len()], BG);
                 }
@@ -506,18 +580,20 @@ impl Console {
 
     fn newline(&mut self) {
         self.cur_col = 0;
-        if self.cur_row + 1 < self.log_rows {
-            self.cur_row += 1;
-            return;
+        let old_top = self.live_top() - self.scroll;
+        self.newest += 1;
+        // SAFETY: single-threaded; no other reference to the history is live.
+        let cells = unsafe { HIST.get() };
+        let at = (self.newest % HIST_ROWS) * MAX_COLS;
+        cells[at..at + MAX_COLS].fill(BLANK);
+        // A view that is scrolled back stays on the same lines while new output arrives.
+        if self.scroll > 0 {
+            self.scroll = (self.scroll + 1).min(self.max_scroll());
         }
-        // Scroll the log area up one row inside the cell grid, then repaint it.
-        // SAFETY: single-threaded; no other reference to the grid is live.
-        let cells = unsafe { CELLS.get() };
-        let top = self.first_row * MAX_COLS;
-        let end = (self.first_row + self.log_rows) * MAX_COLS;
-        cells.copy_within(top + MAX_COLS..end, top);
-        cells[end - MAX_COLS..end].fill(BLANK);
-        self.redraw_log();
+        // The live view only needs a repaint once the cursor has moved past the last screen row.
+        if self.live_top() - self.scroll != old_top {
+            self.redraw_log();
+        }
     }
 
     fn put_byte(&mut self, b: u8, color: u8) {
@@ -529,11 +605,14 @@ impl Console {
                 if self.cur_col >= self.cols {
                     self.newline();
                 }
-                let row = self.first_row + self.cur_row;
-                // SAFETY: single-threaded; no other reference to the grid is live.
-                let cells = unsafe { CELLS.get() };
-                cells[row * MAX_COLS + self.cur_col] = Cell { ch: b, color };
-                self.draw_glyph(self.cur_col, row, b, PALETTE[color as usize % PALETTE.len()], BG);
+                // SAFETY: single-threaded; no other reference to the history is live.
+                let cells = unsafe { HIST.get() };
+                cells[(self.newest % HIST_ROWS) * MAX_COLS + self.cur_col] = Cell { ch: b, color };
+                // While scrolled back the new text is kept but not painted: the view shows older lines.
+                if self.scroll == 0 {
+                    let row = self.first_row + (self.newest - self.live_top());
+                    self.draw_glyph(self.cur_col, row, b, PALETTE[color as usize % PALETTE.len()], BG);
+                }
                 self.cur_col += 1;
             }
         }

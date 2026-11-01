@@ -755,7 +755,7 @@ def t_cpu(ctx):
             ("cpu", "I/O APIC    0xfec00000"),
             ("cpu", "APIC flag   yes"),
             ("cpu", "running on  CPU 0 only"),
-            ("help", "cpu                CPUs"),
+            ("help all", "cpu" + " " * 18 + "CPUs"),
         ])
     finally:
         vm.close()
@@ -812,7 +812,7 @@ def t_waitq(ctx):
         run_cmds(vm, r, [("ps", "waiter           blocked")])
         run_cmds(vm, r, [("wake", "woke 1 task(s)")])
         r.check("the woken task ran", vm.wait_for("waiter: woke up", 20, "serial"), vm.serial_text()[-300:])
-        run_cmds(vm, r, [("wake", "woke 0 task(s)"), ("help", "block | wake")])
+        run_cmds(vm, r, [("wake", "woke 0 task(s)"), ("help wake", "wake the tasks waiting")])
     finally:
         vm.close()
 
@@ -828,7 +828,7 @@ def t_pci(ctx):
             ("pci", "8086:29c0 Host bridge"),
             ("pci", "1234:1111 VGA controller"),
             ("pci", "8086:2918 ISA bridge"),
-            ("help", "pci                devices on the PCI bus"),
+            ("help pci", "devices on the PCI bus"),
         ])
     finally:
         vm.close()
@@ -908,6 +908,59 @@ def t_disk32(ctx):
         vm.close()
 
 
+def t_console(ctx):
+    """Console: help is grouped, `help <cmd>` explains, Up recalls, PgUp/PgDn/Home/End scroll, the log uses the whole screen."""
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="console")
+    try:
+        r = ctx.r
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("help", "hardware  pci disks dread"),
+            ("help", "PgUp/PgDn scroll"),
+            ("help ls", "list the files in RAM"),
+            ("help dread", "dread <n> [off]"),
+            ("help nosuch", "no command 'nosuch'"),
+            ("help all", "shutdown" + " " * 13 + "power off"),
+            ("echo histtest", "histtest"),
+        ])
+        # Up recalls the last command; Enter runs it again.
+        before = vm.serial_text().count("histtest")
+        vm.keys("up", "ret")
+        end = time.time() + 20
+        while time.time() < end and vm.serial_text().count("histtest") < before + 2:
+            time.sleep(0.2)
+        r.check("Up recalls and reruns the last command", vm.serial_text().count("histtest") >= before + 2, vm.serial_text()[-200:])
+        # Fill more than a screen so there is something to scroll back to.
+        run_cmds(vm, r, [("help all", "shutdown" + " " * 13 + "power off")])
+        time.sleep(1.0)
+        w, h, a = vm.shot(os.path.join(ctx.work, "con_a.png"))
+        body = h - 40
+
+        def lit(pix, y0, y1):
+            return sum(1 for yy in range(y0, y1, 2) for xx in range(0, w, 3) if px(pix, w, xx, yy) != (0, 0, 0))
+
+        r.check("log uses the top of the screen (no logo block)", lit(a, 0, h // 12) > 40, f"lit={lit(a, 0, h // 12)}")
+        vm.keys("pgup")
+        time.sleep(0.8)
+        _, _, b = vm.shot(os.path.join(ctx.work, "con_b.png"))
+        diff = sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(b, w, xx, yy))
+        r.check("PgUp changes the screen", diff > 300, f"diff={diff}")
+        vm.keys("end")
+        time.sleep(0.8)
+        _, _, c = vm.shot(os.path.join(ctx.work, "con_c.png"))
+        same = sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(c, w, xx, yy))
+        r.check("End returns to the live bottom", same < 20, f"diff={same}")
+        vm.keys("home")
+        time.sleep(0.8)
+        _, _, d = vm.shot(os.path.join(ctx.work, "con_d.png"))
+        r.check("Home goes to the oldest line (boot log)", sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(d, w, xx, yy)) > 300)
+        vm.keys("pgdn")
+        # Typing while scrolled back snaps to the bottom and the command still works.
+        run_cmds(vm, r, [("echo after-scroll", "after-scroll")])
+    finally:
+        vm.close()
+
+
 def t_user(ctx):
     """Ring 3: hello, faulting and bad programs are contained, a spinning program is preempted and killable."""
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="user")
@@ -940,7 +993,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
