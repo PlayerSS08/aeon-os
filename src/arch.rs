@@ -895,6 +895,21 @@ pub fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// Switches interrupts off and says whether they were on, for [`irq_restore`].
+pub fn irq_save() -> bool {
+    let flags: u64;
+    // SAFETY: reads RFLAGS and clears IF; nothing else is touched.
+    unsafe { asm!("pushfq", "pop {}", "cli", out(reg) flags) };
+    flags & (1 << 9) != 0
+}
+
+/// Puts the interrupt flag back as [`irq_save`] found it.
+pub fn irq_restore(was_enabled: bool) {
+    if was_enabled {
+        enable_interrupts();
+    }
+}
+
 pub fn disable_interrupts() {
     // SAFETY: clearing IF is always safe.
     unsafe { asm!("cli", options(nomem, nostack)) };

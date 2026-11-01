@@ -795,6 +795,26 @@ def t_apic(ctx):
     _timer_case(ctx, "nolapic", "nolapic\n", "pit", "pit irq0 ok")
 
 
+def t_waitq(ctx):
+    """Wait queue: a blocked task shows as blocked, uses no CPU, and runs again after `wake`."""
+    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="waitq")
+    try:
+        r = ctx.r
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("wake", "woke 0 task(s)"),
+            ("block", "started waiter as task"),
+            ("ps", "waiter           blocked"),
+        ])
+        time.sleep(1.0)
+        run_cmds(vm, r, [("ps", "waiter           blocked")])
+        run_cmds(vm, r, [("wake", "woke 1 task(s)")])
+        r.check("the woken task ran", vm.wait_for("waiter: woke up", 20, "serial"), vm.serial_text()[-300:])
+        run_cmds(vm, r, [("wake", "woke 0 task(s)"), ("help", "block | wake")])
+    finally:
+        vm.close()
+
+
 def t_user(ctx):
     """Ring 3: hello, faulting and bad programs are contained, a spinning program is preempted and killable."""
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="user")
@@ -827,7 +847,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

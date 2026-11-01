@@ -81,6 +81,7 @@ const HELP: &str = "commands:
   ps                 list tasks
   spawn              start 2 busy workers (watch `ps` and `counters`)
   counters           worker progress
+  block | wake       start a task that waits on a queue | wake it
   kill <id>          stop a task
   memmap             firmware memory map
   log                replay the boot log
@@ -280,6 +281,25 @@ fn cmd_sort(args: &str) {
     out!("\n");
 }
 
+static DEMO_QUEUE: sched::WaitQueue = sched::WaitQueue::new();
+
+extern "C" fn waiter(_: usize) {
+    DEMO_QUEUE.wait();
+    out!("waiter: woke up\n");
+}
+
+/// `block` starts a task that sleeps on a wait queue (see `ps`); `wake` releases it.
+fn cmd_block() {
+    match sched::spawn("waiter", waiter, 0) {
+        Some(id) => out!("started waiter as task {} (it waits until you type `wake`)\n", id),
+        None => out!("cannot start waiter: no free task slot or memory\n"),
+    }
+}
+
+fn cmd_wake() {
+    out!("woke {} task(s)\n", DEMO_QUEUE.wake_all());
+}
+
 fn cmd_spawn() {
     for (i, name) in ["worker-a", "worker-b"].into_iter().enumerate() {
         match sched::spawn(name, worker, i) {
@@ -366,6 +386,8 @@ fn run(line: &str) {
         "mem" => cmd_mem(),
         "ps" => cmd_ps(),
         "spawn" => cmd_spawn(),
+        "block" => cmd_block(),
+        "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),
         "kill" => match rest.parse::<usize>() {
             Ok(id) if sched::kill(id) => out!("task {} stopped\n", id),

@@ -171,6 +171,7 @@ Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (
 | `uefi.rs` | hand-written UEFI bindings, every used table offset asserted at compile time |
 | `arch.rs` | x86-specific code: port I/O, CPUID, RDRAND, control registers, GDT/TSS/IDT, exception and switch stubs, PIC/PIT, UART |
 | `gfont.rs`, `fontdata.rs`, `anim.rs` | smooth fonts (generated data), glyph blending, easing |
+| `spin.rs`, `waitq.rs` | interrupt-safe spinlock, wait-queue list (`sched::WaitQueue` blocks and wakes tasks) |
 | `apic.rs`, `apicmath.rs` | local APIC timer (TSC-calibrated, periodic) and its host-tested arithmetic |
 | `paging.rs` | identity-mapped page tables, W^X, guard pages |
 | `mm.rs`, `frames.rs`, `heapalloc.rs` | frame bitmap allocator, free-list heap, `GlobalAlloc` |

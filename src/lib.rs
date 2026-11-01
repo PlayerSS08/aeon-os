@@ -30,9 +30,11 @@ pub mod pixel;
 pub mod ramfs;
 pub mod sha256;
 pub mod splash;
+pub mod spin;
 pub mod syscall;
 pub mod tcg2;
 pub mod usercopy;
+pub mod waitq;
 
 // `log` defines the logging macros, so it must come before the modules that use them.
 #[cfg(target_os = "uefi")]

@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch;
 use crate::global::Global;
 use crate::mm;
+use crate::waitq::WaitList;
 
 pub const MAX_TASKS: usize = 16;
 const STACK_PAGES: usize = 8; // 32 KiB per task
@@ -33,6 +34,8 @@ pub enum State {
     Ready,
     Running,
     Sleeping,
+    /// Waiting on a [`WaitQueue`] until another task or a handler wakes it.
+    Blocked,
     Dead,
 }
 
@@ -43,6 +46,7 @@ impl State {
             State::Ready => "ready",
             State::Running => "running",
             State::Sleeping => "sleeping",
+            State::Blocked => "blocked",
             State::Dead => "dead",
         }
     }
@@ -237,6 +241,68 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     // SAFETY: interrupt context (interrupts off); `ktop` is the top of the incoming task's mapped kernel stack.
     unsafe { crate::usermode::set_kernel_stack(ktop) };
     s.tasks[next].rsp
+}
+
+/// Tasks waiting for something to happen (a key, a device, another task). A waiting task is not
+/// scheduled at all, so it costs no CPU until it is woken. Like a condition variable, a wake-up only
+/// says "look again": the woken task must re-check its condition, and a stale id (a task killed while
+/// waiting whose slot was reused) can cause one harmless extra wake-up.
+pub struct WaitQueue {
+    list: Global<WaitList<MAX_TASKS>>,
+}
+
+impl WaitQueue {
+    pub const fn new() -> Self {
+        Self { list: Global::new(WaitList::new()) }
+    }
+
+    /// Blocks the calling task until `wake_all`. Does nothing for the idle task or before the
+    /// scheduler runs (they have nobody to switch to), so callers must loop on their own condition.
+    pub fn wait(&self) {
+        let blocked = arch::without_interrupts(|| {
+            // SAFETY: interrupts off on a single CPU.
+            let s = unsafe { SCHED.get() };
+            let c = s.current;
+            if !s.active || c == 0 {
+                return false;
+            }
+            // SAFETY: as above; the list is only touched with interrupts off.
+            let list = unsafe { self.list.get() };
+            if !list.push(c as u8) {
+                return false;
+            }
+            s.tasks[c].state = State::Blocked;
+            true
+        });
+        if blocked {
+            yield_now();
+        }
+    }
+
+    /// Makes every waiting task ready again. Safe from task context; returns how many were woken.
+    pub fn wake_all(&self) -> usize {
+        arch::without_interrupts(|| {
+            // SAFETY: interrupts off on a single CPU.
+            let s = unsafe { SCHED.get() };
+            // SAFETY: as above.
+            let list = unsafe { self.list.get() };
+            let mut woken = 0;
+            list.drain(|id| {
+                let t = &mut s.tasks[id as usize % MAX_TASKS];
+                if t.state == State::Blocked {
+                    t.state = State::Ready;
+                    woken += 1;
+                }
+            });
+            woken
+        })
+    }
+}
+
+impl Default for WaitQueue {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Gives up the CPU until the scheduler runs this task again.
