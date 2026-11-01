@@ -10,6 +10,7 @@
 extern crate alloc;
 
 pub mod acpi;
+pub mod anim;
 pub mod apicmath;
 pub mod bootcount;
 pub mod bootinfo;
@@ -18,6 +19,8 @@ pub mod cpuid;
 pub mod entropy;
 pub mod eventlog;
 pub mod font;
+pub mod fontdata;
+pub mod gfont;
 pub mod frames;
 pub mod heapalloc;
 pub mod keymap;
