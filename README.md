@@ -159,6 +159,10 @@ Screenshots land in `target/test-shots/`. Set `AEON_GIT_HASH` at build time to s
 banner. The fault features (`fault-ud fault-pf fault-stack fault-wx fault-nx fault-panic`) each trigger one
 fault after boot; build them with `cargo build`, never into `usb/`.
 
+## Try it on Windows before using a USB stick
+
+`powershell -ExecutionPolicy Bypass -File toolsun-qemu.ps1 -Build -Disk` builds Aeon and opens it in a QEMU window (needs QEMU in `C:\Program Files\qemu`). `-Disk` attaches a demo FAT disk (`disks`, `dls`, `dcat hello.txt`), `-Release` runs the signed files from `usb/`, `-Cfg "mode=1920x1080"` writes an `aeon.cfg`, `-Mem 64` limits the RAM. The serial log is `target\qemu-serial.log`.
+
 ## Look and feel
 
 Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (Inter for the wordmark and menu, JetBrains Mono for the shell, both under the SIL Open Font License; texts in `docs/licenses/`). `gfont.rs` looks glyphs up and blends them, `anim.rs` has the easing used by the splash fade and the progress bar. Nothing is needed to build Aeon beyond the committed `fontdata.rs`; Pillow is only needed to regenerate it. The design notes (comparison with other systems, scheduler, security and AI plans) are in `docs/design/aeon-system-design.md`.
