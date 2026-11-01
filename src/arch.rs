@@ -903,13 +903,14 @@ pub fn disable_interrupts() {
 /// Gives up the CPU voluntarily by raising the yield interrupt.
 pub fn yield_cpu() {
     // SAFETY: vector YIELD_VECTOR has a gate installed by `init_descriptors`.
-    unsafe { asm!("int 0x30", options(nomem)) };
+    // Other tasks run before this returns, and they write memory, so the asm must not claim `nomem`.
+    unsafe { asm!("int 0x30") };
 }
 
 /// Halts until the next interrupt (call with interrupts enabled).
 pub fn wait_for_interrupt() {
     // SAFETY: `hlt` only pauses the CPU until the next interrupt.
-    unsafe { asm!("hlt", options(nomem, nostack, preserves_flags)) };
+    unsafe { asm!("hlt", options(nostack, preserves_flags)) };
 }
 
 /// Switches to the stack whose top is `stack_top` and calls `entry`, which must never return.

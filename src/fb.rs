@@ -1,15 +1,14 @@
-//! GOP framebuffer text console: bitmap font, scrolling log area, splash logo and a status bar.
+//! GOP framebuffer text console: smooth fonts, scrolling log area, splash wordmark and a status bar.
 //!
 //! The console never reads the framebuffer (it may be uncached or write-combined, where reads are
 //! very slow). Text lives in a RAM cell grid and scrolling redraws from it.
 
 use crate::bootinfo::FbInfo;
-use crate::font;
+use crate::gfont::{self, Face};
 use crate::global::Global;
 use crate::logfmt::Level;
 use crate::pixel::PixelFormat;
-
-use crate::splash::{self, MAX_SCALE};
+use crate::splash;
 const MAX_COLS: usize = 256;
 const MAX_ROWS: usize = 128;
 
@@ -44,18 +43,16 @@ const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
 const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
 const PANIC_BG: (u8, u8, u8) = (28, 8, 10);
 const PANIC_LOGO: (u8, u8, u8) = (255, 110, 110);
+const MENU_SELECT: (u8, u8, u8) = (52, 66, 104);
+const MENU_TEXT: (u8, u8, u8) = (176, 184, 198);
+const MENU_KEY: (u8, u8, u8) = (104, 116, 134);
+const MENU_KEY_SELECTED: (u8, u8, u8) = (196, 206, 224);
 
 
-pub const BANNER_COLS: usize = 37;
-pub const BANNER_ROWS: usize = 6;
-pub const BANNER: [[u8; BANNER_COLS]; BANNER_ROWS] = [
-    [b' ', b' ', 0x80, 0x80, 0x80, b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,   b' ', b' ', b' ',   b' ', 0x80, 0x80, 0x80, 0x80, 0x80, b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80],
-    [b' ', 0x80, 0x80, b' ', 0x80, 0x80, b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, 0x80, b' ', b' ', 0x80, 0x80],
-    [0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, 0x80, 0x80, 0x80, b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', 0x80, b' ', 0x80, 0x80],
-    [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', 0x80, 0x80, 0x80],
-    [0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', b' ', b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80],
-    [0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80,   b' ', b' ', b' ',   0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,   b' ', b' ', b' ',   b' ', 0x80, 0x80, 0x80, 0x80, 0x80, b' ',   b' ', b' ', b' ',   0x80, 0x80, b' ', b' ', b' ', 0x80, 0x80],
-];
+/// Letter spacing added between the wordmark's letters, in pixels at scale 1.
+const WORDMARK_TRACKING: usize = 6;
+/// Widest character cell any face uses (for the per-row scratch buffer).
+const MAX_CELL_W: usize = 32;
 
 pub fn color_for(level: Level) -> u8 {
     match level {
@@ -74,6 +71,13 @@ pub struct Console {
     stride: usize,
     format: PixelFormat,
     scale: usize,
+    /// Fixed-width face for the character grid and its cell size in pixels.
+    mono: &'static Face,
+    cw: usize,
+    chh: usize,
+    /// Wordmark scale (follows the screen width) and the text rows it covers.
+    ws: usize,
+    logo_rows: usize,
     cols: usize,
     rows: usize,
     first_row: usize,
@@ -82,6 +86,8 @@ pub struct Console {
     cur_row: usize,
     /// While true the log is not painted: the screen shows only the logo and the progress bar.
     splash: bool,
+    /// While true the boot menu owns the screen and the log is not painted.
+    menu: bool,
     /// Last bar position drawn, in thousandths.
     bar_pm: u32,
     logo_row: usize,
@@ -103,9 +109,12 @@ impl Console {
             return None;
         }
         let scale = splash::scale_for_width(info.width);
-        let cols = (info.width / (8 * scale)).min(MAX_COLS);
-        let rows = (info.height / (16 * scale)).min(MAX_ROWS);
-        if cols < 20 || rows < 6 {
+        let (mono, (cw, chh)) = if info.width >= 1600 { (&gfont::MONO_L, gfont::MONO_L_CELL) } else { (&gfont::MONO, gfont::MONO_CELL) };
+        let ws = scale;
+        let logo_rows = (gfont::WORDMARK.height as usize * ws).div_ceil(chh);
+        let cols = (info.width / cw).min(MAX_COLS);
+        let rows = (info.height / chh).min(MAX_ROWS);
+        if cols < 20 || rows < logo_rows + 4 {
             return None;
         }
         let mut c = Console {
@@ -115,6 +124,11 @@ impl Console {
             stride: info.stride,
             format: info.format,
             scale,
+            mono,
+            cw,
+            chh,
+            ws,
+            logo_rows,
             cols,
             rows,
             first_row: 0,
@@ -122,13 +136,13 @@ impl Console {
             cur_col: 0,
             cur_row: 0,
             splash: false,
+            menu: false,
             bar_pm: 0,
             logo_row: 0,
         };
-        c.logo_row = rows.saturating_sub(BANNER_ROWS) / 3;
+        c.logo_row = rows.saturating_sub(logo_rows) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
-        let _ = info.width;
-        let first = (rows.saturating_sub(BANNER_ROWS)) / 3 + BANNER_ROWS + 2;
+        let first = (rows.saturating_sub(logo_rows)) / 3 + logo_rows + 2;
         if rows >= first + 4 {
             c.first_row = first;
             c.log_rows = rows - 1 - first;
@@ -137,11 +151,11 @@ impl Console {
     }
 
     fn cell_w(&self) -> usize {
-        8 * self.scale
+        self.cw
     }
 
     fn cell_h(&self) -> usize {
-        16 * self.scale
+        self.chh
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -199,18 +213,50 @@ impl Console {
         self.draw_logo_rgb(LOGO_RGB, BG);
     }
 
+    /// Draws "AEON" in the wordmark face, centred, starting at text row `logo_row`. The background
+    /// must be the solid colour `bg` (the framebuffer is never read back).
     fn draw_logo_rgb(&self, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
-        if self.cols < BANNER_COLS || self.rows < BANNER_ROWS {
-            return;
-        }
-        let start_col = (self.cols - BANNER_COLS) / 2;
-        for (r, line) in BANNER.iter().enumerate() {
-            for (c, &ch) in line.iter().enumerate() {
-                if ch != b' ' {
-                    self.draw_glyph(start_col + c, self.logo_row + r, ch, fg, bg);
+        let tracking = WORDMARK_TRACKING * self.ws;
+        let w = gfont::text_width(&gfont::WORDMARK, "AEON") * self.ws + 3 * tracking;
+        let x = self.width.saturating_sub(w) / 2;
+        self.draw_text(&gfont::WORDMARK, x, self.logo_row * self.chh, fg, bg, "AEON", self.ws, tracking);
+    }
+
+    /// Draws `text` with its top-left at pixel (`x`, `y`) in `face`, magnified `scale` times, with
+    /// `tracking` extra pixels between glyphs. Only pixels the glyphs touch are written, blended
+    /// against the solid colour `bg`. Clipped to the screen. Returns the pixel width drawn.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text(&self, face: &Face, x: usize, y: usize, fg: (u8, u8, u8), bg: (u8, u8, u8), text: &str, scale: usize, tracking: usize) -> usize {
+        let (fgp, bgp) = (self.px(fg), self.px(bg));
+        let baseline = y + face.ascent as usize * scale;
+        let mut pen = x;
+        for ch in text.chars() {
+            let g = gfont::glyph(face, ch);
+            let gx0 = pen as i64 + g.left as i64 * scale as i64;
+            let gy0 = baseline as i64 - g.top as i64 * scale as i64;
+            for gy in 0..g.h as usize {
+                for gx in 0..g.w as usize {
+                    let c = g.cov[gy * g.w as usize + gx];
+                    if c == 0 {
+                        continue;
+                    }
+                    let v = gfont::blend(bgp, fgp, c);
+                    for sy in 0..scale {
+                        for sx in 0..scale {
+                            let (px, py) = (gx0 + (gx * scale + sx) as i64, gy0 + (gy * scale + sy) as i64);
+                            if px < 0 || py < 0 {
+                                continue;
+                            }
+                            if let Some(row) = self.row_mut(px as usize, py as usize, 1) {
+                                row[0] = v;
+                            }
+                        }
+                    }
                 }
             }
+            pen += g.advance as usize * scale + tracking;
         }
+        pen.saturating_sub(x).saturating_sub(tracking)
     }
 
     // ---- splash: logo, fade-in and progress bar instead of the scrolling log ----
@@ -219,7 +265,7 @@ impl Console {
     fn bar_rect(&self) -> (usize, usize, usize, usize) {
         let w = (self.width * 2 / 5).clamp(240, 640 * self.scale).min(self.width);
         let x = (self.width - w) / 2;
-        let y = (self.logo_row + BANNER_ROWS + 2) * self.cell_h();
+        let y = (self.logo_row + self.logo_rows + 1) * self.cell_h();
         let h = (4 * self.scale).max(4);
         (x, y, w, h)
     }
@@ -251,7 +297,7 @@ impl Console {
     pub fn begin_splash(&mut self) {
         self.clear();
         self.splash = true;
-        self.logo_row = splash::splash_row(self.rows, BANNER_ROWS);
+        self.logo_row = splash::splash_row(self.rows, self.logo_rows);
         let (x, y, w, h) = self.bar_rect();
         let track = self.px(TRACK_RGB);
         self.draw_pill(x, y, w, h, track);
@@ -301,19 +347,20 @@ impl Console {
         if !self.splash {
             return;
         }
-        let row = self.logo_row + BANNER_ROWS + 4;
-        if row >= self.rows {
+        let (_, bar_y, _, bar_h) = self.bar_rect();
+        let y = bar_y + bar_h + 14 * self.scale;
+        // Wide screens get the larger size, and only 4K-class screens magnify it.
+        let (face, sc) = if self.width >= 1600 { (&gfont::SANS_24, if self.width >= 3000 { 2 } else { 1 }) } else { (&gfont::SANS_16, 1) };
+        let line_h = face.height as usize * sc;
+        if y + line_h > self.height {
             return;
         }
-        let n = text.len().min(self.cols);
-        if n == 0 {
-            self.fill_rect(0, row * self.cell_h(), self.width, self.cell_h(), self.px(BG));
-            return;
-        }
-        let col = (self.cols - n) / 2;
-        for (i, &b) in text[..n].iter().enumerate() {
-            self.draw_glyph(col + i, row, b, (120, 130, 145), BG);
-        }
+        // Wipe the old line first, then draw the new one centred.
+        self.fill_rect(0, y, self.width, line_h, self.px(BG));
+        let s = core::str::from_utf8(text).unwrap_or("");
+        let w = gfont::text_width(face, s) * sc;
+        let x = self.width.saturating_sub(w) / 2;
+        self.draw_text(face, x, y, (120, 130, 145), BG, s, sc, 0);
     }
 
     /// Leaves the splash: the screen returns to logo at the top, log area and status bar.
@@ -323,7 +370,64 @@ impl Console {
         }
         self.splash = false;
         self.clear();
-        self.logo_row = self.rows.saturating_sub(BANNER_ROWS) / 3;
+        self.logo_row = self.rows.saturating_sub(self.logo_rows) / 3;
+        self.draw_logo();
+    }
+
+    // ---- Dawn, the boot menu ----
+
+    /// Draws the boot menu: the wordmark on top, one row per `(label, key)` entry with `selected`
+    /// highlighted, and `footer` at the bottom. The first call takes over the screen from the splash
+    /// or the log; later calls only repaint the list. Log output is held back until [`Console::menu_end`].
+    pub fn menu_draw(&mut self, entries: &[(&str, &str)], selected: usize, footer: &str) {
+        let first = !self.menu;
+        if first {
+            self.menu = true;
+            self.splash = false;
+            let bg = self.px(BG);
+            self.fill_rect(0, 0, self.width, self.height, bg);
+            let tracking = WORDMARK_TRACKING * self.ws;
+            let w = gfont::text_width(&gfont::WORDMARK, "AEON") * self.ws + 3 * tracking;
+            let x = self.width.saturating_sub(w) / 2;
+            self.draw_text(&gfont::WORDMARK, x, self.height / 14, LOGO_RGB, BG, "AEON", self.ws, tracking);
+        }
+        let (face, sc) = if self.width >= 1600 { (&gfont::SANS_24, if self.width >= 3000 { 2 } else { 1 }) } else { (&gfont::SANS_16, 1) };
+        let item_h = (face.height as usize + 12) * sc;
+        let list_top = self.height / 14 + gfont::WORDMARK.height as usize * self.ws + 36 * sc;
+        let panel_w = (self.width / 3).clamp(300 * sc, 700 * sc).min(self.width);
+        let panel_x = (self.width - panel_w) / 2;
+        self.fill_rect(panel_x, list_top, panel_w, entries.len() * item_h, self.px(BG));
+        let selected = selected.min(entries.len().saturating_sub(1));
+        for (i, (label, key)) in entries.iter().enumerate() {
+            let y = list_top + i * item_h;
+            let on = i == selected;
+            let bg = if on { MENU_SELECT } else { BG };
+            if on {
+                self.draw_pill(panel_x, y, panel_w, item_h - 4 * sc, self.px(MENU_SELECT));
+            }
+            let ty = y + (item_h - 4 * sc).saturating_sub(face.height as usize * sc) / 2;
+            let pad = 18 * sc;
+            self.draw_text(face, panel_x + pad, ty, if on { LOGO_RGB } else { MENU_TEXT }, bg, label, sc, 0);
+            let kw = gfont::text_width(face, key) * sc;
+            self.draw_text(face, (panel_x + panel_w).saturating_sub(pad + kw), ty, if on { MENU_KEY_SELECTED } else { MENU_KEY }, bg, key, sc, 0);
+        }
+        if first {
+            let f = &gfont::SANS_16;
+            let w = gfont::text_width(f, footer) * sc;
+            let y = self.height.saturating_sub(f.height as usize * sc + 28 * sc);
+            self.draw_text(f, self.width.saturating_sub(w) / 2, y, MENU_KEY, BG, footer, sc, 0);
+        }
+    }
+
+    /// Leaves the boot menu: the screen returns to the logo with an empty log area.
+    pub fn menu_end(&mut self) {
+        if !self.menu {
+            return;
+        }
+        self.menu = false;
+        self.splash = false;
+        self.clear();
+        self.logo_row = self.rows.saturating_sub(self.logo_rows) / 3;
         self.draw_logo();
     }
 
@@ -333,9 +437,9 @@ impl Console {
         self.splash = false;
         let bg = self.px(PANIC_BG);
         self.fill_rect(0, 0, self.width, self.height, bg);
-        self.logo_row = self.rows.saturating_sub(BANNER_ROWS + 10) / 3;
+        self.logo_row = self.rows.saturating_sub(self.logo_rows + 10) / 3;
         self.draw_logo_rgb(PANIC_LOGO, PANIC_BG);
-        let mut row = self.logo_row + BANNER_ROWS + 2;
+        let mut row = self.logo_row + self.logo_rows + 2;
         let put = |this: &Self, row: usize, text: &[u8], fg: (u8, u8, u8)| {
             if row >= this.rows {
                 return;
@@ -355,27 +459,32 @@ impl Console {
         put(self, row + 1, b"The system is halted. Power off or press reset to restart.", (160, 120, 120));
     }
 
+    /// Draws one character cell: the smooth glyph blended over the solid cell background.
     fn draw_glyph(&self, col: usize, row: usize, ch: u8, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
-        let g = if (font::FIRST..=font::LAST).contains(&ch) {
-            &font::GLYPHS[(ch - font::FIRST) as usize]
-        } else {
-            &font::GLYPHS[(b'?' - font::FIRST) as usize]
-        };
+        let g = gfont::glyph(self.mono, char::from(ch));
         let (fgp, bgp) = (self.px(fg), self.px(bg));
-        let s = self.scale;
-        let (x0, y0) = (col * self.cell_w(), row * self.cell_h());
-        let mut line = [0u32; 8 * MAX_SCALE];
-        for (fy, bits) in g.iter().enumerate() {
-            for fx in 0..8 {
-                let v = if bits & (1 << fx) != 0 { fgp } else { bgp };
-                line[fx * s..(fx + 1) * s].fill(v);
-            }
-            // Each font row is 2 * scale scan lines tall (8x8 glyphs on 8x16 cells).
-            for sy in 0..2 * s {
-                if let Some(dst) = self.row_mut(x0, y0 + fy * 2 * s + sy, 8 * s) {
-                    let n = dst.len();
-                    dst.copy_from_slice(&line[..n]);
+        let (x0, y0) = (col * self.cw, row * self.chh);
+        let cw = self.cw.min(MAX_CELL_W);
+        let top = self.mono.ascent as i64 - g.top as i64;
+        let mut line = [0u32; MAX_CELL_W];
+        for yy in 0..self.chh {
+            line[..cw].fill(bgp);
+            let gy = yy as i64 - top;
+            if gy >= 0 && (gy as usize) < g.h as usize {
+                for gx in 0..g.w as usize {
+                    let x = g.left as i64 + gx as i64;
+                    if x < 0 || x as usize >= cw {
+                        continue;
+                    }
+                    let c = g.cov[gy as usize * g.w as usize + gx];
+                    if c != 0 {
+                        line[x as usize] = gfont::blend(bgp, fgp, c);
+                    }
                 }
+            }
+            if let Some(dst) = self.row_mut(x0, y0 + yy, cw) {
+                let n = dst.len();
+                dst.copy_from_slice(&line[..n]);
             }
         }
     }
@@ -431,7 +540,7 @@ impl Console {
     }
 
     pub fn write_line(&mut self, level: Level, bytes: &[u8]) {
-        if self.splash {
+        if self.splash || self.menu {
             return;
         }
         let color = color_for(level);

@@ -66,8 +66,20 @@ pub static MONO: Face = Face {
     cov: &d::MONO_COV,
 };
 
+/// The larger fixed-width face, used on screens 1600 pixels wide or more.
+pub static MONO_L: Face = Face {
+    size: d::MONO_L_SIZE,
+    ascent: d::MONO_L_ASCENT,
+    height: d::MONO_L_HEIGHT,
+    codes: &d::MONO_L_CODES,
+    glyphs: &d::MONO_L_GLYPHS,
+    cov: &d::MONO_L_COV,
+};
+
 /// Width and height of one shell character cell.
 pub const MONO_CELL: (usize, usize) = (d::MONO_CELL_W as usize, d::MONO_CELL_H as usize);
+/// Cell size of [`MONO_L`].
+pub const MONO_L_CELL: (usize, usize) = (d::MONO_L_CELL_W as usize, d::MONO_L_CELL_H as usize);
 
 const EMPTY: Glyph = Glyph { advance: 0, w: 0, h: 0, left: 0, top: 0, cov: &[] };
 
@@ -118,7 +130,21 @@ pub fn blend(bg: u32, fg: u32, coverage: u8) -> u32 {
 mod tests {
     use super::*;
 
-    const FACES: [&Face; 4] = [&SANS_16, &SANS_24, &WORDMARK, &MONO];
+    const FACES: [&Face; 5] = [&SANS_16, &SANS_24, &WORDMARK, &MONO, &MONO_L];
+
+    #[test]
+    fn codes_are_sorted_and_unique_so_lookup_finds_every_glyph() {
+        for f in FACES {
+            assert!(f.codes.windows(2).all(|w| w[0] < w[1]));
+            assert_eq!(f.codes.len(), f.glyphs.len());
+            for &c in f.codes {
+                assert!(f.index(c).is_some(), "{c}");
+            }
+        }
+        for c in "AEON".chars() {
+            assert!(glyph(&WORDMARK, c).w > 0, "{c}");
+        }
+    }
 
     #[test]
     fn unknown_char_gives_question_mark_glyph() {
@@ -158,6 +184,8 @@ mod tests {
             assert_eq!(glyph(&MONO, c).advance, a);
         }
         assert_eq!(a as usize, MONO_CELL.0);
+        assert_eq!(glyph(&MONO_L, 'M').advance as usize, MONO_L_CELL.0);
+        assert_eq!(glyph(&MONO_L, 'i').advance as usize, MONO_L_CELL.0);
     }
 
     #[test]

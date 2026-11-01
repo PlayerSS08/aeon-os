@@ -282,6 +282,23 @@ def t_menu(ctx):
         r.check("Enter boots", vm.wait_for("boot complete", 120))
     finally:
         vm.close()
+    # Arrow keys move the highlight: Down once is "Recovery mode".
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-arrows"), ctx.work, name="menu-arrows")
+    try:
+        r.check("arrows: menu wait reached", vm.wait_for("press any key within"))
+        vm.keys("spc")
+        r.check("arrows: menu opens", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-400:])
+        time.sleep(0.4)
+        w, h, pix_a = vm.shot(os.path.join(ctx.shots, "4-menu-a.png"))
+        vm.keys("down")
+        time.sleep(0.4)
+        w, h, pix_b = vm.shot(os.path.join(ctx.shots, "4-menu-b.png"))
+        changed = sum(1 for i in range(0, len(pix_a), 3) if pix_a[i:i + 3] != pix_b[i:i + 3])
+        r.check("Down moves the highlight (screen changes)", changed > 500, f"changed={changed}")
+        vm.keys("ret")
+        r.check("Down then Enter picks recovery mode", vm.wait_for("recovery mode selected", 120) and vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text(), vm.text()[-400:])
+    finally:
+        vm.close()
 
 
 def t_tpm(ctx):
@@ -401,6 +418,9 @@ def t_modes(ctx):
                 y, x0, x1, fx = bar
                 r.check(f"{mw}x{mh}: bar is centred", abs((x0 + x1) / 2 - w / 2) < 6, f"x0={x0} x1={x1}")
                 r.check(f"{mw}x{mh}: bar is inside the screen", 0 < y < h - 40 and x0 > 0 and x1 < w - 1)
+                edge = sum(1 for yy in range(h) for xx in list(range(4)) + list(range(w - 4, w)) if px(pix, w, xx, yy) != (0, 0, 0))
+                edge += sum(1 for xx in range(w) for yy in list(range(4)) + list(range(h - 4, h)) if px(pix, w, xx, yy) != (0, 0, 0))
+                r.check(f"{mw}x{mh}: nothing is drawn in the outer 4 pixel frame", edge == 0, f"{edge} lit pixels")
                 lit = [yy for yy in range(h) for xx in range(0, w, 3) if px(pix, w, xx, yy) == (255, 255, 255)]
                 r.check(f"{mw}x{mh}: logo block is vertically centred with the bar", lit and abs(((min(lit) + y) / 2) - h / 2) < h * 0.12, f"top={min(lit) if lit else None} bar={y}")
         finally:

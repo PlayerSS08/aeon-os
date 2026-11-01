@@ -84,9 +84,9 @@ fn acpi_poweroff(b: &BootInfo) -> bool {
     // SAFETY: writing SLP_TYP|SLP_EN to the PM1 control register named by the FADT is the ACPI
     // definition of entering S5 (soft off).
     unsafe {
-        arch::outw(fadt.pm1a_cnt, (typa as u16) << 10 | SLP_EN);
+        arch::outw(fadt.pm1a_cnt, u16::from(typa & 7) << 10 | SLP_EN);
         if fadt.pm1b_cnt != 0 {
-            arch::outw(fadt.pm1b_cnt, (typb as u16) << 10 | SLP_EN);
+            arch::outw(fadt.pm1b_cnt, u16::from(typb & 7) << 10 | SLP_EN);
         }
     }
     // Give the platform a moment to act on the request.

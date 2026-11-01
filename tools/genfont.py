@@ -22,6 +22,7 @@ FACES = [
     ("SANS_24", "Inter.ttf", 24, {"opsz": 24, "wght": 500}, ASCII),
     ("WORDMARK", "Inter.ttf", 88, {"opsz": 32, "wght": 800}, [ord(c) for c in "AEON"]),
     ("MONO", "JetBrainsMono.ttf", 15, {"wght": 450}, ASCII),
+    ("MONO_L", "JetBrainsMono.ttf", 22, {"wght": 450}, ASCII),
 ]
 
 
@@ -63,6 +64,7 @@ def main():
     ]
     total = 0
     for name, file, size, axes, chars in FACES:
+        chars = sorted(set(chars))  # the kernel looks glyphs up with a binary search
         f = load(file, size, axes)
         asc, desc = f.getmetrics()
         glyphs, cov = [], bytearray()
@@ -84,14 +86,14 @@ def main():
         for i in range(0, len(cov), 32):
             out.append("    " + ", ".join(str(b) for b in cov[i:i + 32]) + ",\n")
         out.append("];\n\n")
-        if name == "MONO":
-            out.append(f"pub const MONO_CELL_W: u8 = {round(f.getlength('M'))};\n")
-            out.append(f"pub const MONO_CELL_H: u8 = {asc + desc};\n\n")
+        if name.startswith("MONO"):
+            out.append(f"pub const {name}_CELL_W: u8 = {round(f.getlength('M'))};\n")
+            out.append(f"pub const {name}_CELL_H: u8 = {asc + desc};\n\n")
     with open(OUT, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("".join(out))
     print(f"wrote {OUT}: {total} coverage bytes, source sha256 {hashlib.sha256(open(os.path.join(FONTS,'Inter.ttf'),'rb').read()).hexdigest()[:12]}")
-    if total > 64 * 1024:
-        sys.exit(f"font data is {total} bytes, over the 64 KiB budget")
+    if total > 80 * 1024:
+        sys.exit(f"font data is {total} bytes, over the 80 KiB budget")
 
 
 if __name__ == "__main__":

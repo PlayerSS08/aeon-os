@@ -12,6 +12,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use aeon::acpi::{self, Rsdp};
+use aeon::anim;
 use aeon::arch;
 use aeon::bootcount;
 use aeon::bootinfo::{BootInfo, FbInfo, SecureBoot, MAX_REGIONS};
@@ -72,17 +73,18 @@ fn wait_us(us: u64) {
 
 /// Moves the splash bar to `target` in a few short steps, so it glides instead of jumping.
 fn bar_to(target: u32) {
-    let _ = log::with_console(|c| {
-        let from = c.bar();
-        if target <= from {
-            c.progress(target);
-            return;
-        }
-        for i in 1..=4u32 {
-            c.progress(from + (target - from) * i / 4);
-            wait_us(3_000);
-        }
-    });
+    let from = log::with_console(|c| c.bar()).unwrap_or(target);
+    if target <= from {
+        let _ = log::with_console(|c| c.progress(target));
+        return;
+    }
+    // A short eased glide (40 ms in five frames); the wait is outside the console lock, so logging
+    // is never blocked by the animation.
+    for i in 1..=5u16 {
+        let pos = anim::lerp(from, target, anim::ease_out_cubic(i * 200));
+        let _ = log::with_console(|c| c.progress(pos));
+        wait_us(8_000);
+    }
 }
 
 fn stage(name: &'static str) {
@@ -767,49 +769,101 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
     if !pressed {
         return opts;
     }
-    // The menu is text: leave the splash and show everything logged so far.
-    if log::with_console(|c| {
-        let was = c.splash_active();
-        c.end_splash();
-        was
-    })
-    .unwrap_or(false)
-    {
-        log::replay(|bytes| {
-            let _ = log::with_console(|c| c.write_line(Level::Info, bytes));
-        });
-    }
+    // Dawn, the arrow-key menu. It owns the screen; log lines are held back and replayed when it closes.
+    info!("menu", "Enter boot | C recovery mode | S firmware shell | D toggle debug | F firmware setup | R reboot | O power off");
+    let mut sel = 0usize;
+    draw_menu(sel, opts.debug);
     loop {
-        info!("menu", "Enter boot | C recovery mode | S firmware shell | D toggle debug | F firmware setup | R reboot | O power off");
         let (scan, ch) = loop {
             let _ = (bs.stall)(20_000);
             if let Some(k) = read_key(st) {
                 break k;
             }
         };
-        match (scan, ch as u8 as char) {
-            (_, '\r') | (_, ' ') => return opts,
-            (_, 'd' | 'D') => {
+        // UEFI scan codes: 0x01 up, 0x02 down, 0x05 home, 0x06 end. Letters stay as shortcuts.
+        let pick = match (scan, ch as u8 as char) {
+            (0x01, _) => {
+                sel = (sel + MENU_LEN - 1) % MENU_LEN;
+                None
+            }
+            (0x02, _) => {
+                sel = (sel + 1) % MENU_LEN;
+                None
+            }
+            (0x05, _) => {
+                sel = 0;
+                None
+            }
+            (0x06, _) => {
+                sel = MENU_LEN - 1;
+                None
+            }
+            (_, '\r') => Some(sel),
+            (_, ' ') => Some(0),
+            (_, 'c' | 'C') => Some(1),
+            (_, 's' | 'S') => Some(2),
+            (_, 'd' | 'D') => Some(3),
+            (_, 'f' | 'F') => Some(4),
+            (_, 'r' | 'R') => Some(5),
+            (_, 'o' | 'O') => Some(6),
+            _ => None,
+        };
+        let Some(action) = pick else {
+            draw_menu(sel, opts.debug);
+            continue;
+        };
+        sel = action;
+        match action {
+            0 => {
+                leave_menu();
+                return opts;
+            }
+            1 => {
+                boot_info().recovery = true;
+                info!("menu", "recovery mode selected: no timer, no scheduler");
+                leave_menu();
+                return opts;
+            }
+            2 => {
+                leave_menu();
+                firmware_shell(st, bs, rt);
+                return opts;
+            }
+            3 => {
                 opts.debug = !opts.debug;
                 opts.quiet = false;
                 log::set_max_level(if opts.debug { Level::Trace } else { Level::Debug });
                 info!("menu", "debug logging {}", if opts.debug { "on" } else { "off" });
+                draw_menu(sel, opts.debug);
             }
-            (_, 'f' | 'F') => reboot_to_firmware_setup(rt),
-            (_, 'r' | 'R') => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
-            (_, 'o' | 'O') => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
-            (_, 'c' | 'C') => {
-                boot_info().recovery = true;
-                info!("menu", "recovery mode selected: no timer, no scheduler");
-                return opts;
-            }
-            (_, 's' | 'S') => {
-                firmware_shell(st, bs, rt);
-                return opts;
-            }
-            _ => {}
+            4 => reboot_to_firmware_setup(rt),
+            5 => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
+            _ => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
         }
     }
+}
+
+const MENU_LEN: usize = 7;
+
+fn draw_menu(sel: usize, debug: bool) {
+    let entries: [(&str, &str); MENU_LEN] = [
+        ("Boot Aeon", "Enter"),
+        ("Recovery mode", "C"),
+        ("Firmware shell", "S"),
+        (if debug { "Debug logging: on" } else { "Debug logging: off" }, "D"),
+        ("Firmware setup", "F"),
+        ("Restart", "R"),
+        ("Power off", "O"),
+    ];
+    let _ = log::with_console(|c| c.menu_draw(&entries, sel, "Up and Down to move, Enter to select"));
+}
+
+/// Closes the menu and shows everything logged so far on the normal log screen.
+fn leave_menu() {
+    let _ = log::with_console(|c| c.menu_end());
+    log::replay(|bytes| {
+        let _ = log::with_console(|c| c.write_line(Level::Info, bytes));
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -964,8 +1018,8 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
             } else {
                 // Splash: the logo fades in, a thin bar tracks the real boot stages, the log is held back.
                 c.begin_splash();
-                for step in 1..=10u32 {
-                    c.fade_logo((step * 255 / 10) as u8);
+                for step in 1..=10u16 {
+                    c.fade_logo((u32::from(anim::ease_out_cubic(step * 100)) * 255 / 1000) as u8);
                     let _ = (bs.stall)(18_000);
                 }
             }
@@ -1351,8 +1405,9 @@ extern "C" fn kernel_main() -> ! {
     if log::with_console(|c| c.splash_active()).unwrap_or(false) {
         bar_to(1000);
         wait_us(120_000);
-        for step in (0..10u32).rev() {
-            let _ = log::with_console(|c| c.fade_splash((step * 255 / 10) as u8));
+        for step in (0..10u16).rev() {
+            let level = (u32::from(anim::ease_in_out(step * 100)) * 255 / 1000) as u8;
+            let _ = log::with_console(|c| c.fade_splash(level));
             wait_us(15_000);
         }
         let _ = log::with_console(|c| c.end_splash());

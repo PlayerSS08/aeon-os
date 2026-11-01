@@ -364,7 +364,9 @@ pub fn restore_page(addr: u64) -> bool {
 
 /// Maps one 4 KiB page so that ring 3 can use it (`writable` and `exec` are never both true).
 pub fn user_page(addr: u64, writable: bool, exec: bool) -> bool {
-    debug_assert!(!(writable && exec));
+    if writable && exec {
+        return false; // never both: user pages are W^X in release builds too
+    }
     let ok = with_builder(|b| b.set_user_page(addr, writable, exec));
     invlpg(addr);
     ok
