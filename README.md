@@ -30,7 +30,7 @@ setup, `R` reboot, `O` power off.
 Boot options (image command line / UEFI load options, plus the text file `EFI/BOOT/aeon.cfg` on the stick, one
 setting per line, `#` starts a comment): `quiet`, `debug`, `verbose` (log instead of
 splash), `nomenu`, `timeout=N`, `mode=WxH` (pick a screen mode, e.g. `mode=1920x1080`), `recovery` (force recovery
-mode), `nocount` (turn boot counting off). `debug` implies `verbose`. The effective options are what gets
+mode), `nocount` (turn boot counting off), `nolapic` (keep the legacy PIT timer instead of the local APIC timer). `debug` implies `verbose`. The effective options are what gets
 measured into the TPM.
 
 Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmware "legacy" mode).
@@ -47,7 +47,7 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | boot menu | wait for a key through the firmware (works with USB keyboards) |
 | (same stage) | size the memory-map buffer from the firmware, fetch map, exit, retry on a stale key; no logging in between |
 | kernel-env | copy the memory map, enable NX, GDT/TSS (double-fault stack), IDT, identity-mapped page tables with W^X, unmapped null page and stack guard pages, CR0.WP/SMEP/SMAP/UMIP when supported, own stack |
-| kernel-memory, kernel-tasks | frame allocator, 32 MB heap, PIT tick, scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
+| kernel-memory, kernel-tasks | frame allocator, 32 MB heap, tick source (local APIC timer, or the PIT if there is no xAPIC or with `nolapic`), scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
 
 Shell commands: `help info version cpu security tpm lastpanic uptime mem ps spawn counters kill memmap log echo sort ls cat write rm df run clear panic reboot
 shutdown`. `ls cat write rm df` work on a flat RAM filesystem (64 files, 1 MiB, names up to 32 characters). `run <hello|fault|gp|spin|badcall>` starts a built-in program in ring 3. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
@@ -166,6 +166,7 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 | `main.rs` | boot flow, boot menu, seed and measured boot, kernel start, panic handler |
 | `uefi.rs` | hand-written UEFI bindings, every used table offset asserted at compile time |
 | `arch.rs` | x86-specific code: port I/O, CPUID, RDRAND, control registers, GDT/TSS/IDT, exception and switch stubs, PIC/PIT, UART |
+| `apic.rs`, `apicmath.rs` | local APIC timer (TSC-calibrated, periodic) and its host-tested arithmetic |
 | `paging.rs` | identity-mapped page tables, W^X, guard pages |
 | `mm.rs`, `frames.rs`, `heapalloc.rs` | frame bitmap allocator, free-list heap, `GlobalAlloc` |
 | `sched.rs` | preemptive round-robin tasks (registers + FXSAVE on each stack) |
@@ -189,4 +190,4 @@ emulation limits, and 4K screens (the scale path is unit-tested but not seen; 64
 Single CPU, identity mapping only, RAM-only filesystem, one built-in ring-3 program at a time (no loading from files, no networking).
 A separate kernel hash check would add nothing today: loader and kernel are one image, and the firmware already
 verifies that whole image under Secure Boot. Splitting them only pays off for two kernels to choose between.
-Next: LAPIC timer, a USB keyboard driver, SMP, loading programs from files, and an `aarch64` port.
+Next: spinlocks and a blocking ready queue, a USB keyboard driver, SMP, loading programs from files, and an `aarch64` port.
