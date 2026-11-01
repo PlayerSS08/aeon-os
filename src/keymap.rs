@@ -11,8 +11,11 @@ pub enum Key {
     Interrupt,
     /// Ctrl+L
     ClearScreen,
+    /// Plain arrows scroll the screen; Ctrl+Up / Ctrl+Down walk the command history.
     Up,
     Down,
+    HistoryPrev,
+    HistoryNext,
     PageUp,
     PageDown,
     Home,
@@ -74,8 +77,8 @@ impl Keyboard {
             // The dedicated cursor block sends E0 + these codes (Num Lock and Shift add fake E0 2A / E0 AA
             // prefixes, which fall through the shift arm above because of `!ext`).
             return match make {
-                0x48 => Some(Key::Up),
-                0x50 => Some(Key::Down),
+                0x48 => Some(if self.ctrl { Key::HistoryPrev } else { Key::Up }),
+                0x50 => Some(if self.ctrl { Key::HistoryNext } else { Key::Down }),
                 0x49 => Some(Key::PageUp),
                 0x51 => Some(Key::PageDown),
                 0x47 => Some(if self.ctrl { Key::ScrollTop } else { Key::Home }),
@@ -181,6 +184,19 @@ mod tests {
         assert_eq!(k.feed(0xE0), None);
         assert_eq!(k.feed(0xAA), None);
         assert_eq!(k.feed(0x1E), Some(Key::Char(b'a')), "shift is not left on");
+    }
+
+    #[test]
+    fn ctrl_arrows_are_history() {
+        let mut k = Keyboard::new();
+        k.feed(0x1D); // Ctrl down
+        k.feed(0xE0);
+        assert_eq!(k.feed(0x48), Some(Key::HistoryPrev));
+        k.feed(0xE0);
+        assert_eq!(k.feed(0x50), Some(Key::HistoryNext));
+        k.feed(0x9D); // Ctrl up
+        k.feed(0xE0);
+        assert_eq!(k.feed(0x48), Some(Key::Up));
     }
 
     #[test]

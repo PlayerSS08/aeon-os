@@ -914,14 +914,14 @@ def t_disk32(ctx):
 
 
 def t_console(ctx):
-    """Console: help is grouped, `help <cmd>` explains, Up recalls, PgUp/PgDn/Ctrl+Home/End scroll, the log uses the whole screen."""
+    """Console: help is grouped, `help <cmd>` explains, Up/Down/PgUp/PgDn/Ctrl+Home/End scroll, Ctrl+Up recalls, the log uses the whole screen."""
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="console")
     try:
         r = ctx.r
         r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
         run_cmds(vm, r, [
             ("help", "hardware  pci disks dread"),
-            ("help", "PgUp/PgDn scroll"),
+            ("help", "Up/Down scroll the screen"),
             ("help ls", "list the files in RAM"),
             ("help dread", "dread <n> [off]"),
             ("help nosuch", "no command 'nosuch'"),
@@ -930,11 +930,12 @@ def t_console(ctx):
         ])
         # Up recalls the last command; Enter runs it again.
         before = vm.serial_text().count("histtest")
-        vm.keys("up", "ret")
+        vm.chord("ctrl", "up")
+        vm.keys("ret")
         end = time.time() + 20
         while time.time() < end and vm.serial_text().count("histtest") < before + 2:
             time.sleep(0.2)
-        r.check("Up recalls and reruns the last command", vm.serial_text().count("histtest") >= before + 2, vm.serial_text()[-200:])
+        r.check("Ctrl+Up recalls and reruns the last command", vm.serial_text().count("histtest") >= before + 2, vm.serial_text()[-200:])
         # Fill more than a screen so there is something to scroll back to.
         run_cmds(vm, r, [("help all", "shutdown" + " " * 13 + "power off")])
         time.sleep(1.0)
@@ -945,6 +946,20 @@ def t_console(ctx):
             return sum(1 for yy in range(y0, y1, 2) for xx in range(0, w, 3) if px(pix, w, xx, yy) != (0, 0, 0))
 
         r.check("log uses the top of the screen (no logo block)", lit(a, 0, h // 12) > 40, f"lit={lit(a, 0, h // 12)}")
+        # Plain Up scrolls the screen and must NOT recall an old command.
+        typed_before = vm.serial_text().count("echo histtest")
+        vm.keys("up", "up", "up")
+        time.sleep(0.8)
+        _, _, u = vm.shot(os.path.join(ctx.work, "con_up.png"))
+        du = sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(u, w, xx, yy))
+        r.check("Up arrow scrolls the screen", du > 300, f"diff={du}")
+        r.check("Up arrow does not recall a command", vm.serial_text().count("echo histtest") == typed_before)
+        vm.keys("down", "down", "down")
+        time.sleep(0.8)
+        _, _, u2 = vm.shot(os.path.join(ctx.work, "con_down.png"))
+        r.check("Down arrow scrolls back to the same screen", sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(u2, w, xx, yy)) < 20)
+        for n in ("con_a", "con_up"):
+            shutil.copy(os.path.join(ctx.work, n + ".png"), os.path.join(ctx.shots, "console-" + n[4:] + ".png"))
         vm.keys("pgup")
         time.sleep(0.8)
         _, _, b = vm.shot(os.path.join(ctx.work, "con_b.png"))

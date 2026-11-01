@@ -74,8 +74,8 @@ fn cmd_help(arg: &str) {
     match arg {
         "" => {
             out!("Aeon shell. `help <command>` explains one command, `help all` lists them with descriptions.\n");
-            out!("Keys: PgUp/PgDn scroll, Up/Down history, Tab completes, Ctrl+L clear, Ctrl+C cancel.
-Edit: Left/Right/Home/End/Delete, Ctrl+A/E/U/K/W. Ctrl+Home/End: top/bottom.\n\n");
+            out!("Keys: Up/Down scroll the screen (PgUp/PgDn a page, Ctrl+Home/End top/bottom), Ctrl+Up/Down old commands.\n");
+            out!("Edit: Tab completes, Left/Right/Home/End/Delete, Ctrl+A/E/U/K/W. Ctrl+L clear, Ctrl+C cancel.\n\n");
             for g in cmdhelp::GROUPS {
                 out!("{:<9}", g);
                 for c in cmdhelp::COMMANDS.iter().filter(|c| c.group == *g) {
@@ -536,7 +536,7 @@ fn run(line: &str, hist: &History) {
     }
 }
 
-/// Commands remembered for Up/Down.
+/// Commands remembered for Ctrl+Up / Ctrl+Down.
 const HISTORY: usize = 8;
 const LINE_MAX: usize = MAX_LINE;
 
@@ -656,6 +656,14 @@ pub extern "C" fn shell_task(_: usize) {
             idle = false;
             let Some(key) = kbd.feed(code) else { continue };
             match key {
+                Key::Up => {
+                    log::with_console(|c| c.scroll_up(1));
+                    continue;
+                }
+                Key::Down => {
+                    log::with_console(|c| c.scroll_down(1));
+                    continue;
+                }
                 Key::PageUp => {
                     log::with_console(|c| c.scroll_up(c.page()));
                     continue;
@@ -690,8 +698,8 @@ pub extern "C" fn shell_task(_: usize) {
                 Key::Ctrl(b'k') => ed.kill_to_end(&mut put),
                 Key::Ctrl(b'w') => ed.kill_word(&mut put),
                 Key::Tab => tab_complete(&mut ed),
-                Key::Up | Key::Down | Key::Ctrl(b'p') | Key::Ctrl(b'n') => {
-                    let older = matches!(key, Key::Up | Key::Ctrl(b'p'));
+                Key::HistoryPrev | Key::HistoryNext | Key::Ctrl(b'p') | Key::Ctrl(b'n') => {
+                    let older = matches!(key, Key::HistoryPrev | Key::Ctrl(b'p'));
                     // Copy the line out first: `step` borrows the history.
                     let mut buf = [0u8; LINE_MAX];
                     let n = hist.step(older).map(|l| {
@@ -752,7 +760,7 @@ pub extern "C" fn status_task(_: usize) {
             f.free as u64 * 4 / 1024,
             h.used / 1024,
             task_count(),
-            if back > 0 { "SCROLLED (End = live)" } else { "help | PgUp/PgDn scroll" }
+            if back > 0 { "SCROLLED (End = live)" } else { "help | Up/Down scroll" }
         );
         let bytes = line.finish();
         let bytes = &bytes[..bytes.len() - 1];

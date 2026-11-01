@@ -28,7 +28,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("system", "uname", "uname", "system name, version and architecture"),
     c("system", "ver", "ver", "same as `version`"),
     c("system", "man", "man <command>", "same as `help <command>`"),
-    c("system", "history", "history", "the commands you ran lately (Up/Down recall them)"),
+    c("system", "history", "history", "the commands you ran lately (Ctrl+Up/Down recall them)"),
     c("status", "log", "log", "replay the boot log"),
     c("hardware", "pci", "pci", "devices on the PCI bus"),
     c("hardware", "disks", "disks", "the disk, if there is one"),
