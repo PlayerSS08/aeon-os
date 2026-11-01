@@ -137,8 +137,13 @@ class Vm:
             self.cmd("send-key", keys=[{"type": "qcode", "data": n}], **{"hold-time": 60})
             time.sleep(0.15)
 
+    def chord(self, *names):
+        """Presses several keys at once (e.g. ctrl+home)."""
+        self.cmd("send-key", keys=[{"type": "qcode", "data": n} for n in names], **{"hold-time": 60})
+        time.sleep(0.3)
+
     def type(self, s):
-        m = {" ": "spc", "-": "minus", "=": "equal", ".": "dot", "/": "slash"}
+        m = {" ": "spc", "-": "minus", "=": "equal", ".": "dot", "/": "slash", "`": "grave_accent"}
         self.keys(*[m.get(c, c) for c in s])
 
     def shot(self, path_png):
@@ -909,7 +914,7 @@ def t_disk32(ctx):
 
 
 def t_console(ctx):
-    """Console: help is grouped, `help <cmd>` explains, Up recalls, PgUp/PgDn/Home/End scroll, the log uses the whole screen."""
+    """Console: help is grouped, `help <cmd>` explains, Up recalls, PgUp/PgDn/Ctrl+Home/End scroll, the log uses the whole screen."""
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="console")
     try:
         r = ctx.r
@@ -945,18 +950,57 @@ def t_console(ctx):
         _, _, b = vm.shot(os.path.join(ctx.work, "con_b.png"))
         diff = sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(b, w, xx, yy))
         r.check("PgUp changes the screen", diff > 300, f"diff={diff}")
-        vm.keys("end")
+        vm.chord("ctrl", "end")
         time.sleep(0.8)
         _, _, c = vm.shot(os.path.join(ctx.work, "con_c.png"))
         same = sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(c, w, xx, yy))
         r.check("End returns to the live bottom", same < 20, f"diff={same}")
-        vm.keys("home")
+        vm.chord("ctrl", "home")
         time.sleep(0.8)
         _, _, d = vm.shot(os.path.join(ctx.work, "con_d.png"))
         r.check("Home goes to the oldest line (boot log)", sum(1 for yy in range(0, body, 2) for xx in range(0, w, 3) if px(a, w, xx, yy) != px(d, w, xx, yy)) > 300)
         vm.keys("pgdn")
         # Typing while scrolled back snaps to the bottom and the command still works.
         run_cmds(vm, r, [("echo after-scroll", "after-scroll")])
+
+        def line(text, keys_after, expect):
+            """Types text, presses keys, waits for `expect` in the new serial output."""
+            before = len(vm.serial_text())
+            vm.type(text)
+            vm.keys(*keys_after)
+            end = time.time() + 20
+            while time.time() < end and expect not in vm.serial_text()[before:]:
+                time.sleep(0.2)
+            r.check(f"{text!r} {keys_after} -> {expect!r}", expect in vm.serial_text()[before:], vm.serial_text()[before:][-200:])
+
+        # Line editing: Tab completes, Left inserts in the middle, Home + Delete removes the first character.
+        line("ech", ["tab"], "echo ")
+        vm.type("completed")
+        line("", ["ret"], "completed")
+        vm.type("echo ac")
+        vm.keys("left")
+        line("b", ["ret"], "abc")
+        vm.type("xecho edited")
+        vm.keys("home", "delete")
+        line("", ["ret"], "edited")
+        # Several matches: the candidates are listed.
+        line("d", ["tab"], "dir  ")
+        vm.keys("backspace")
+        # Mistyped command: a suggestion. Aliases from other systems work.
+        run_cmds(vm, r, [
+            ("hlep", "Did you mean `help`?"),
+            ("uname", "x86_64 UEFI"),
+            ("ver", "sbat generation"),
+            ("free", "frames"),
+            ("dir", "(no files)"),
+            ("history", "echo edited"),
+            ("man ls", "list the files in RAM"),
+        ])
+        # The cursor is a light block on the prompt row.
+        time.sleep(0.8)
+        _, _, e = vm.shot(os.path.join(ctx.work, "con_e.png"))
+        block = sum(1 for yy in range(0, body, 1) for xx in range(0, w, 1) if px(e, w, xx, yy) == (200, 208, 224))
+        r.check("a cursor block is visible", block > 30, f"cursor px={block}")
     finally:
         vm.close()
 

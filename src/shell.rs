@@ -11,6 +11,7 @@ use crate::cmdhelp;
 use crate::fb::Console;
 use crate::global::Global;
 use crate::keymap::{Key, Keyboard};
+use crate::lineedit::{LineEditor, MAX_LINE};
 use crate::log;
 use crate::logfmt::LineBuf;
 use crate::memmap;
@@ -73,7 +74,8 @@ fn cmd_help(arg: &str) {
     match arg {
         "" => {
             out!("Aeon shell. `help <command>` explains one command, `help all` lists them with descriptions.\n");
-            out!("Keys: PgUp/PgDn scroll, Home/End top/bottom, Up/Down recall commands, Ctrl+L clear, Ctrl+C cancel.\n\n");
+            out!("Keys: PgUp/PgDn scroll, Up/Down history, Tab completes, Ctrl+L clear, Ctrl+C cancel.
+Edit: Left/Right/Home/End/Delete, Ctrl+A/E/U/K/W. Ctrl+Home/End: top/bottom.\n\n");
             for g in cmdhelp::GROUPS {
                 out!("{:<9}", g);
                 for c in cmdhelp::COMMANDS.iter().filter(|c| c.group == *g) {
@@ -473,14 +475,20 @@ fn cmd_run(name: &str) {
     }
 }
 
-fn run(line: &str) {
+fn run(line: &str, hist: &History) {
     let line = line.trim();
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
     match cmd {
         "" => {}
-        "help" | "?" => cmd_help(rest),
+        "help" | "?" | "man" => cmd_help(rest),
         "info" => cmd_info(),
-        "version" => cmd_version(),
+        "version" | "ver" => cmd_version(),
+        "uname" => out!("Aeon {} x86_64 UEFI\n", crate::VERSION),
+        "history" => {
+            for (i, l) in hist.iter().enumerate() {
+                out!("{:>3}  {}\n", i + 1, core::str::from_utf8(l).unwrap_or("?"));
+            }
+        }
         "cpu" => cmd_cpu(),
         "security" => cmd_security(),
         "tpm" => cmd_tpm(),
@@ -489,7 +497,7 @@ fn run(line: &str) {
             let s = log::uptime_us() / 1_000_000;
             out!("up {:02}:{:02}:{:02}\n", s / 3600, (s / 60) % 60, s % 60);
         }
-        "mem" => cmd_mem(),
+        "mem" | "free" => cmd_mem(),
         "ps" => cmd_ps(),
         "spawn" => cmd_spawn(),
         "pci" => cmd_pci(),
@@ -510,24 +518,27 @@ fn run(line: &str) {
         "echo" => out!("{}\n", rest),
         "sort" => cmd_sort(rest),
         "run" => cmd_run(rest),
-        "ls" => cmd_ls(),
+        "ls" | "dir" => cmd_ls(),
         "df" => cmd_df(),
         "cat" => cmd_cat(rest),
         "write" => cmd_write(rest),
         "rm" => cmd_rm(rest),
-        "clear" => {
+        "clear" | "cls" => {
             log::with_console(Console::clear_log);
         }
         "panic" => panic!("panic requested from the shell"),
         "reboot" => power::reboot(),
         "shutdown" => power::shutdown(),
-        other => out!("unknown command '{}', try `help`\n", other),
+        other => match cmdhelp::suggest(other) {
+            Some(near) => out!("unknown command '{}'. Did you mean `{}`? (`help` lists everything)\n", other, near),
+            None => out!("unknown command '{}', try `help`\n", other),
+        },
     }
 }
 
 /// Commands remembered for Up/Down.
 const HISTORY: usize = 8;
-const LINE_MAX: usize = 120;
+const LINE_MAX: usize = MAX_LINE;
 
 /// The last few command lines, newest last.
 struct History {
@@ -558,6 +569,10 @@ impl History {
         self.count += 1;
     }
 
+    fn iter(&self) -> impl Iterator<Item = &[u8]> {
+        (0..self.count).map(|i| &self.lines[i][..self.lens[i]])
+    }
+
     /// Moves toward older (`older`) or newer lines; returns the line to show, or None at the ends.
     fn step(&mut self, older: bool) -> Option<&[u8]> {
         let next = if older { self.shown + 1 } else { self.shown.checked_sub(1)? };
@@ -573,26 +588,67 @@ impl History {
     }
 }
 
-/// Erases `len` typed characters on screen and types `new` in their place.
-fn replace_input(line: &mut [u8; LINE_MAX], len: &mut usize, new: &[u8]) {
-    for _ in 0..*len {
-        log::print_raw(b"\x08 \x08");
+const PROMPT: &str = "aeon> ";
+
+fn put(b: &[u8]) {
+    log::print_raw(b);
+}
+
+/// Tab: finish or list command names for the first word of the line.
+fn tab_complete(ed: &mut LineEditor) {
+    let pos = ed.pos();
+    let mut pre = [0u8; MAX_LINE];
+    pre[..pos].copy_from_slice(&ed.text()[..pos]);
+    let Ok(prefix) = core::str::from_utf8(&pre[..pos]) else { return };
+    if prefix.contains(' ') {
+        return; // only command names are completed
     }
-    let n = new.len().min(LINE_MAX);
-    line[..n].copy_from_slice(&new[..n]);
-    *len = n;
-    log::print_raw(&line[..n]);
+    let mut it = cmdhelp::matching(prefix);
+    match (it.next(), it.next()) {
+        (None, _) => {}
+        (Some(only), None) => {
+            let mut word = [0u8; 32];
+            let n = only.name.len();
+            word[..n].copy_from_slice(only.name.as_bytes());
+            let n = if pos == ed.text().len() {
+                word[n] = b' ';
+                n + 1
+            } else {
+                n
+            };
+            ed.replace_before_cursor(&word[..n], &mut put);
+        }
+        (Some(_), Some(_)) => {
+            let common = cmdhelp::common_prefix(prefix);
+            if common.len() > prefix.len() {
+                ed.replace_before_cursor(common.as_bytes(), &mut put);
+            } else {
+                // Several candidates and nothing more in common: list them, then redraw the line.
+                out!("\n");
+                for c in cmdhelp::matching(prefix) {
+                    out!("{}  ", c.name);
+                }
+                out!("\n{}", PROMPT);
+                let (text, back) = (ed.text(), ed.text().len() - pos);
+                put(text);
+                for _ in 0..back {
+                    put(b"\x08");
+                }
+            }
+        }
+    }
 }
 
 /// The interactive shell task.
 pub extern "C" fn shell_task(_: usize) {
-    const PROMPT: &str = "aeon> ";
     let mut kbd = Keyboard::new();
-    let mut line = [0u8; LINE_MAX];
-    let mut len = 0usize;
+    let mut ed = LineEditor::new();
     let mut hist = History::new();
     // The wordmark is for the splash and the menu; from here the log gets the whole screen.
     log::with_console(Console::fullscreen_log);
+    // A line never wraps: it must fit between the prompt and the right edge.
+    let cols = log::with_console(|c| c.size().0).unwrap_or(80);
+    ed.set_max(cols.saturating_sub(PROMPT.len() + 2));
     out!("\nAeon shell. Type `help`.\n{}", PROMPT);
     loop {
         let mut idle = true;
@@ -608,11 +664,11 @@ pub extern "C" fn shell_task(_: usize) {
                     log::with_console(|c| c.scroll_down(c.page()));
                     continue;
                 }
-                Key::Home => {
+                Key::ScrollTop => {
                     log::with_console(|c| c.scroll_up(usize::MAX));
                     continue;
                 }
-                Key::End => {
+                Key::ScrollBottom => {
                     log::with_console(Console::scroll_bottom);
                     continue;
                 }
@@ -621,43 +677,53 @@ pub extern "C" fn shell_task(_: usize) {
             // Any other key brings the view back to the live bottom first.
             log::with_console(Console::scroll_bottom);
             match key {
-                Key::Char(c) if len < line.len() => {
-                    line[len] = c;
-                    len += 1;
-                    log::print_raw(&[c]);
+                Key::Char(c) => {
+                    ed.insert(c, &mut put);
                 }
-                Key::Backspace if len > 0 => {
-                    len -= 1;
-                    log::print_raw(b"\x08 \x08");
-                }
-                Key::Up | Key::Down => {
+                Key::Backspace => ed.backspace(&mut put),
+                Key::Delete | Key::Ctrl(b'd') => ed.delete(&mut put),
+                Key::Left | Key::Ctrl(b'b') => ed.left(&mut put),
+                Key::Right | Key::Ctrl(b'f') => ed.right(&mut put),
+                Key::Home | Key::Ctrl(b'a') => ed.home(&mut put),
+                Key::End | Key::Ctrl(b'e') => ed.end(&mut put),
+                Key::Ctrl(b'u') => ed.kill_to_start(&mut put),
+                Key::Ctrl(b'k') => ed.kill_to_end(&mut put),
+                Key::Ctrl(b'w') => ed.kill_word(&mut put),
+                Key::Tab => tab_complete(&mut ed),
+                Key::Up | Key::Down | Key::Ctrl(b'p') | Key::Ctrl(b'n') => {
+                    let older = matches!(key, Key::Up | Key::Ctrl(b'p'));
                     // Copy the line out first: `step` borrows the history.
                     let mut buf = [0u8; LINE_MAX];
-                    let n = hist.step(key == Key::Up).map(|l| {
+                    let n = hist.step(older).map(|l| {
                         buf[..l.len()].copy_from_slice(l);
                         l.len()
                     });
                     if let Some(n) = n {
-                        replace_input(&mut line, &mut len, &buf[..n]);
+                        ed.set(&buf[..n], &mut put);
                     }
                 }
                 Key::Enter => {
-                    log::print_raw(b"\n");
-                    hist.push(&line[..len]);
-                    let text = core::str::from_utf8(&line[..len]).unwrap_or("");
-                    run(text);
-                    len = 0;
+                    put(b"\n");
+                    let mut text = [0u8; LINE_MAX];
+                    let n = ed.text().len();
+                    text[..n].copy_from_slice(ed.text());
+                    ed.reset();
+                    hist.push(&text[..n]);
+                    run(core::str::from_utf8(&text[..n]).unwrap_or(""), &hist);
                     out!("{}", PROMPT);
                 }
                 Key::Interrupt => {
-                    len = 0;
+                    ed.reset();
                     hist.shown = 0;
                     out!("^C\n{}", PROMPT);
                 }
                 Key::ClearScreen => {
                     log::with_console(Console::clear_log);
                     out!("{}", PROMPT);
-                    log::print_raw(&line[..len]);
+                    put(ed.text());
+                    for _ in ed.pos()..ed.text().len() {
+                        put(b"\x08");
+                    }
                 }
                 _ => {}
             }

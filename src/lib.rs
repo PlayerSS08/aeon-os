@@ -27,6 +27,7 @@ pub mod gfont;
 pub mod frames;
 pub mod heapalloc;
 pub mod keymap;
+pub mod lineedit;
 pub mod logfmt;
 pub mod memmap;
 pub mod pci;

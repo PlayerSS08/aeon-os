@@ -48,6 +48,7 @@ const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
 const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
 const PANIC_BG: (u8, u8, u8) = (28, 8, 10);
 const PANIC_LOGO: (u8, u8, u8) = (255, 110, 110);
+const CURSOR_BG: (u8, u8, u8) = (200, 208, 224);
 const MENU_SELECT: (u8, u8, u8) = (52, 66, 104);
 const MENU_TEXT: (u8, u8, u8) = (176, 184, 198);
 const MENU_KEY: (u8, u8, u8) = (104, 116, 134);
@@ -558,6 +559,27 @@ impl Console {
         }
     }
 
+    /// The screen cell the cursor is in, when it is visible (following the output, no splash or menu).
+    fn cursor_cell(&self) -> Option<(usize, usize)> {
+        if self.splash || self.menu || self.scroll != 0 {
+            return None;
+        }
+        Some((self.cur_col.min(self.cols - 1), self.first_row + (self.newest - self.live_top())))
+    }
+
+    /// Draws (or removes) the block cursor: the character under it with the colours swapped.
+    fn paint_cursor(&self, on: bool) {
+        let Some((col, row)) = self.cursor_cell() else { return };
+        // SAFETY: single-threaded; the history is only read here and no mutable reference is live.
+        let cell = unsafe { &*HIST.as_ptr() }[(self.newest % HIST_ROWS) * MAX_COLS + col];
+        let ch = if cell.ch == 0 { b' ' } else { cell.ch };
+        if on {
+            self.draw_glyph(col, row, ch, BG, CURSOR_BG);
+        } else {
+            self.draw_glyph(col, row, ch, PALETTE[cell.color as usize % PALETTE.len()], BG);
+        }
+    }
+
     fn redraw_log(&self) {
         let bg = self.px(BG);
         self.fill_rect(0, self.first_row * self.cell_h(), self.width, self.log_rows * self.cell_h(), bg);
@@ -576,6 +598,7 @@ impl Console {
                 }
             }
         }
+        self.paint_cursor(true);
     }
 
     fn newline(&mut self) {
@@ -623,9 +646,11 @@ impl Console {
             return;
         }
         let color = color_for(level);
+        self.paint_cursor(false);
         for &b in bytes {
             self.put_byte(b, color);
         }
+        self.paint_cursor(true);
     }
 
     /// Repaints the bottom row with `text` (clipped or padded to the screen width).

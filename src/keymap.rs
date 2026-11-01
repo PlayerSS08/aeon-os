@@ -17,6 +17,14 @@ pub enum Key {
     PageDown,
     Home,
     End,
+    Left,
+    Right,
+    Delete,
+    /// Ctrl+Home / Ctrl+End: scroll to the oldest line / back to the live bottom.
+    ScrollTop,
+    ScrollBottom,
+    /// Ctrl plus a letter other than C and L (the letter is lower case).
+    Ctrl(u8),
 }
 
 #[derive(Default)]
@@ -70,8 +78,11 @@ impl Keyboard {
                 0x50 => Some(Key::Down),
                 0x49 => Some(Key::PageUp),
                 0x51 => Some(Key::PageDown),
-                0x47 => Some(Key::Home),
-                0x4F => Some(Key::End),
+                0x47 => Some(if self.ctrl { Key::ScrollTop } else { Key::Home }),
+                0x4F => Some(if self.ctrl { Key::ScrollBottom } else { Key::End }),
+                0x4B => Some(Key::Left),
+                0x4D => Some(Key::Right),
+                0x53 => Some(Key::Delete),
                 _ => None,
             };
         }
@@ -87,6 +98,7 @@ impl Keyboard {
             match c.to_ascii_lowercase() {
                 b'c' => return Some(Key::Interrupt),
                 b'l' => return Some(Key::ClearScreen),
+                l if l.is_ascii_lowercase() => return Some(Key::Ctrl(l)),
                 _ => {}
             }
         }
@@ -169,6 +181,28 @@ mod tests {
         assert_eq!(k.feed(0xE0), None);
         assert_eq!(k.feed(0xAA), None);
         assert_eq!(k.feed(0x1E), Some(Key::Char(b'a')), "shift is not left on");
+    }
+
+    #[test]
+    fn editing_keys_and_ctrl_letters() {
+        let mut k = Keyboard::new();
+        for (code, key) in [(0x4B, Key::Left), (0x4D, Key::Right), (0x53, Key::Delete)] {
+            k.feed(0xE0);
+            assert_eq!(k.feed(code), Some(key));
+        }
+        // Ctrl+A is a control key, not the letter a.
+        k.feed(0x1D);
+        assert_eq!(k.feed(0x1E), Some(Key::Ctrl(b'a')));
+        assert_eq!(k.feed(0x12), Some(Key::Ctrl(b'e')));
+        // Ctrl+Home / Ctrl+End scroll; without Ctrl they edit.
+        k.feed(0xE0);
+        assert_eq!(k.feed(0x47), Some(Key::ScrollTop));
+        k.feed(0xE0);
+        assert_eq!(k.feed(0x4F), Some(Key::ScrollBottom));
+        k.feed(0x9D); // Ctrl up
+        k.feed(0xE0);
+        assert_eq!(k.feed(0x47), Some(Key::Home));
+        assert_eq!(k.feed(0x1E), Some(Key::Char(b'a')));
     }
 
     #[test]
