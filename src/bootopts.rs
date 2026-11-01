@@ -73,6 +73,7 @@ fn parse_mode(s: &str) -> Option<(u32, u32)> {
 /// the number of bytes written (at most `out.len()`).
 pub fn flatten_config(text: &[u8], out: &mut [u8]) -> usize {
     let mut n = 0;
+    let mut cut = false;
     for line in text.split(|&b| b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.first() == Some(&b'#') {
@@ -80,15 +81,25 @@ pub fn flatten_config(text: &[u8], out: &mut [u8]) -> usize {
         }
         let mut wrote = false;
         for &b in line {
-            if (0x20..0x7F).contains(&b) && n < out.len() {
-                out[n] = b;
-                n += 1;
-                wrote = true;
+            if (0x20..0x7F).contains(&b) {
+                if n < out.len() {
+                    out[n] = b;
+                    n += 1;
+                    wrote = true;
+                } else {
+                    cut = true;
+                }
             }
         }
         if wrote && n < out.len() {
             out[n] = b' ';
             n += 1;
+        }
+    }
+    if cut {
+        // The last token did not fit: drop it entirely rather than pass on a different option.
+        while n > 0 && out[n - 1] != b' ' {
+            n -= 1;
         }
     }
     while n > 0 && out[n - 1] == b' ' {
@@ -179,6 +190,16 @@ mod config_tests {
         for bad in ["mode=", "mode=1920", "mode=axb", "mode=10x10", "mode=99999x99999", "mode=1920x", "mode=-1x-1"] {
             assert_eq!(parse(bad).mode, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn flatten_drops_a_token_that_does_not_fit() {
+        let mut out = [0u8; 12];
+        let n = flatten_config(b"verbose\ntimeout=10\n", &mut out);
+        assert_eq!(&out[..n], b"verbose");
+        let mut big = [0u8; 20];
+        let n = flatten_config(b"verbose\ntimeout=10\n", &mut big);
+        assert_eq!(&big[..n], b"verbose timeout=10");
     }
 
     #[test]

@@ -23,8 +23,8 @@ const MSR_STAR: u32 = 0xC000_0081;
 const MSR_LSTAR: u32 = 0xC000_0082;
 const MSR_SFMASK: u32 = 0xC000_0084;
 const EFER_SCE: u64 = 1;
-/// Cleared on `syscall` entry: TF, IF, DF, AC (AC off keeps SMAP meaningful).
-const SFMASK: u64 = 0x100 | 0x200 | 0x400 | 0x4_0000;
+/// Cleared on `syscall` entry: TF, IF, DF, NT, AC (AC off keeps SMAP meaningful).
+const SFMASK: u64 = 0x100 | 0x200 | 0x400 | 0x4000 | 0x4_0000;
 
 /// Kernel stack the `syscall` entry switches to; kept equal to TSS.rsp0 for the running task.
 #[no_mangle]
@@ -178,6 +178,10 @@ fn program(name: &str) -> Option<&'static [u8]> {
 /// # Safety
 /// `arch::init_descriptors` must have run (the selectors in STAR refer to its GDT), interrupts off.
 pub unsafe fn init() {
+    if !crate::boot::info().feat.smap {
+        warn!("user", "no SMAP on this CPU: ring-3 programs are disabled");
+        return;
+    }
     // SAFETY: standard SYSCALL setup; the selectors match the GDT built by `init_descriptors`.
     unsafe {
         arch::wrmsr(arch::MSR_EFER, arch::rdmsr(arch::MSR_EFER) | EFER_SCE);
@@ -269,6 +273,7 @@ extern "C" fn aeon_syscall_dispatch(n: u64, a0: u64, a1: u64) -> u64 {
             if !copy_from_user(a0, &mut buf[..len as usize]) {
                 return syscall::ERR;
             }
+            syscall::sanitize_output(&mut buf[..len as usize]);
             crate::log::print_raw(&buf[..len as usize]);
             len
         }

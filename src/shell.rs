@@ -182,7 +182,13 @@ fn cmd_security() {
         yes(b.seed_persisted),
         yes(b.seed_sources > 0)
     );
-    out!("previous boot      {}\n", if b.last_panic_len == 0 { "ended normally" } else { "ended in a panic or exception, see `lastpanic`" });
+    if b.last_panic_len > 0 {
+        out!("previous boot      ended in a panic or exception, see `lastpanic`\n");
+    } else if b.count_enabled && b.boot_count > 0 {
+        out!("previous boot      did not finish booting (hang, reset or power loss): {} failed boot(s) in a row\n", b.boot_count);
+    } else {
+        out!("previous boot      no failure recorded\n");
+    }
     out!("no-execute (NX)    {}\n", yes(s.efer & arch::EFER_NXE != 0));
     out!("write protect      {}\n", yes(s.cr0 & arch::CR0_WP != 0));
     out!("SMEP               {} (cpu supports: {})\n", yes(s.cr4 & arch::CR4_SMEP != 0), yes(f.smep));
@@ -335,7 +341,7 @@ fn cmd_run(name: &str) {
 ", name, usermode::PROGRAMS.join(" ")),
         Err(usermode::RunError::Busy) => out!("a user program is already running (see `ps`, `kill <id>`)
 "),
-        Err(usermode::RunError::NotReady) => out!("user programs need the scheduler (not available in recovery or single-task mode)\n"),
+        Err(usermode::RunError::NotReady) => out!("user programs are not available (needs the scheduler and a CPU with SMAP)\n"),
         Err(usermode::RunError::NoMemory) => out!("cannot start {}: out of memory or task slots
 ", name),
     }

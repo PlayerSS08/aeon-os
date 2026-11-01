@@ -33,6 +33,10 @@ pub fn take(rt: &RuntimeServices, out: &mut [u8; MAX_LEN]) -> usize {
     let mut attr = 0u32;
     let s = (rt.get_variable)(NAME.as_ptr(), &uefi::AEON_GUID, &mut attr, &mut size, out.as_mut_ptr());
     if s != uefi::SUCCESS {
+        if s == uefi::BUFFER_TOO_SMALL {
+            // Not one of ours (too long): delete it so it cannot sit there forever.
+            let _ = (rt.set_variable)(NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, 0, core::ptr::null());
+        }
         return 0;
     }
     // A zero-length write deletes the variable, so the record is shown once.

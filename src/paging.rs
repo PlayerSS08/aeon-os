@@ -31,7 +31,7 @@ const GIB: u64 = 1 << 30;
 const MAX_PHYS: u64 = 512 * GIB;
 
 const N_PD: usize = 64;
-const N_PT: usize = 16;
+const N_PT: usize = 64;
 
 #[repr(C, align(4096))]
 struct Table([u64; 512]);
@@ -314,8 +314,9 @@ pub unsafe fn build(info: &BootInfo, nx: bool, wc_ok: bool, guard_page: u64) -> 
         });
     }
 
-    b.set_page(0, None); // null dereferences fault
-    b.set_page(guard_page, None); // stack overflow faults
+    // Both must really be unmapped: a silent failure would leave null dereferences or stack overflows unchecked.
+    let guards_ok = b.set_page(0, None) & b.set_page(guard_page, None);
+    assert!(guards_ok, "page-table pool exhausted while unmapping the null page or the stack guard");
     // SAFETY: single-threaded init; remember the pool state so pages can be remapped later.
     unsafe { *STATE.get() = PagingState { stats: b.stats, nx: b.nx, wc_ok: b.wc_ok } };
     b.stats

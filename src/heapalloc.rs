@@ -61,7 +61,7 @@ impl Heap {
         self.end - self.start
     }
 
-    fn adjust(layout: Layout) -> (usize, usize) {
+    pub(crate) fn adjust(layout: Layout) -> (usize, usize) {
         (round_up(layout.size().max(1), ALIGN).max(MIN), layout.align().max(ALIGN))
     }
 

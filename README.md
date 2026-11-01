@@ -30,7 +30,7 @@ setup, `R` reboot, `O` power off.
 Boot options (image command line / UEFI load options, plus the text file `EFI/BOOT/aeon.cfg` on the stick, one
 setting per line, `#` starts a comment): `quiet`, `debug`, `verbose` (log instead of
 splash), `nomenu`, `timeout=N`, `mode=WxH` (pick a screen mode, e.g. `mode=1920x1080`), `recovery` (force recovery
-mode), `nocount` (turn boot counting off), `nolapic` (keep the legacy PIT timer instead of the local APIC timer). `debug` implies `verbose`. The effective options are what gets
+mode), `nocount` (turn boot counting off), `nolapic` (keep the legacy PIT timer instead of the local APIC timer). `debug` implies `verbose`. The options from the command line and `aeon.cfg` are what gets
 measured into the TPM.
 
 Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmware "legacy" mode).
@@ -66,7 +66,7 @@ or register values. Those go to serial and debugcon only.
 - **Measured boot**: the boot command line is hashed into TPM PCR 12 (event type `EV_IPL`) through
   `EFI_TCG2_PROTOCOL`, then the PCR is read back and compared with the value computed from the previous
   one. The firmware's own event log stays valid. The firmware measures this image into PCR 4 itself.
-- **Revocation metadata (SBAT)**: the image carries an `.sbat` section (generation 1, component `aeon`), so firmware or tooling can revoke old builds by generation without touching the key.
+- **Revocation metadata (SBAT)**: the image carries an `.sbat` section (generation 1, component `aeon`), for a shim-based chain that reads SBAT. Firmware that loads Aeon directly ignores it; revoking an old build there goes through the `dbx` list.
 - **Boot counting and recovery mode**: a counter in the firmware's variable store is raised at the start of
   every boot and cleared once the kernel is up and its boot-time self-tests survived. After 3 failed boots
   in a row the next boot enters recovery mode: log on screen, the menu waits 10 s for a key, no timer
@@ -77,10 +77,10 @@ or register values. Those go to serial and debugcon only.
 - **Event-log replay**: before leaving the firmware, Aeon reads the TPM event log, replays it and compares
   the result with the TPM's PCRs 0 to 7, 11 and 12. `tpm` and `security` show the outcome. A mismatch
   means the log, the TPM or a measurement is wrong.
-- **Boot-phase measurement**: a marker is extended into PCR 11 just before Aeon leaves the firmware, so a secret sealed to PCR 11 only opens for a boot that got that far.
+- **Boot-phase measurement**: a marker is extended into PCR 11 just before Aeon leaves the firmware, so a secret sealed to PCR 11 only opens for a boot that got that far (to just before leaving the firmware; a crash later in the kernel still holds the normal marker).
 - **Last-panic record**: a panic or CPU exception stores a short text (no addresses) in a firmware variable;
-  the next boot logs it once and deletes it. `lastpanic` shows it, `security` says whether the previous boot
-  ended normally. This is a small version of Linux pstore.
+  the next boot logs it once and deletes it. `lastpanic` shows it, `security` says whether the previous boot panicked, never finished booting (a hang or reset, seen from the boot counter) or left no failure record.
+  This is a small version of Linux pstore.
 - **Seed history**: each boot stores a seed derived from its own (never the seed itself) and mixes the
   previous one into the next, so a machine with no RNG hardware still varies between boots. It is readable
   by the boot stage only (the variable has no runtime access, and the kernel checks that the OS side cannot
@@ -99,7 +99,7 @@ or register values. Those go to serial and debugcon only.
 - Memory freed by the firmware is zeroed before reuse, and freed heap blocks are scrubbed.
 - Firmware input is bounded and validated: ACPI tables checked for signature, length and checksum and
   required to lie inside firmware-described memory; memory-map sizes saturate instead of overflowing;
-  command-line options parsed from a fixed grammar. The parsers are fuzzed in the unit tests.
+  command-line options parsed from a fixed grammar. The parsers get random and mutated input in the unit tests (not a coverage-guided fuzzer).
 - Reports Secure Boot / Setup Mode and TPM presence honestly; makes no attestation claims.
 - CET (shadow stack, branch tracking) and RDSEED are detected and shown by `security`; CET is **not enabled**, because neither QEMU nor software emulation can run it, so it cannot be tested here.
 - **Ring 3**: one built-in user program at a time runs in a 64 KiB window (code page read+execute, rest read+write, never both). `syscall` (write, exit, yield, uptime, getpid) validates pointers against the window and reads them with SMAP lifted only for the copy. A user fault or bad call ends only that task.

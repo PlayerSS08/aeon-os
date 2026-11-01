@@ -109,6 +109,9 @@ fn free_stack(stack: u64, guarded: bool) {
     if guarded {
         crate::paging::restore_page(base);
     }
+    // The stack held saved registers and kernel data: wipe it before the frames can be reused.
+    // SAFETY: the stack pages (above the guard page) are mapped and no longer in use by any task.
+    unsafe { core::ptr::write_bytes(stack as *mut u8, 0, STACK_BYTES) };
     mm::free_frames(base, STACK_PAGES + 1);
 }
 
@@ -130,7 +133,12 @@ pub fn spawn_user(name: &str, rip: u64, user_rsp: u64) -> Option<usize> {
 fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usize> {
     // One extra page below the stack is unmapped as a guard, so an overflow faults immediately.
     let base = mm::alloc_frames(STACK_PAGES + 1)?;
-    let guarded = crate::paging::guard_page(base);
+    // No guard page means a stack overflow would silently corrupt a neighbour: refuse to start the task.
+    if !crate::paging::guard_page(base) {
+        mm::free_frames(base, STACK_PAGES + 1);
+        return None;
+    }
+    let guarded = true;
     let stack = base + 4096;
     let top = stack + STACK_BYTES as u64;
     // The entry function starts as if it had been called: rsp = 8 (mod 16) with a return address on
@@ -252,7 +260,8 @@ pub fn sleep_ms(ms: u64) {
         // SAFETY: interrupts off on a single CPU.
         let s = unsafe { SCHED.get() };
         let c = s.current;
-        s.tasks[c].wake_tick = arch::ticks() + ms.div_ceil(1000 / arch::TIMER_HZ).max(1);
+        // One extra tick: the current tick is already partly over, and a sleep must last at least `ms`.
+        s.tasks[c].wake_tick = arch::ticks().saturating_add(ms.div_ceil(1000 / arch::TIMER_HZ).max(1)).saturating_add(1);
         s.tasks[c].state = State::Sleeping;
     });
     yield_now();

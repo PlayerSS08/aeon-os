@@ -538,15 +538,20 @@ fn read_loaded_image(bs: &BootServices, image: Handle) {
         let units = (li.load_options_size as usize / 2).min(b.cmdline.len() - 1);
         if !li.load_options.is_null() {
             let opts = li.load_options as *const u16;
+            let mut len = 0;
             for i in 0..units {
                 // SAFETY: `units` 16-bit words lie within load_options_size bytes.
                 let c = unsafe { opts.add(i).read_unaligned() };
+                if c == 0 {
+                    break; // a terminating NUL is not part of the options
+                }
                 b.cmdline[i] = if (0x20..0x7F).contains(&c) { c as u8 } else { b'?' };
+                len = i + 1;
             }
-            b.cmdline_len = units;
+            b.cmdline_len = len;
         }
         // Options from `\EFI\BOOT\aeon.cfg` follow the load options, like loader.conf for systemd-boot.
-        let mut raw = [0u8; 256];
+        let mut raw = [0u8; 2048];
         let got = read_config_file(bs, li.device_handle, &mut raw);
         if got > 0 {
             let mut flat = [0u8; 120];
@@ -1406,6 +1411,7 @@ static PANICKING: AtomicBool = AtomicBool::new(false);
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    arch::disable_interrupts();
     if PANICKING.swap(true, Ordering::SeqCst) {
         log::raw_panic_line("[AEON] nested panic, halting\n");
         arch::halt_forever();

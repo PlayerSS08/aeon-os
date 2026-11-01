@@ -165,8 +165,8 @@ unsafe impl GlobalAlloc for KernelAlloc {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if let Some(p) = NonNull::new(ptr) {
             // Scrub freed memory so one task's data never shows up in another's allocation.
-            // SAFETY: the block is `layout.size()` bytes long and no longer in use.
-            unsafe { core::ptr::write_bytes(ptr, 0, layout.size()) };
+            // SAFETY: the block spans the allocator's rounded size (>= `layout.size()`) and is no longer in use.
+            unsafe { core::ptr::write_bytes(ptr, 0, crate::heapalloc::Heap::adjust(layout).0) };
             // SAFETY: the caller guarantees `ptr`/`layout` came from `alloc`; interrupts are off.
             arch::without_interrupts(|| unsafe { HEAP.get().dealloc(p, layout) });
         }
