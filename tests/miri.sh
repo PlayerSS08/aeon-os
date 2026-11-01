@@ -4,4 +4,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly-x86_64-pc-windows-gnu miri test --lib --target x86_64-pc-windows-gnu -- \
-    --skip fuzz --skip never_panic --skip million_a --skip every_truncation --skip fixture
+    --skip fuzz --skip never_panic --skip million_a --skip every_truncation --skip fixture --skip random_garbage

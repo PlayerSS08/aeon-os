@@ -138,7 +138,7 @@ class Vm:
             time.sleep(0.15)
 
     def type(self, s):
-        m = {" ": "spc", "-": "minus", "=": "equal"}
+        m = {" ": "spc", "-": "minus", "=": "equal", ".": "dot", "/": "slash"}
         self.keys(*[m.get(c, c) for c in s])
 
     def shot(self, path_png):
@@ -854,6 +854,19 @@ def t_disk(ctx):
             ("dread 99999999999", "read failed: BadRequest"),
             ("dread", "usage: dread"),
             ("dread 0 600", "offset must be below 512"),
+            ("dls", "        20  HELLO.TXT"),
+            ("dls", "      3000  BIG.BIN"),
+            ("dls", "     <dir>  DOCS/"),
+            ("dls", "Long File Name.txt"),
+            ("dls docs", "NOTE.TXT"),
+            ("dcat hello.txt", "hello from the disk"),
+            ("dcat docs/note.txt", "note in a subdirectory"),
+            ("dcat long file name.txt", "long names are skipped but their short alias works"),
+            ("dcat nosuch.txt", "cannot read 'nosuch.txt': NotFound"),
+            ("dcat docs", "cannot read 'docs': NotAFile"),
+            ("dcat docs/..", "cannot read 'docs/..': BadPath"),
+            ("dcat", "usage: dcat"),
+            ("dls hello.txt", "NotADirectory"),
         ])
     finally:
         vm.close()
@@ -861,7 +874,36 @@ def t_disk(ctx):
     try:
         r.check("no-disk: shell prompt", vm.wait_for("aeon> ", 150, "serial"))
         r.check("no-disk: logged", "no virtio-blk device" in vm.text())
-        run_cmds(vm, r, [("disks", "no disk"), ("dread 0", "no disk")])
+        run_cmds(vm, r, [("disks", "no disk"), ("dread 0", "no disk"), ("dls", "no disk"), ("dcat x", "no disk")])
+    finally:
+        vm.close()
+
+
+def t_disk32(ctx):
+    """A FAT32 volume works the same way, and a disk with no filesystem is reported, not misread."""
+    import mkdisk
+    r = ctx.r
+    img = os.path.join(ctx.work, "disk32.img")
+    with open(img, "wb") as f:
+        f.write(mkdisk.build(True))
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-disk32"), ctx.work, name="disk32", disk=img)
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("disks", "vda  virtio-blk  70000 sectors"),
+            ("dls", "HELLO.TXT"),
+            ("dcat hello.txt", "hello from the disk"),
+            ("dcat docs/note.txt", "note in a subdirectory"),
+        ])
+    finally:
+        vm.close()
+    blank = os.path.join(ctx.work, "blank.img")
+    with open(blank, "wb") as f:
+        f.write(bytes(1024 * 1024))
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-blank"), ctx.work, name="blank", disk=blank)
+    try:
+        r.check("blank: shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [("disks", "2048 sectors"), ("dls", "cannot read a FAT volume: BadBpb"), ("dcat x", "cannot read a FAT volume")])
     finally:
         vm.close()
 
@@ -898,7 +940,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "disk": t_disk, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

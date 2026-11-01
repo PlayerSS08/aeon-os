@@ -76,6 +76,8 @@ const HELP: &str = "commands:
   pci                devices on the PCI bus
   disks              the disk, if there is one
   dread <n> [off]    32 bytes of sector n as hex
+  dls [path]         list a directory on the disk (FAT16/FAT32)
+  dcat <path>        print a file from the disk
   security           which protections are active right now
   tpm                measured-boot PCR values
   lastpanic          how the previous boot ended
@@ -315,6 +317,70 @@ fn cmd_dread(args: &str) {
     }
 }
 
+/// Runs `f` with the first FAT volume on the disk, or says why not.
+fn with_volume<R>(f: impl FnOnce(&crate::fat::Volume, &mut crate::vblk::VirtioBlk) -> R) -> Option<R> {
+    let r = crate::vblk::with_disk(|d| match crate::fat::Volume::open_any(d) {
+        Ok(v) => Ok(f(&v, d)),
+        Err(e) => Err(e),
+    });
+    match r {
+        None => {
+            out!("no disk
+");
+            None
+        }
+        Some(Err(e)) => {
+            out!("cannot read a FAT volume: {:?}
+", e);
+            None
+        }
+        Some(Ok(v)) => Some(v),
+    }
+}
+
+fn cmd_dls(path: &str) {
+    with_volume(|v, d| {
+        let mut n = 0;
+        let r = v.list(d, path, |e| {
+            if e.is_dir {
+                out!("{:>10}  {}/
+", "<dir>", e.name());
+            } else {
+                out!("{:>10}  {}
+", e.size, e.name());
+            }
+            n += 1;
+        });
+        match r {
+            Ok(()) if n == 0 => out!("(empty)
+"),
+            Ok(()) => {}
+            Err(e) => out!("cannot list '{}': {:?}
+", path, e),
+        }
+    });
+}
+
+fn cmd_dcat(path: &str) {
+    if path.is_empty() {
+        out!("usage: dcat <path>
+");
+        return;
+    }
+    with_volume(|v, d| {
+        let mut data = Vec::new();
+        match v.find(d, path).and_then(|e| v.read_file(d, &e, 64 * 1024, &mut data)) {
+            Ok(()) => {
+                log::print_raw(&data);
+                out!("
+");
+            }
+            Err(e) => out!("cannot read '{}': {:?}
+", path, e),
+        }
+    });
+}
+
 fn cmd_pci() {
     let mut n = 0;
     crate::pci::for_each(|d| {
@@ -433,6 +499,8 @@ fn run(line: &str) {
         "spawn" => cmd_spawn(),
         "pci" => cmd_pci(),
         "disks" => cmd_disks(),
+        "dls" => cmd_dls(rest),
+        "dcat" => cmd_dcat(rest),
         "dread" => cmd_dread(rest),
         "block" => cmd_block(),
         "wake" => cmd_wake(),

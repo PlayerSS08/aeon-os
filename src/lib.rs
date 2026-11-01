@@ -18,6 +18,7 @@ pub mod bootinfo;
 pub mod bootopts;
 pub mod cpuid;
 pub mod entropy;
+pub mod fat;
 pub mod eventlog;
 pub mod font;
 pub mod fontdata;
