@@ -527,6 +527,8 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
     }
     idt[32] = Gate::interrupt(aeon_irq_timer_stub as *const () as usize, 0);
     idt[YIELD_VECTOR as usize] = Gate::interrupt(aeon_irq_yield_stub as *const () as usize, 0);
+    // Local APIC spurious interrupts: no EOI, just return.
+    idt[crate::apic::SPURIOUS_VECTOR as usize] = Gate::interrupt(aeon_irq_ignore_stub as *const () as usize, 0);
 
     let idtr = DescPtr { limit: (core::mem::size_of::<[Gate; 256]>() - 1) as u16, base: idt.as_ptr() as u64 };
     // SAFETY: `idtr` describes the static IDT filled in above.
@@ -691,8 +693,10 @@ pub const YIELD_VECTOR: u8 = 0x30;
 /// Counts one timer tick and acknowledges the PIC (IRQ0). Called with interrupts disabled.
 pub fn timer_tick() {
     AEON_TICKS.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: end-of-interrupt command to the master 8259.
-    unsafe { outb(0x20, 0x20) };
+    if !crate::apic::eoi() {
+        // SAFETY: end-of-interrupt command to the master 8259.
+        unsafe { outb(0x20, 0x20) };
+    }
 }
 
 /// Register frame built by `aeon_isr_common` (lowest address first).
@@ -819,6 +823,39 @@ extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
 
 pub const TIMER_HZ: u64 = 100;
 
+/// Remaps the 8259 PICs to vectors 32-47 and masks the slave.
+///
+/// # Safety
+/// Interrupts must be off; writes the fixed legacy PIC ports.
+unsafe fn remap_pic() {
+    // SAFETY: standard 8259A initialisation sequence.
+    unsafe {
+        outb(0x20, 0x11);
+        outb(0xA0, 0x11);
+        outb(0x21, 32);
+        outb(0xA1, 40);
+        outb(0x21, 4);
+        outb(0xA1, 2);
+        outb(0x21, 0x01);
+        outb(0xA1, 0x01);
+        outb(0xA1, 0xFF);
+    }
+}
+
+/// Remaps the 8259 PICs away from the CPU exception vectors and masks every line, for when the local
+/// APIC provides the tick.
+///
+/// # Safety
+/// Interrupts must be off.
+pub unsafe fn mask_pic() {
+    // SAFETY: forwarded contract.
+    unsafe {
+        remap_pic();
+        outb(0x21, 0xFF);
+        outb(0xA1, 0xFF);
+    }
+}
+
 /// Remaps the 8259 PICs to vectors 32-47, unmasks only IRQ0 and programs PIT channel 0 for
 /// `TIMER_HZ`. Interrupts stay disabled; the caller enables them with `sti`.
 ///
@@ -829,16 +866,8 @@ pub unsafe fn start_timer() {
     let divisor = (PIT_BASE_HZ / TIMER_HZ) as u16;
     // SAFETY: standard 8259A/8253 programming sequence on their fixed legacy ports.
     unsafe {
-        outb(0x20, 0x11);
-        outb(0xA0, 0x11);
-        outb(0x21, 32);
-        outb(0xA1, 40);
-        outb(0x21, 4);
-        outb(0xA1, 2);
-        outb(0x21, 0x01);
-        outb(0xA1, 0x01);
+        remap_pic();
         outb(0x21, 0xFE); // only IRQ0 unmasked
-        outb(0xA1, 0xFF);
         outb(0x43, 0x34); // channel 0, lobyte/hibyte, rate generator
         outb(0x40, divisor as u8);
         outb(0x40, (divisor >> 8) as u8);

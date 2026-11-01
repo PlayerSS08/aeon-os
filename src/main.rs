@@ -927,6 +927,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         b.boot_count = count;
         b.count_enabled = counting;
         b.recovery = d.recovery || opts.recovery;
+        b.nolapic = opts.nolapic;
         if b.recovery {
             opts.verbose = true;
             opts.menu_timeout = opts.menu_timeout.max(10);
@@ -1300,8 +1301,13 @@ extern "C" fn kernel_main() -> ! {
         warn!("timer", "recovery mode: timer and scheduler are off; running the shell directly");
         false
     } else {
-        // SAFETY: the IDT routes vector 32 to the tick stub (set up by `init_descriptors`).
-        unsafe { arch::start_timer() };
+        // The local APIC timer is preferred; the PIT stays as the fallback (and with `nolapic`).
+        // SAFETY: interrupts are off; the IDT routes vector 32 to the tick stub and 0xFF to the ignore stub.
+        let lapic = !boot_info().nolapic && boot_info().feat.apic && unsafe { aeon::apic::start_timer(arch::TIMER_HZ) };
+        if !lapic {
+            // SAFETY: the IDT routes vector 32 to the tick stub (set up by `init_descriptors`).
+            unsafe { arch::start_timer() };
+        }
         arch::enable_interrupts();
         let t0 = arch::rdtsc();
         let limit = log::tsc_hz() / 3; // 330 ms
@@ -1310,7 +1316,11 @@ extern "C" fn kernel_main() -> ! {
         }
         let ok = arch::ticks() >= 3;
         if ok {
-            info!("timer", "pit irq0 ok hz={} ticks_seen={}", arch::TIMER_HZ, arch::ticks());
+            if lapic {
+                info!("timer", "lapic timer ok hz={} ticks_seen={}", arch::TIMER_HZ, arch::ticks());
+            } else {
+                info!("timer", "pit irq0 ok hz={} ticks_seen={}", arch::TIMER_HZ, arch::ticks());
+            }
         } else {
             arch::disable_interrupts();
             warn!("timer", "no timer interrupt within 330 ms; no preemption, running the shell directly");

@@ -10,6 +10,7 @@
 extern crate alloc;
 
 pub mod acpi;
+pub mod apicmath;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;
@@ -36,6 +37,8 @@ pub mod global;
 #[cfg(target_os = "uefi")]
 #[macro_use]
 pub mod log;
+#[cfg(target_os = "uefi")]
+pub mod apic;
 #[cfg(target_os = "uefi")]
 pub mod arch;
 #[cfg(target_os = "uefi")]

@@ -101,6 +101,7 @@ fn cmd_info() {
     out!("firmware   {} rev {:#x}, UEFI {}.{}\n", b.fw_vendor_str(), b.fw_revision, b.uefi_revision >> 16, (b.uefi_revision & 0xFFFF) / 10);
     out!("secure boot {}\n", b.secure_boot.name());
     out!("tsc        {} MHz\n", log::tsc_hz() / 1_000_000);
+    out!("timer      {}\n", if crate::apic::active() { "lapic" } else { "pit" });
     out!("image      base {:#x} size {} KiB\n", b.image_base, b.image_size / 1024);
 }
 

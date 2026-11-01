@@ -80,6 +80,8 @@ pub struct BootInfo {
     pub count_enabled: bool,
     /// This boot runs in recovery mode.
     pub recovery: bool,
+    /// The `nolapic` option: keep the PIC/PIT timer.
+    pub nolapic: bool,
     /// Bytes of options taken from the config file (0 if there is none).
     pub cfg_len: usize,
     /// Event-log replay was run (needs a TPM with a readable log).
@@ -159,6 +161,7 @@ impl BootInfo {
             boot_count: 0,
             count_enabled: false,
             recovery: false,
+            nolapic: false,
             cfg_len: 0,
             evlog_checked: false,
             evlog_records: 0,

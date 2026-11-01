@@ -367,6 +367,22 @@ pub fn user_page(addr: u64, writable: bool, exec: bool) -> bool {
     ok
 }
 
+/// Makes sure the 2 MiB page holding `addr` is mapped uncached and no-execute (device registers).
+/// Returns false if that page is not a plain large page afterwards, so callers must not use it.
+pub fn map_mmio_uc(addr: u64) -> bool {
+    let ok = with_builder(|b| {
+        b.set_large(addr, false, Some(Cache::Uc));
+        let Some(slot) = b.pd_slot(addr & !(SZ_2M - 1)) else {
+            return false;
+        };
+        // SAFETY: `slot` points into a live page-directory table.
+        let e = unsafe { *slot };
+        e & P != 0 && e & PS != 0 && e & (PCD | PWT) == (PCD | PWT)
+    });
+    invlpg(addr);
+    ok
+}
+
 /// Loads the page tables built by [`build`].
 ///
 /// # Safety

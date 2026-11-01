@@ -15,6 +15,8 @@ pub struct BootOpts {
     pub recovery: bool,
     /// Do not count boots (kill switch for firmware whose variable writes misbehave).
     pub nocount: bool,
+    /// Keep the legacy PIC/PIT timer even when a local APIC is available.
+    pub nolapic: bool,
     /// Requested screen mode `(width, height)`; ignored when the firmware has no such mode.
     pub mode: Option<(u32, u32)>,
 }
@@ -24,7 +26,7 @@ pub const MAX_TIMEOUT: u8 = 30;
 
 impl Default for BootOpts {
     fn default() -> Self {
-        Self { quiet: false, debug: false, menu_timeout: DEFAULT_TIMEOUT, verbose: false, recovery: false, nocount: false, mode: None }
+        Self { quiet: false, debug: false, menu_timeout: DEFAULT_TIMEOUT, verbose: false, recovery: false, nocount: false, nolapic: false, mode: None }
     }
 }
 
@@ -39,6 +41,7 @@ pub fn parse(cmdline: &str) -> BootOpts {
             "verbose" => o.verbose = true,
             "recovery" => o.recovery = true,
             "nocount" => o.nocount = true,
+            "nolapic" => o.nolapic = true,
             _ => {
                 if let Some(n) = w.strip_prefix("timeout=").and_then(|n| n.parse::<u8>().ok()) {
                     o.menu_timeout = n.min(MAX_TIMEOUT);
@@ -176,6 +179,13 @@ mod config_tests {
         for bad in ["mode=", "mode=1920", "mode=axb", "mode=10x10", "mode=99999x99999", "mode=1920x", "mode=-1x-1"] {
             assert_eq!(parse(bad).mode, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn nolapic_word() {
+        assert!(parse("nolapic").nolapic);
+        assert!(!parse("").nolapic);
+        assert!(!parse("nolapic2 lapic").nolapic);
     }
 
     #[test]
