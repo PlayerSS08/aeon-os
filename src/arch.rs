@@ -506,8 +506,8 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
             cs = in(reg) KERNEL_CS as u64,
             ds = in(reg) KERNEL_DS as u64,
             tr = in(reg) TSS_SEL as u64,
-            tmp = lateout(reg) _,
-            zero = lateout(reg) _,
+            tmp = out(reg) _,
+            zero = out(reg) _,
             options(preserves_flags),
         );
     }
@@ -768,8 +768,8 @@ static IN_EXCEPTION: AtomicBool = AtomicBool::new(false);
 extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
     // SAFETY: `aeon_isr_common` passes the address of the frame it just built on the stack.
     let f = unsafe { &*frame };
-    // NMI and machine check run on their own IST stack and are hardware errors: always fatal, never a task kill.
-    if f.cs & 3 == 3 && f.vector != 2 && f.vector != 18 {
+    // NMI, double fault and machine check mean damaged state or a hardware error: always fatal, never a task kill.
+    if f.cs & 3 == 3 && f.vector != 2 && f.vector != 8 && f.vector != 18 {
         // A user program faulted: end that task, the kernel carries on.
         crate::usermode::user_fault(f, EXC_NAMES.get(f.vector as usize).copied().unwrap_or("unknown"), read_cr2());
     }

@@ -18,6 +18,8 @@ const US: u64 = 1 << 2;
 const PS: u64 = 1 << 7;
 /// PAT selector bit in a 2 MiB page entry (bit 7 is PS there, so PAT lives at bit 12).
 const PAT_LARGE: u64 = 1 << 12;
+/// PAT selector bit in a 4 KiB page entry.
+const PAT_4K: u64 = 1 << 7;
 const NX: u64 = 1 << 63;
 const ADDR: u64 = 0x000F_FFFF_FFFF_F000;
 const CACHE_MASK: u64 = PWT | PCD | PAT_LARGE;
@@ -158,8 +160,8 @@ impl Builder {
             }
             let pt = self.pts.add(self.stats.pt_used).cast::<u64>();
             self.stats.pt_used += 1;
-            // 4 KiB entries keep NX and the UC/WT bits; the large-page PAT bit does not carry over.
-            let attrs = *slot & (NX | PWT | PCD);
+            // 4 KiB entries keep NX and the UC/WT bits; the large-page PAT bit moves to the 4 KiB position.
+            let attrs = (*slot & (NX | PWT | PCD)) | if *slot & PAT_LARGE != 0 { PAT_4K } else { 0 };
             for i in 0..512u64 {
                 *pt.add(i as usize) = (base + i * SZ_4K) | P | RW | attrs;
             }
@@ -178,7 +180,7 @@ impl Builder {
         // SAFETY: `idx < 512`, inside the page table returned by `split`.
         unsafe {
             let e = pt.add(idx);
-            let keep = *e & (PWT | PCD);
+            let keep = *e & (PWT | PCD | PAT_4K);
             *e = match perm {
                 None => 0,
                 Some((w, x)) => {
@@ -210,7 +212,7 @@ impl Builder {
         // entry 0 are live table entries owned by this builder (`addr` is below 512 GiB).
         unsafe {
             let e = pt.add(idx);
-            let keep = *e & (PWT | PCD);
+            let keep = *e & (PWT | PCD | PAT_4K);
             *e = (addr & ADDR) | P | US | keep | if writable { RW } else { 0 } | if exec { 0 } else { self.nx };
             *pd_slot |= US;
             *self.pdpt.cast::<u64>().add((addr / GIB) as usize) |= US;

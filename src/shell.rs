@@ -335,6 +335,7 @@ fn cmd_run(name: &str) {
 ", name, usermode::PROGRAMS.join(" ")),
         Err(usermode::RunError::Busy) => out!("a user program is already running (see `ps`, `kill <id>`)
 "),
+        Err(usermode::RunError::NotReady) => out!("user programs need the scheduler (not available in recovery or single-task mode)\n"),
         Err(usermode::RunError::NoMemory) => out!("cannot start {}: out of memory or task slots
 ", name),
     }

@@ -6,7 +6,7 @@
 //! SMAP temporarily lifted (`stac`/`clac`). A user fault or bad syscall ends only that task.
 
 use core::arch::{asm, global_asm};
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::arch::{self, ExcFrame};
 use crate::mm;
@@ -35,6 +35,8 @@ static AEON_SYSCALL_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
 static WINDOW: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: AtomicUsize = AtomicUsize::new(NO_TASK);
+/// Set once `init` has enabled `syscall`; without it a ring-3 task could never make a call or exit.
+static READY: AtomicBool = AtomicBool::new(false);
 
 /// Points both ring-3 entry paths (interrupts and `syscall`) at the incoming task's kernel stack.
 ///
@@ -68,6 +70,8 @@ global_asm!(
         // Do not leak kernel values in the registers the user ABI treats as clobbered.
         xor ecx, ecx
         xor edx, edx
+        xor edi, edi
+        xor esi, esi
         xor r8d, r8d
         xor r9d, r9d
         xor r10d, r10d
@@ -181,6 +185,7 @@ pub unsafe fn init() {
         arch::wrmsr(MSR_LSTAR, aeon_syscall_entry as *const () as u64);
         arch::wrmsr(MSR_SFMASK, SFMASK);
     }
+    READY.store(true, Ordering::Relaxed);
 }
 
 #[derive(Debug)]
@@ -188,10 +193,15 @@ pub enum RunError {
     Unknown,
     Busy,
     NoMemory,
+    /// Recovery or single-task mode: no scheduler and no `syscall` setup.
+    NotReady,
 }
 
 /// Starts the named built-in program as a ring-3 task and returns its task id.
 pub fn run(name: &str) -> Result<usize, RunError> {
+    if !READY.load(Ordering::Relaxed) {
+        return Err(RunError::NotReady);
+    }
     let code = program(name).ok_or(RunError::Unknown)?;
     let active = ACTIVE.load(Ordering::Relaxed);
     if active != NO_TASK && sched::user_alive(active) {

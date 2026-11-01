@@ -100,7 +100,8 @@ fn stage(name: &'static str) {
 }
 
 fn boot_info() -> &'static mut BootInfo {
-    aeon::boot::info()
+    // SAFETY: only the boot flow in this file uses it, single-threaded, with short-lived references.
+    unsafe { aeon::boot::info_mut() }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1383,8 +1384,8 @@ extern "C" fn kernel_main() -> ! {
         arch::halt_forever();
     }
     sched::init();
-    // SAFETY: the GDT from `init_descriptors` is loaded and interrupts are still off for the scheduler start.
-    unsafe { usermode::init() };
+    // SAFETY: the GDT from `init_descriptors` is loaded, and interrupts are off for the duration of the call.
+    arch::without_interrupts(|| unsafe { usermode::init() });
     for (name, entry) in [("status", shell::status_task as extern "C" fn(usize)), ("shell", shell::shell_task)] {
         match sched::spawn(name, entry, 0) {
             Some(id) => info!("sched", "task {} started as id {}", name, id),

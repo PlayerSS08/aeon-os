@@ -495,6 +495,8 @@ def t_fwshell(ctx):
         vm.wait_for("C recovery mode")
         vm.keys("c")
         r.check("menu key C boots recovery mode", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text(), vm.text()[-400:])
+        r.check("recovery shell prompt", vm.wait_for("aeon> ", 60, "serial"))
+        run_cmds(vm, r, [("run hello", "user programs need the scheduler"), ("run hello", "user programs need the scheduler")])
     finally:
         vm.close()
 
