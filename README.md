@@ -161,7 +161,7 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 
 ## Try it on Windows before using a USB stick
 
-`powershell -ExecutionPolicy Bypass -File toolsun-qemu.ps1 -Build -Disk` builds Aeon and opens it in a QEMU window (needs QEMU in `C:\Program Files\qemu`). `-Disk` attaches a demo FAT disk (`disks`, `dls`, `dcat hello.txt`), `-Release` runs the signed files from `usb/`, `-Cfg "mode=1920x1080"` writes an `aeon.cfg`, `-Mem 64` limits the RAM. The serial log is `target\qemu-serial.log`.
+`powershell -ExecutionPolicy Bypass -File tools\run-qemu.ps1 -Build -Disk` builds Aeon and opens it in a QEMU window (needs QEMU in `C:\Program Files\qemu`). `-Disk` attaches a demo FAT disk (`disks`, `dls`, `dcat hello.txt`), `-Release` runs the signed files from `usb/`, `-Cfg "mode=1920x1080"` writes an `aeon.cfg`, `-Mem 64` limits the RAM. The serial log is `target\qemu-serial.log`.
 
 ## Look and feel
 
