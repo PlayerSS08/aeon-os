@@ -1,6 +1,6 @@
 # Aeon
 
-An 85 KB UEFI x86_64 boot stage and small kernel in Rust (`no_std`, no dependencies). It boots from a USB
+A small UEFI x86_64 boot stage and small kernel in Rust (`no_std`, no dependencies). It boots from a USB
 stick on a UEFI PC, shows a logo with a progress bar, measures its command line into the TPM, seeds its
 own randomness, leaves firmware control, sets up its own CPU and memory protections, and drops into a
 preemptive multitasking kernel with a shell.
@@ -49,8 +49,8 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | kernel-env | copy the memory map, enable NX, GDT/TSS (double-fault stack), IDT, identity-mapped page tables with W^X, unmapped null page and stack guard pages, CR0.WP/SMEP/SMAP/UMIP when supported, own stack |
 | kernel-memory, kernel-tasks | frame allocator, 32 MB heap, PIT tick, scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
 
-Shell commands: `help info version security tpm lastpanic uptime mem ps spawn counters kill memmap log echo sort clear panic reboot
-shutdown`. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
+Shell commands: `help info version cpu security tpm lastpanic uptime mem ps spawn counters kill memmap log echo sort ls cat write rm df run clear panic reboot
+shutdown`. `ls cat write rm df` work on a flat RAM filesystem (64 files, 1 MiB, names up to 32 characters). `run <hello|fault|gp|spin|badcall>` starts a built-in program in ring 3. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
 timer interrupt preempting them. `log` prints the boot log, which the splash held back. Shutdown uses ACPI
 S5, then firmware `ResetSystem`.
 
@@ -102,7 +102,8 @@ or register values. Those go to serial and debugcon only.
   command-line options parsed from a fixed grammar. The parsers are fuzzed in the unit tests.
 - Reports Secure Boot / Setup Mode and TPM presence honestly; makes no attestation claims.
 - CET (shadow stack, branch tracking) and RDSEED are detected and shown by `security`; CET is **not enabled**, because neither QEMU nor software emulation can run it, so it cannot be tested here.
-- Not yet: kernel signature check beyond the firmware's, ring 3.
+- **Ring 3**: one built-in user program at a time runs in a 64 KiB window (code page read+execute, rest read+write, never both). `syscall` (write, exit, yield, uptime, getpid) validates pointers against the window and reads them with SMAP lifted only for the copy. A user fault or bad call ends only that task.
+- Not yet: kernel signature check beyond the firmware's, loading user programs from files.
 
 ## Compared with other boot systems
 
@@ -168,6 +169,7 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 | `paging.rs` | identity-mapped page tables, W^X, guard pages |
 | `mm.rs`, `frames.rs`, `heapalloc.rs` | frame bitmap allocator, free-list heap, `GlobalAlloc` |
 | `sched.rs` | preemptive round-robin tasks (registers + FXSAVE on each stack) |
+| `usermode.rs`, `usercopy.rs`, `syscall.rs`, `ramfs.rs` | ring-3 entry and demo programs, user-pointer checks, syscall numbers, RAM filesystem |
 | `shell.rs`, `keymap.rs`, `power.rs` | shell and status bar, scancode decoder, reboot and ACPI power-off |
 | `fb.rs`, `font.rs`, `log.rs` | framebuffer console, splash and stop screen, public-domain 8x8 font, logger and sinks |
 | `sha256.rs`, `entropy.rs`, `tcg2.rs`, `eventlog.rs`, `bootcount.rs`, `splash.rs`, `logfmt.rs`, `memmap.rs`, `acpi.rs`, `cpuid.rs`, `pixel.rs`, `bootopts.rs`, `bootinfo.rs`, `boot.rs` | pure logic (unit-tested) and boot state |
@@ -184,7 +186,7 @@ emulation limits, and 4K screens (the scale path is unit-tested but not seen; 64
 
 ## Limits and roadmap
 
-Single CPU, identity mapping only, kernel threads only (no ring 3, syscalls, filesystem or networking).
+Single CPU, identity mapping only, RAM-only filesystem, one built-in ring-3 program at a time (no loading from files, no networking).
 A separate kernel hash check would add nothing today: loader and kernel are one image, and the firmware already
 verifies that whole image under Secure Boot. Splitting them only pays off for two kernels to choose between.
-Next: user mode with syscalls, a ramdisk filesystem, a USB keyboard driver, APIC/SMP, and an `aarch64` port.
+Next: LAPIC timer, a USB keyboard driver, SMP, loading programs from files, and an `aarch64` port.
