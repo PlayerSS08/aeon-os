@@ -95,6 +95,19 @@ mod hw {
         })
     }
 
+    /// Writes a 32-bit configuration register (`off` is rounded down to a multiple of 4).
+    pub fn config_write(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
+        let addr = 1u32 << 31 | u32::from(bus) << 16 | u32::from(dev & 31) << 11 | u32::from(func & 7) << 8 | u32::from(off & 0xFC);
+        arch::without_interrupts(|| {
+            // SAFETY: 0xCF8/0xCFC are the PCI configuration mechanism #1 ports. Callers write only
+            // registers they own (the command register of the device they drive).
+            unsafe {
+                outl(CONFIG_ADDRESS, addr);
+                outl(CONFIG_DATA, val);
+            }
+        })
+    }
+
     struct List {
         items: [Option<Device>; MAX_DEVICES],
         n: usize,
@@ -171,7 +184,7 @@ mod hw {
 }
 
 #[cfg(target_os = "uefi")]
-pub use hw::{config_read, find, for_each, scan};
+pub use hw::{config_read, config_write, find, for_each, scan};
 
 #[cfg(test)]
 mod tests {

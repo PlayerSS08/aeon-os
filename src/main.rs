@@ -1350,6 +1350,7 @@ extern "C" fn kernel_main() -> ! {
     // SAFETY: init_frames has run; this is the only heap initialisation.
     let heap = unsafe { mm::init_heap() };
     aeon::pci::scan();
+    aeon::vblk::probe();
     if heap == 0 {
         error!("mm", "could not allocate a kernel heap");
     } else {

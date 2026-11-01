@@ -27,8 +27,9 @@ const CACHE_MASK: u64 = PWT | PCD | PAT_LARGE;
 const SZ_2M: u64 = 2 * 1024 * 1024;
 const SZ_4K: u64 = 4096;
 const GIB: u64 = 1 << 30;
-/// One PDPT covers 512 GiB.
-const MAX_PHYS: u64 = 512 * GIB;
+/// Two PDPTs (PML4 entries 0 and 1) cover 1 TiB, enough for the 64-bit device windows firmware and
+/// QEMU place high in the address space.
+const MAX_PHYS: u64 = 1024 * GIB;
 
 const N_PD: usize = 64;
 const N_PT: usize = 64;
@@ -37,7 +38,8 @@ const N_PT: usize = 64;
 struct Table([u64; 512]);
 
 static PML4: Global<Table> = Global::new(Table([0; 512]));
-static PDPT: Global<Table> = Global::new(Table([0; 512]));
+/// Two adjacent tables, so one index `addr / 1 GiB` (below 1024) addresses both.
+static PDPT: Global<[Table; 2]> = Global::new([const { Table([0; 512]) }; 2]);
 static PDS: Global<[Table; N_PD]> = Global::new([const { Table([0; 512]) }; N_PD]);
 static PTS: Global<[Table; N_PT]> = Global::new([const { Table([0; 512]) }; N_PT]);
 
@@ -53,7 +55,7 @@ pub enum Cache {
 pub struct Stats {
     pub pd_used: usize,
     pub pt_used: usize,
-    /// Pages that could not be mapped (beyond 512 GiB, or the table pool ran out).
+    /// Pages that could not be mapped (beyond 1 TiB, or the table pool ran out).
     pub skipped: usize,
 }
 
@@ -93,7 +95,7 @@ impl Builder {
             return None;
         }
         let gb = (addr / GIB) as usize;
-        // SAFETY: `gb < 512` so the index is inside the PDPT; the table pointers come from statics
+        // SAFETY: `gb < 1024` so the index is inside the pair of PDPTs; the table pointers come from statics
         // owned exclusively by this builder.
         unsafe {
             let e = self.pdpt.cast::<u64>().add(gb);
@@ -265,15 +267,19 @@ fn pe_sections(hdr: &[u8], mut each: impl FnMut(u32, u32, u32)) -> Option<()> {
 pub unsafe fn build(info: &BootInfo, nx: bool, wc_ok: bool, guard_page: u64) -> Stats {
     let mut b = Builder {
         pml4: PML4.as_ptr(),
-        pdpt: PDPT.as_ptr(),
+        pdpt: PDPT.as_ptr().cast::<Table>(),
         pds: PDS.as_ptr().cast::<Table>(),
         pts: PTS.as_ptr().cast::<Table>(),
         nx: if nx { NX } else { 0 },
         wc_ok,
         stats: Stats::default(),
     };
-    // SAFETY: PML4 is a static, 4 KiB-aligned table; entry 0 covers the first 512 GiB.
-    unsafe { *b.pml4.cast::<u64>() = b.pdpt as u64 | P | RW };
+    // SAFETY: PML4 is a static, 4 KiB-aligned table; entry 0 covers the first 512 GiB and entry 1 the
+    // next 512 GiB, through the second table of the adjacent pair.
+    unsafe {
+        *b.pml4.cast::<u64>() = b.pdpt as u64 | P | RW;
+        *b.pml4.cast::<u64>().add(1) = (b.pdpt as u64 + 4096) | P | RW;
+    }
 
     // Low 4 GiB first (legacy MMIO such as the APIC lives here), then everything the firmware
     // described.
@@ -329,7 +335,7 @@ fn with_builder<R>(f: impl FnOnce(&mut Builder) -> R) -> R {
         let st = unsafe { STATE.get() };
         let mut b = Builder {
             pml4: PML4.as_ptr(),
-            pdpt: PDPT.as_ptr(),
+            pdpt: PDPT.as_ptr().cast::<Table>(),
             pds: PDS.as_ptr().cast::<Table>(),
             pts: PTS.as_ptr().cast::<Table>(),
             nx: st.nx,

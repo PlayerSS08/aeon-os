@@ -74,6 +74,8 @@ const HELP: &str = "commands:
   version            Aeon version and revision
   cpu                CPUs, interrupt controllers, address sizes
   pci                devices on the PCI bus
+  disks              the disk, if there is one
+  dread <n> [off]    32 bytes of sector n as hex
   security           which protections are active right now
   tpm                measured-boot PCR values
   lastpanic          how the previous boot ended
@@ -282,6 +284,37 @@ fn cmd_sort(args: &str) {
     out!("\n");
 }
 
+fn cmd_disks() {
+    match crate::vblk::with_disk(|d| crate::block::BlockDev::sectors(d)) {
+        Some(n) => out!("vda  virtio-blk  {} sectors  {} KiB\n", n, n / 2),
+        None => out!("no disk\n"),
+    }
+}
+
+/// `dread <lba> [offset]`: 32 bytes of a sector as hex, for looking at a disk by hand.
+fn cmd_dread(args: &str) {
+    let mut it = args.split_whitespace();
+    let (Some(lba), off) = (it.next().and_then(|s| s.parse::<u64>().ok()), it.next().map_or(Some(0usize), |s| s.parse::<usize>().ok())) else {
+        out!("usage: dread <sector> [offset]\n");
+        return;
+    };
+    let Some(off) = off.filter(|o| *o < crate::block::SECTOR_SIZE) else {
+        out!("offset must be below 512\n");
+        return;
+    };
+    let mut sector = [0u8; crate::block::SECTOR_SIZE];
+    match crate::vblk::with_disk(|d| crate::block::BlockDev::read(d, lba, &mut sector)) {
+        None => out!("no disk\n"),
+        Some(Err(e)) => out!("read failed: {:?}\n", e),
+        Some(Ok(())) => {
+            for b in &sector[off..(off + 32).min(crate::block::SECTOR_SIZE)] {
+                out!("{:02x} ", b);
+            }
+            out!("\n");
+        }
+    }
+}
+
 fn cmd_pci() {
     let mut n = 0;
     crate::pci::for_each(|d| {
@@ -399,6 +432,8 @@ fn run(line: &str) {
         "ps" => cmd_ps(),
         "spawn" => cmd_spawn(),
         "pci" => cmd_pci(),
+        "disks" => cmd_disks(),
+        "dread" => cmd_dread(rest),
         "block" => cmd_block(),
         "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),

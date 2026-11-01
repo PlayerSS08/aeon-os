@@ -45,7 +45,7 @@ def ppm_to_png(ppm, png):
 
 
 class Vm:
-    def __init__(self, esp_dir, work, code=CODE, vars_file=VARS, tpm=False, name="vm", mem=256):
+    def __init__(self, esp_dir, work, code=CODE, vars_file=VARS, tpm=False, name="vm", mem=256, disk=None):
         self.work = work
         self.serial = os.path.join(work, f"{name}.serial")
         self.dcon = os.path.join(work, f"{name}.debugcon")
@@ -62,6 +62,8 @@ class Vm:
             "-debugcon", f"file:{self.dcon}", "-global", "isa-debugcon.iobase=0xe9",
             "-qmp", f"unix:{self.qmp_path},server,nowait", "-no-reboot",
         ]
+        if disk:
+            args += ["-drive", f"file={disk},if=none,id=d0,format=raw,readonly=on", "-device", "virtio-blk-pci,drive=d0,disable-legacy=on"]
         if code == CODE_SB:
             # The SMM-enabled firmware build keeps its variable flash writable only from SMM.
             args += ["-global", "driver=cfi.pflash01,property=secure,value=on"]
@@ -357,7 +359,7 @@ def t_image(ctx):
         r.check(f"{label}: .sbat names the SBAT version and the aeon component",
                 sbat.startswith(b"sbat,1,SBAT Version,sbat,1,") and b"\naeon,1,Aeon,aeon," in sbat, repr(sbat[:120]))
         r.check(f"{label}: .sbat is NUL-terminated", sbat.endswith(b"\n\0"))
-    r.check("image is small (under 200 KiB)", os.path.getsize(ctx.efi) < 200 * 1024, str(os.path.getsize(ctx.efi)))
+    r.check("image is small (under 256 KiB)", os.path.getsize(ctx.efi) < 256 * 1024, str(os.path.getsize(ctx.efi)))
 
 
 def t_commands(ctx):
@@ -832,6 +834,38 @@ def t_pci(ctx):
         vm.close()
 
 
+def t_disk(ctx):
+    """virtio-blk: the disk is found, sectors read back what mkdisk.py wrote, bad requests are refused."""
+    import mkdisk
+    r = ctx.r
+    img = os.path.join(ctx.work, "disk16.img")
+    with open(img, "wb") as f:
+        f.write(mkdisk.build(False))
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-disk"), ctx.work, name="disk", disk=img)
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        r.check("driver logged the disk", "virtio-blk at" in vm.text() and "8192 sectors" in vm.text(), vm.text()[-400:])
+        run_cmds(vm, r, [
+            ("disks", "vda  virtio-blk  8192 sectors  4096 KiB"),
+            ("dread 0", "eb 3c 90 41 45 4f 4e"),
+            ("dread 0 496", "55 aa"),
+            ("dread 8191", "00 00 00 00"),
+            ("dread 8192", "read failed: BadRequest"),
+            ("dread 99999999999", "read failed: BadRequest"),
+            ("dread", "usage: dread"),
+            ("dread 0 600", "offset must be below 512"),
+        ])
+    finally:
+        vm.close()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-nodisk"), ctx.work, name="nodisk")
+    try:
+        r.check("no-disk: shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        r.check("no-disk: logged", "no virtio-blk device" in vm.text())
+        run_cmds(vm, r, [("disks", "no disk"), ("dread 0", "no disk")])
+    finally:
+        vm.close()
+
+
 def t_user(ctx):
     """Ring 3: hello, faulting and bad programs are contained, a spinning program is preempted and killable."""
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="user")
@@ -864,7 +898,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "disk": t_disk, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

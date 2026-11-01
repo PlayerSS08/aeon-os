@@ -12,6 +12,7 @@ extern crate alloc;
 pub mod acpi;
 pub mod anim;
 pub mod apicmath;
+pub mod block;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;
@@ -35,6 +36,7 @@ pub mod spin;
 pub mod syscall;
 pub mod tcg2;
 pub mod usercopy;
+pub mod virtio;
 pub mod waitq;
 
 // `log` defines the logging macros, so it must come before the modules that use them.
@@ -67,6 +69,8 @@ pub mod shell;
 pub mod uefi;
 #[cfg(target_os = "uefi")]
 pub mod usermode;
+#[cfg(target_os = "uefi")]
+pub mod vblk;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Set `AEON_GIT_HASH` in the build environment to embed a revision in the boot banner.
