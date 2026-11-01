@@ -26,6 +26,7 @@ pub mod heapalloc;
 pub mod keymap;
 pub mod logfmt;
 pub mod memmap;
+pub mod pci;
 pub mod pixel;
 pub mod ramfs;
 pub mod sha256;

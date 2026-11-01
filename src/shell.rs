@@ -73,6 +73,7 @@ const HELP: &str = "commands:
   info               firmware, CPU clock, Secure Boot
   version            Aeon version and revision
   cpu                CPUs, interrupt controllers, address sizes
+  pci                devices on the PCI bus
   security           which protections are active right now
   tpm                measured-boot PCR values
   lastpanic          how the previous boot ended
@@ -281,6 +282,17 @@ fn cmd_sort(args: &str) {
     out!("\n");
 }
 
+fn cmd_pci() {
+    let mut n = 0;
+    crate::pci::for_each(|d| {
+        out!("{:02x}:{:02x}.{} {:04x}:{:04x} {}\n", d.bus, d.dev, d.func, d.header.vendor, d.header.device, crate::pci::class_name(d.header.class, d.header.subclass));
+        n += 1;
+    });
+    if n == 0 {
+        out!("no PCI devices found\n");
+    }
+}
+
 static DEMO_QUEUE: sched::WaitQueue = sched::WaitQueue::new();
 
 extern "C" fn waiter(_: usize) {
@@ -386,6 +398,7 @@ fn run(line: &str) {
         "mem" => cmd_mem(),
         "ps" => cmd_ps(),
         "spawn" => cmd_spawn(),
+        "pci" => cmd_pci(),
         "block" => cmd_block(),
         "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),

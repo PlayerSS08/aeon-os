@@ -27,6 +27,24 @@ pub unsafe fn outb(port: u16, val: u8) {
 /// # Safety
 /// Writing to an I/O port can reconfigure hardware; the caller must know what the port does.
 #[inline]
+pub unsafe fn outl(port: u16, val: u32) {
+    // SAFETY: contract above; `out` touches no memory.
+    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)) };
+}
+
+/// # Safety
+/// Reading an I/O port can have side effects on the device; the caller must know what the port does.
+#[inline]
+pub unsafe fn inl(port: u16) -> u32 {
+    let v: u32;
+    // SAFETY: contract above; `in` touches no memory.
+    unsafe { asm!("in eax, dx", in("dx") port, out("eax") v, options(nomem, nostack, preserves_flags)) };
+    v
+}
+
+/// # Safety
+/// Writing to an I/O port can reconfigure hardware; the caller must know what the port does.
+#[inline]
 pub unsafe fn outw(port: u16, val: u16) {
     // SAFETY: contract above; `out` touches no memory.
     unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)) };
