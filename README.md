@@ -1,6 +1,6 @@
 # Aeon
 
-A small UEFI x86_64 boot stage and small kernel in Rust (`no_std`, no dependencies). It boots from a USB
+A small UEFI x86_64 boot stage and small kernel (under 200 KB signed, boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
 stick on a UEFI PC, shows a logo with a progress bar, measures its command line into the TPM, seeds its
 own randomness, leaves firmware control, sets up its own CPU and memory protections, and drops into a
 preemptive multitasking kernel with a shell.
@@ -22,7 +22,7 @@ The image is **signed** with the Aeon release key. Two ways to run it:
 Check the copy with `SHA256.txt` (`sha256sum -c SHA256.txt` or `Get-FileHash`).
 
 While booting you see the logo fade in and a thin bar fill as the real boot stages complete. Press any key
-in the first 2 seconds for the boot menu. The menu leaves the splash and shows the full boot log.
+in the first 2 seconds for the boot menu (Dawn). Move with Up and Down, Enter selects; the letter keys still work. Leaving the menu shows the full boot log.
 
 Menu keys: `Enter` boot, `C` recovery mode, `S` firmware shell (a shell that runs before the kernel through the
 firmware's own input, so USB keyboards work; `boot` continues), `D` debug logging, `F` reboot into firmware
@@ -159,6 +159,10 @@ Screenshots land in `target/test-shots/`. Set `AEON_GIT_HASH` at build time to s
 banner. The fault features (`fault-ud fault-pf fault-stack fault-wx fault-nx fault-panic`) each trigger one
 fault after boot; build them with `cargo build`, never into `usb/`.
 
+## Look and feel
+
+Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (Inter for the wordmark and menu, JetBrains Mono for the shell, both under the SIL Open Font License; texts in `docs/licenses/`). `gfont.rs` looks glyphs up and blends them, `anim.rs` has the easing used by the splash fade and the progress bar. Nothing is needed to build Aeon beyond the committed `fontdata.rs`; Pillow is only needed to regenerate it. The design notes (comparison with other systems, scheduler, security and AI plans) are in `docs/design/aeon-system-design.md`.
+
 ## Source layout
 
 | File | Role |
@@ -166,6 +170,7 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 | `main.rs` | boot flow, boot menu, seed and measured boot, kernel start, panic handler |
 | `uefi.rs` | hand-written UEFI bindings, every used table offset asserted at compile time |
 | `arch.rs` | x86-specific code: port I/O, CPUID, RDRAND, control registers, GDT/TSS/IDT, exception and switch stubs, PIC/PIT, UART |
+| `gfont.rs`, `fontdata.rs`, `anim.rs` | smooth fonts (generated data), glyph blending, easing |
 | `apic.rs`, `apicmath.rs` | local APIC timer (TSC-calibrated, periodic) and its host-tested arithmetic |
 | `paging.rs` | identity-mapped page tables, W^X, guard pages |
 | `mm.rs`, `frames.rs`, `heapalloc.rs` | frame bitmap allocator, free-list heap, `GlobalAlloc` |
