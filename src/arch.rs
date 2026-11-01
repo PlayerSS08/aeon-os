@@ -357,6 +357,9 @@ pub const USER_CS: u16 = 0x2B;
 pub const SYSRET_BASE: u16 = 0x18;
 const TSS_SEL: u16 = 0x30;
 const IST_DOUBLE_FAULT: u8 = 1;
+/// NMI (2) and machine check (18) can arrive while `syscall`/`sysret` has the user's stack pointer loaded
+/// at ring 0, so they get their own stack and never run on whatever `rsp` holds.
+const IST_NMI_MC: u8 = 2;
 
 #[repr(C, packed)]
 struct DescPtr {
@@ -382,6 +385,7 @@ static TSS: Global<Tss> =
     Global::new(Tss { _r0: 0, rsp: [0; 3], _r1: 0, ist: [0; 7], _r2: 0, _r3: 0, iomap_base: 0 });
 static GDT: Global<[u64; 8]> = Global::new([0; 8]);
 static DF_STACK: Global<IstStack> = Global::new(IstStack([0; 16 * 1024]));
+static NMI_STACK: Global<IstStack> = Global::new(IstStack([0; 16 * 1024]));
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -445,7 +449,7 @@ pub fn rsp0() -> u64 {
 /// and stubs referenced here must stay mapped for the life of the kernel.
 pub unsafe fn init_descriptors(kernel_stack_top: u64) {
     // SAFETY: single-threaded init with interrupts off, so these are the only live references.
-    let (gdt, idt, df) = unsafe { (GDT.get(), IDT.get(), DF_STACK.get()) };
+    let (gdt, idt, df, nmi) = unsafe { (GDT.get(), IDT.get(), DF_STACK.get(), NMI_STACK.get()) };
 
     let tss = TSS.as_ptr();
     // SAFETY: `tss` points at the static TSS. The struct is packed (the hardware layout puts rsp0
@@ -456,6 +460,10 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
             .cast::<u64>()
             .add((IST_DOUBLE_FAULT - 1) as usize)
             .write_unaligned(df.0.as_ptr() as u64 + df.0.len() as u64);
+        core::ptr::addr_of_mut!((*tss).ist)
+            .cast::<u64>()
+            .add((IST_NMI_MC - 1) as usize)
+            .write_unaligned(nmi.0.as_ptr() as u64 + nmi.0.len() as u64);
         // No I/O permission bitmap: point past the end of the segment.
         core::ptr::addr_of_mut!((*tss).iomap_base).write_unaligned(core::mem::size_of::<Tss>() as u16);
     }
@@ -507,7 +515,11 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
     // SAFETY: the table and stub symbols are provided by the global_asm! block below.
     let table = unsafe { &aeon_isr_table };
     for (v, &h) in table.iter().enumerate() {
-        let ist = if v == 8 { IST_DOUBLE_FAULT } else { 0 };
+        let ist = match v {
+            8 => IST_DOUBLE_FAULT,
+            2 | 18 => IST_NMI_MC,
+            _ => 0,
+        };
         idt[v] = Gate::interrupt(h, ist);
     }
     for gate in idt.iter_mut().take(48).skip(32) {
@@ -752,7 +764,8 @@ static IN_EXCEPTION: AtomicBool = AtomicBool::new(false);
 extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
     // SAFETY: `aeon_isr_common` passes the address of the frame it just built on the stack.
     let f = unsafe { &*frame };
-    if f.cs & 3 == 3 {
+    // NMI and machine check run on their own IST stack and are hardware errors: always fatal, never a task kill.
+    if f.cs & 3 == 3 && f.vector != 2 && f.vector != 18 {
         // A user program faulted: end that task, the kernel carries on.
         crate::usermode::user_fault(f, EXC_NAMES.get(f.vector as usize).copied().unwrap_or("unknown"), read_cr2());
     }
