@@ -45,7 +45,7 @@ def ppm_to_png(ppm, png):
 
 
 class Vm:
-    def __init__(self, esp_dir, work, code=CODE, vars_file=VARS, tpm=False, name="vm"):
+    def __init__(self, esp_dir, work, code=CODE, vars_file=VARS, tpm=False, name="vm", mem=256):
         self.work = work
         self.serial = os.path.join(work, f"{name}.serial")
         self.dcon = os.path.join(work, f"{name}.debugcon")
@@ -54,7 +54,7 @@ class Vm:
         shutil.copy(vars_file, self.vars)
         self.swtpm = None
         args = [
-            "qemu-system-x86_64", "-machine", "q35,smm=on", "-cpu", "max", "-m", "256", "-vga", "std", "-display", "none",
+            "qemu-system-x86_64", "-machine", "q35,smm=on", "-cpu", "max", "-m", str(mem), "-vga", "std", "-display", "none",
             "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
             "-drive", f"if=pflash,format=raw,unit=1,file={self.vars}",
             "-drive", f"format=raw,file=fat:rw:{esp_dir}",
