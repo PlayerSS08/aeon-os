@@ -10,6 +10,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch;
 use crate::global::Global;
 use crate::mm;
+use crate::readyq::ReadyQueue;
+use crate::schedtrace::{Event, Reason, TraceRing};
 use crate::waitq::WaitList;
 
 pub const MAX_TASKS: usize = 16;
@@ -75,10 +77,19 @@ struct Sched {
     active: bool,
     /// Top of the boot thread's stack: the kernel stack ring-3 entries use while task 0 runs.
     boot_stack_top: u64,
+    /// The ready queue (CA-6 layer 4): ids of the tasks that can run, front first. It holds exactly the
+    /// tasks whose state is `Ready`; the running task, the idle task and any waiting task are not in it.
+    ready: ReadyQueue<MAX_TASKS>,
 }
 
 static SCHED: Global<Sched> =
-    Global::new(Sched { tasks: [FREE_TASK; MAX_TASKS], current: 0, active: false, boot_stack_top: 0 });
+    Global::new(Sched { tasks: [FREE_TASK; MAX_TASKS], current: 0, active: false, boot_stack_top: 0, ready: ReadyQueue::new() });
+
+/// How many context switches the trace remembers (the totals keep counting past this).
+pub const TRACE_LEN: usize = 1024;
+
+/// The scheduler trace. A separate all-zero static, so its 16 KiB stay in `.bss` and out of the image.
+static TRACE: Global<TraceRing<TRACE_LEN>> = Global::new(TraceRing::new());
 
 /// Initial x87/SSE state for new tasks: FCW = 0x037F, MXCSR = 0x1F80, everything else zero.
 const fn fx_template() -> [u8; 512] {
@@ -178,6 +189,8 @@ fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usi
         let n = name.len().min(NAME_LEN);
         nm[..n].copy_from_slice(&name.as_bytes()[..n]);
         s.tasks[slot] = Task { state: State::Ready, rsp: sp, stack, wake_tick: 0, ticks: 0, name: nm, name_len: n, user: user_rsp.is_some() };
+        // A new task is ready: it joins the back of the queue.
+        s.ready.push_back(slot as u8);
         Some(slot)
     })
     .or_else(|| {
@@ -212,9 +225,15 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
             panic!("kernel stack overflow in task {} ({})", cur, core::str::from_utf8(&s.tasks[cur].name[..s.tasks[cur].name_len]).unwrap_or("?"));
         }
     }
-    if s.tasks[cur].state == State::Running {
-        s.tasks[cur].state = State::Ready;
-    }
+    // Why the task is leaving the CPU: this is what the trace records.
+    let leaving = s.tasks[cur].state;
+    let reason = match leaving {
+        State::Blocked => Reason::Block,
+        State::Sleeping => Reason::Sleep,
+        State::Dead => Reason::Exit,
+        _ if timer != 0 => Reason::Timer,
+        _ => Reason::Yield,
+    };
     // Release stacks of finished tasks (never the one we are switching away from this instant).
     for i in 1..MAX_TASKS {
         if s.tasks[i].state == State::Dead && i != cur {
@@ -222,18 +241,32 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
             s.tasks[i] = FREE_TASK;
         }
     }
-    for t in s.tasks.iter_mut() {
-        if t.state == State::Sleeping && t.wake_tick <= now {
-            t.state = State::Ready;
+    // Tasks whose sleep is over become ready and join the back of the queue first ...
+    for i in 1..MAX_TASKS {
+        if s.tasks[i].state == State::Sleeping && s.tasks[i].wake_tick <= now {
+            s.tasks[i].state = State::Ready;
+            s.ready.push_back(i as u8);
         }
     }
-    let mut next = 0;
-    for k in 1..=MAX_TASKS {
-        let i = (cur + k) % MAX_TASKS;
-        if i != 0 && s.tasks[i].state == State::Ready {
-            next = i;
-            break;
+    // ... then the task that was running goes behind them (the idle task is never queued).
+    if s.tasks[cur].state == State::Running {
+        s.tasks[cur].state = State::Ready;
+        if cur != 0 {
+            s.ready.push_back(cur as u8);
         }
+    }
+    // Selection: the front of the ready queue, or the idle task when the queue is empty. A stale id
+    // (a task that is no longer ready) is skipped; `kill` removes ids, so this should never happen.
+    let next = loop {
+        match s.ready.pop_front() {
+            Some(id) if s.tasks[id as usize % MAX_TASKS].state == State::Ready => break id as usize % MAX_TASKS,
+            Some(_) => continue,
+            None => break 0,
+        }
+    };
+    if next != cur {
+        // SAFETY: interrupts are off (this is the interrupt path), so no other reference to the trace exists.
+        unsafe { TRACE.get_irqs_off() }.push(Event { tick: now, from: cur as u8, to: next as u8, reason });
     }
     s.current = next;
     s.tasks[next].state = State::Running;
@@ -291,6 +324,7 @@ impl WaitQueue {
                 let t = &mut s.tasks[id as usize % MAX_TASKS];
                 if t.state == State::Blocked {
                     t.state = State::Ready;
+                    s.ready.push_back((id as usize % MAX_TASKS) as u8);
                     woken += 1;
                 }
             });
@@ -358,8 +392,74 @@ pub fn kill(id: usize) -> bool {
             return false;
         }
         s.tasks[id].state = State::Dead;
+        // A task that was waiting its turn must not stay in the ready queue.
+        s.ready.remove(id as u8);
         true
     })
+}
+
+/// Calls `f(id, name)` for every task in the ready queue, front first (the order they will run in).
+pub fn ready_order(mut f: impl FnMut(usize, &str)) {
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        let s = unsafe { SCHED.get_irqs_off() };
+        for id in s.ready.iter() {
+            let t = &s.tasks[id as usize % MAX_TASKS];
+            f(id as usize, core::str::from_utf8(&t.name[..t.name_len]).unwrap_or("?"));
+        }
+    });
+}
+
+/// True when the ready queue holds exactly the tasks whose state is `Ready` (the invariant the scheduler
+/// relies on). For tests and the `queue` command.
+pub fn queue_consistent() -> bool {
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        let s = unsafe { SCHED.get_irqs_off() };
+        let ready_tasks = s.tasks.iter().enumerate().filter(|(i, t)| *i != 0 && t.state == State::Ready).count();
+        s.ready.len() == ready_tasks && s.ready.iter().all(|id| s.tasks[id as usize % MAX_TASKS].state == State::Ready)
+    })
+}
+
+/// Totals of the scheduler trace: switches in all, how many were kept, and the count per reason.
+pub struct TraceSummary {
+    pub total: u64,
+    pub held: usize,
+    pub by_reason: [u64; Reason::COUNT],
+}
+
+pub fn trace_summary() -> TraceSummary {
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        let t = unsafe { TRACE.get_irqs_off() };
+        let mut by_reason = [0u64; Reason::COUNT];
+        for r in Reason::ALL {
+            by_reason[r.index()] = t.count(r);
+        }
+        TraceSummary { total: t.total(), held: t.len(), by_reason }
+    })
+}
+
+/// The last `max` recorded switches, oldest first. Copied out so the caller can print slowly with
+/// interrupts on.
+pub fn trace_snapshot(max: usize) -> alloc::vec::Vec<Event> {
+    let mut out = alloc::vec::Vec::with_capacity(max.min(TRACE_LEN));
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        let t = unsafe { TRACE.get_irqs_off() };
+        let skip = t.len().saturating_sub(max);
+        for e in t.iter().skip(skip) {
+            out.push(e);
+        }
+    });
+    out
+}
+
+pub fn trace_reset() {
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        unsafe { TRACE.get_irqs_off() }.reset();
+    });
 }
 
 /// True while task `id` is a live ring-3 task.
