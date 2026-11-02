@@ -1,0 +1,126 @@
+kind,test_case,name,value,unit_or_detail
+check,M1,kernel boots to the shell prompt,PASS,
+check,M2,boot log shows numbered stages and 'boot complete',PASS,17
+check,M5,timer source is reported (lapic or pit),PASS,"firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7
+secure boot unknown
+tsc        2422 MHz
+timer      lapic
+image      base 0xde8e000 size 1724 KiB"
+check,M2,"diagnostic commands answer (version, info, cpu, security)",PASS,
+check,TC1,boot,PASS,
+check,TC1,two tasks created,PASS,"started worker-a as task 3
+started worker-b as task 4"
+check,TC1,both workers got CPU (preemption works),PASS,"{3: 304, 4: 304}"
+check,TC1,both counters advanced,PASS,"['223', '227']->['1591', '1622']"
+check,TC1,fairness: the two workers are within 25% of each other,PASS,1.0
+check,TC2,boot,PASS,
+check,TC2,user program (ring 3) started,PASS,started spin as task 7
+check,TC2,a task blocked on a wait queue was created,PASS,started waiter as task 8 (it waits until you type `wake`)
+check,TC2,4 workers all got CPU,PASS,"{3: 123, 4: 123, 5: 123, 6: 123}"
+check,TC2,the ring-3 task got CPU,PASS,{7: 123}
+check,TC2,the blocked task used no CPU,PASS,{8: 0}
+check,TC2,fairness: runnable tasks within 40% of each other,PASS,1.0
+check,TC2,wake releases the blocked task,PASS,"woke 1 task(s)
+aeon> waiter: woke up"
+check,TC3,boot,PASS,
+check,TC3,spawn reported two task ids,PASS,"started worker-a as task 3
+started worker-b as task 4"
+check,TC3,"one worker stopped, one remains",PASS,task 4 stopped
+check,TC3,the lone worker keeps running,PASS,[0.9818181818181818]
+check,TC3,the lone worker gets about twice the share of a worker in TC1,PASS,0.982 vs 0.4903
+check,TC3,`kill 0` is refused,PASS,no killable task 0
+check,TC3,`kill 99` is refused,PASS,no killable task 99
+check,TC3,`kill x` is refused,PASS,usage: kill <id>
+check,TC4,boot,PASS,
+check,TC4,every busy task got CPU,PASS,"[70, 70, 70, 70, 70, 70, 70, 70, 70]"
+check,TC4,the shell stays responsive under load,PASS,still-alive
+check,TC4,ten ring-3 launches under load all worked,PASS,launched=10 greeted=10
+check,TC4,no frame leak: free frames are back to the starting value,PASS,55131 vs 55131
+check,TC4,20 files stored,PASS,"20 file(s), used 90 of 1048576 bytes"
+check,TC4,the heap returned to its baseline after removing the files,PASS,0 -> 1
+check,TC5,boot,PASS,
+check,TC5,`run nosuch` -> unknown program,PASS,"unknown program 'nosuch', available: hello fault gp spin badcall"
+check,TC5,`run fault` -> killed: #PF,PASS,"ted fault as task 3
+aeon> [   9.993698] WARN  user task 3 killed: #PF page fault at rip=0x2912005 error_code=0x7 cr2=0x100000
+[user] task killed: #PF page fault"
+check,TC5,`run gp` -> #GP,PASS,"k 3
+aeon> [  11.076466] WARN  user task 3 killed: #GP general protection at rip=0x2912000 error_code=0x0 cr2=0x100000
+[user] task killed: #GP general protection"
+check,TC5,`run badcall` -> exited with code 0,PASS,"started badcall as task 3
+aeon> [user] task 3 exited with code 0"
+check,TC5,`cat nothere` -> no such file,PASS,no such file 'nothere'
+check,TC5,`write` -> bad name,PASS,"bad name '' (1-32 chars each, no backslash or control characters, path up to 128)"
+check,TC5,`write a/b x` -> no such folder,PASS,no such folder for 'a/b' (make it with `mkdir`)
+check,TC5,`rmdir nosuch` -> no such folder,PASS,no such folder 'nosuch'
+check,TC5,`rm nothere` -> no such file,PASS,no such file 'nothere'
+check,TC5,`sort 5 a` -> not a number,PASS,not a number: a
+check,TC5,`hlep` -> Did you mean `help`,PASS,unknown command 'hlep'. Did you mean `help`? (`help` lists everything)
+check,TC5,`dread 99999` -> no disk,PASS,no disk
+check,TC5,after every failure the kernel and shell still answer,PASS,kernel-alive
+check,TC5,failed ring-3 programs leaked no frames,PASS,55131 vs 55131
+check,TC5,no ring-3 task is left behind,PASS,"{0: ('idle', 'ready', 2425), 1: ('status', 'sleeping', 52), 2: ('shell', 'running', 17)}"
+check,M6,boot,PASS,
+check,M6,waiter is blocked,PASS,"{0: ('idle', 'ready', 443), 1: ('status', 'sleeping', 10), 2: ('shell', 'running', 0), 3: ('waiter', 'blocked', 0)}"
+check,M6,a blocked task uses 0 CPU ticks over 3 s,PASS,"('waiter', 'blocked', 0) -> ('waiter', 'blocked', 0)"
+check,M6,wake releases exactly one waiter,PASS,"woke 1 task(s)
+aeon> waiter: woke up"
+check,M6,the woken task ran,PASS,
+check,M6,a second wake finds nobody,PASS,woke 0 task(s)
+check,TC6,boot,PASS,
+check,TC6,two tasks created,PASS,"started worker-a as task 3
+started worker-b as task 4"
+check,TC6,both workers got CPU (preemption works),PASS,"{3: 304, 4: 304}"
+check,TC6,both counters advanced,PASS,"['217', '224']->['1578', '1608']"
+check,TC6,fairness: the two workers are within 25% of each other,PASS,1.0
+check,TC6,boot,PASS,
+check,TC6,two tasks created,PASS,"started worker-a as task 3
+started worker-b as task 4"
+check,TC6,both workers got CPU (preemption works),PASS,"{3: 306, 4: 306}"
+check,TC6,both counters advanced,PASS,"['222', '227']->['1547', '1584']"
+check,TC6,fairness: the two workers are within 25% of each other,PASS,1.0
+check,TC6,boot,PASS,
+check,TC6,two tasks created,PASS,"started worker-a as task 3
+started worker-b as task 4"
+check,TC6,both workers got CPU (preemption works),PASS,"{3: 304, 4: 304}"
+check,TC6,both counters advanced,PASS,"['218', '225']->['1552', '1584']"
+check,TC6,fairness: the two workers are within 25% of each other,PASS,1.0
+check,TC6,all repeats keep the fairness ratio above 0.75,PASS,"[1.0, 1.0, 1.0]"
+check,TC6,timer rate repeats within 10%,PASS,0.006426285255622419
+check,TC6,boot time repeats within 25%,PASS,0.014599247896946173
+check,TC6,a deterministic command gives identical output in two fresh boots,PASS,"[['1 3 5 9'], ['1 3 5 9']]"
+metric,M1,kernel uptime when the shell starts,3.245687,s
+metric,TC1,"worker CPU ticks (a, b)","[304, 304]",ticks
+metric,TC1,fairness ratio min/max,1.0,
+metric,TC1,measured timer rate,96.1,Hz
+metric,TC1,CPU share per task,"{""idle"": 0.0, ""status"": 0.0194, ""shell"": 0.0, ""worker-a"": 0.4903, ""worker-b"": 0.4903}",
+metric,TC2,runnable tasks,5,
+metric,TC2,fairness ratio min/max over runnable tasks,1.0,
+metric,TC2,tasks alive,9,
+metric,TC2,CPU share per task,"{""idle#0"": 0.0, ""status#1"": 0.016, ""shell#2"": 0.0, ""worker-a#3"": 0.1968, ""worker-b#4"": 0.1968, ""worker-a#5"": 0.1968, ""worker-b#6"": 0.1968, ""spin#7"": 0.1968, ""waiter#8"": 0.0}",
+metric,TC3,CPU share of the lone worker,0.982,of all ticks
+metric,TC3,CPU share of one worker when two run (TC1),0.4903,of all ticks
+metric,TC4,busy tasks,9,
+metric,TC4,fairness ratio min/max with 9 busy tasks,1.0,
+metric,TC4,CPU share of one busy task with 9 busy tasks,0.109,of all ticks
+metric,TC4,ring-3 launches accepted,10,of 10
+metric,TC4,ring-3 launches that printed their greeting,10,of 10
+metric,TC4,frames free before / after,55131 / 55131,frames
+metric,TC4,heap used before / with 20 files / after,0 / 2 / 1,KiB
+metric,TC6,"worker CPU ticks (a, b)","[304, 304]",ticks
+metric,TC6,fairness ratio min/max,1.0,
+metric,TC6,measured timer rate,96.1,Hz
+metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0194, ""shell"": 0.0, ""worker-a"": 0.4903, ""worker-b"": 0.4903}",
+metric,TC6,"worker CPU ticks (a, b)","[306, 306]",ticks
+metric,TC6,fairness ratio min/max,1.0,
+metric,TC6,measured timer rate,96.7,Hz
+metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0192, ""shell"": 0.0, ""worker-a"": 0.4904, ""worker-b"": 0.4904}",
+metric,TC6,"worker CPU ticks (a, b)","[304, 304]",ticks
+metric,TC6,fairness ratio min/max,1.0,
+metric,TC6,measured timer rate,96.1,Hz
+metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0194, ""shell"": 0.0, ""worker-a"": 0.4903, ""worker-b"": 0.4903}",
+metric,TC6,fairness ratios,"[1.0, 1.0, 1.0]",
+metric,TC6,timer rates,"[96.1, 96.7, 96.1]",Hz
+metric,TC6,boot times (kernel uptime at shell start),"[3.261044, 3.240348, 3.213766]",s
+metric,TC6,timer-rate spread across repeats,0.64,%
+metric,TC6,boot-time spread across repeats,1.46,%
+metric,size,kernel image (unsigned build),248832,bytes

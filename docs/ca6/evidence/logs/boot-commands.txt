@@ -1,0 +1,34 @@
+== version
+Aeon 0.9.0 git=unknown x86_64 UEFI, sbat generation 1
+== info
+firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7
+secure boot unknown
+tsc        2422 MHz
+timer      lapic
+image      base 0xde8e000 size 1724 KiB
+== cpu
+cpus        1 usable (ACPI MADT)
+local APIC  0xfee00000
+I/O APIC    0xfec00000
+APIC flag   yes (CPUID)
+address     40 physical bits, 57 virtual bits
+hypervisor  yes
+running on  CPU 0 only (other CPUs are not started yet)
+== security
+secure boot        unknown
+secure boot keys   platform key enrolled: no; revocation list (dbx): 0 bytes
+boot loader iface  5 of 5 variables published
+measured boot      no (TPM present: no)
+boot seed          2 hardware source(s), previous-boot seed mixed in: no; canary randomised: yes
+previous boot      no failure recorded
+no-execute (NX)    yes
+write protect      yes
+SMEP               yes (cpu supports: yes)
+SMAP               yes (cpu supports: yes)
+UMIP               yes (cpu supports: yes)
+W^X page tables    yes, null page unmapped, guard pages under every stack
+shadow stack (CET) not enabled (cpu supports: no)
+branch tracking    not enabled (cpu supports: no)
+boot counter       0 failed boot(s) before this one; recovery mode: no
+event log          not replayed
+ring 3             yes: user programs run unprivileged, only the syscall gate leads back (try `run hello`)

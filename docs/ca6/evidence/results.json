@@ -1,0 +1,687 @@
+{
+  "checks": [
+    {
+      "tc": "M1",
+      "check": "kernel boots to the shell prompt",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "M2",
+      "check": "boot log shows numbered stages and 'boot complete'",
+      "pass": true,
+      "detail": "17"
+    },
+    {
+      "tc": "M5",
+      "check": "timer source is reported (lapic or pit)",
+      "pass": true,
+      "detail": "firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7\nsecure boot unknown\ntsc        2422 MHz\ntimer      lapic\nimage      base 0xde8e000 size 1724 KiB"
+    },
+    {
+      "tc": "M2",
+      "check": "diagnostic commands answer (version, info, cpu, security)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC1",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC1",
+      "check": "two tasks created",
+      "pass": true,
+      "detail": "started worker-a as task 3\nstarted worker-b as task 4"
+    },
+    {
+      "tc": "TC1",
+      "check": "both workers got CPU (preemption works)",
+      "pass": true,
+      "detail": "{3: 304, 4: 304}"
+    },
+    {
+      "tc": "TC1",
+      "check": "both counters advanced",
+      "pass": true,
+      "detail": "['223', '227']->['1591', '1622']"
+    },
+    {
+      "tc": "TC1",
+      "check": "fairness: the two workers are within 25% of each other",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "TC2",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC2",
+      "check": "user program (ring 3) started",
+      "pass": true,
+      "detail": "started spin as task 7"
+    },
+    {
+      "tc": "TC2",
+      "check": "a task blocked on a wait queue was created",
+      "pass": true,
+      "detail": "started waiter as task 8 (it waits until you type `wake`)"
+    },
+    {
+      "tc": "TC2",
+      "check": "4 workers all got CPU",
+      "pass": true,
+      "detail": "{3: 123, 4: 123, 5: 123, 6: 123}"
+    },
+    {
+      "tc": "TC2",
+      "check": "the ring-3 task got CPU",
+      "pass": true,
+      "detail": "{7: 123}"
+    },
+    {
+      "tc": "TC2",
+      "check": "the blocked task used no CPU",
+      "pass": true,
+      "detail": "{8: 0}"
+    },
+    {
+      "tc": "TC2",
+      "check": "fairness: runnable tasks within 40% of each other",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "TC2",
+      "check": "wake releases the blocked task",
+      "pass": true,
+      "detail": "woke 1 task(s)\naeon> waiter: woke up"
+    },
+    {
+      "tc": "TC3",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC3",
+      "check": "spawn reported two task ids",
+      "pass": true,
+      "detail": "started worker-a as task 3\nstarted worker-b as task 4"
+    },
+    {
+      "tc": "TC3",
+      "check": "one worker stopped, one remains",
+      "pass": true,
+      "detail": "task 4 stopped"
+    },
+    {
+      "tc": "TC3",
+      "check": "the lone worker keeps running",
+      "pass": true,
+      "detail": "[0.9818181818181818]"
+    },
+    {
+      "tc": "TC3",
+      "check": "the lone worker gets about twice the share of a worker in TC1",
+      "pass": true,
+      "detail": "0.982 vs 0.4903"
+    },
+    {
+      "tc": "TC3",
+      "check": "`kill 0` is refused",
+      "pass": true,
+      "detail": "no killable task 0"
+    },
+    {
+      "tc": "TC3",
+      "check": "`kill 99` is refused",
+      "pass": true,
+      "detail": "no killable task 99"
+    },
+    {
+      "tc": "TC3",
+      "check": "`kill x` is refused",
+      "pass": true,
+      "detail": "usage: kill <id>"
+    },
+    {
+      "tc": "TC4",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC4",
+      "check": "every busy task got CPU",
+      "pass": true,
+      "detail": "[70, 70, 70, 70, 70, 70, 70, 70, 70]"
+    },
+    {
+      "tc": "TC4",
+      "check": "the shell stays responsive under load",
+      "pass": true,
+      "detail": "still-alive"
+    },
+    {
+      "tc": "TC4",
+      "check": "ten ring-3 launches under load all worked",
+      "pass": true,
+      "detail": "launched=10 greeted=10"
+    },
+    {
+      "tc": "TC4",
+      "check": "no frame leak: free frames are back to the starting value",
+      "pass": true,
+      "detail": "55131 vs 55131"
+    },
+    {
+      "tc": "TC4",
+      "check": "20 files stored",
+      "pass": true,
+      "detail": "20 file(s), used 90 of 1048576 bytes"
+    },
+    {
+      "tc": "TC4",
+      "check": "the heap returned to its baseline after removing the files",
+      "pass": true,
+      "detail": "0 -> 1"
+    },
+    {
+      "tc": "TC5",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC5",
+      "check": "`run nosuch` -> unknown program",
+      "pass": true,
+      "detail": "unknown program 'nosuch', available: hello fault gp spin badcall"
+    },
+    {
+      "tc": "TC5",
+      "check": "`run fault` -> killed: #PF",
+      "pass": true,
+      "detail": "ted fault as task 3\naeon> [   9.993698] WARN  user task 3 killed: #PF page fault at rip=0x2912005 error_code=0x7 cr2=0x100000\n[user] task killed: #PF page fault"
+    },
+    {
+      "tc": "TC5",
+      "check": "`run gp` -> #GP",
+      "pass": true,
+      "detail": "k 3\naeon> [  11.076466] WARN  user task 3 killed: #GP general protection at rip=0x2912000 error_code=0x0 cr2=0x100000\n[user] task killed: #GP general protection"
+    },
+    {
+      "tc": "TC5",
+      "check": "`run badcall` -> exited with code 0",
+      "pass": true,
+      "detail": "started badcall as task 3\naeon> [user] task 3 exited with code 0"
+    },
+    {
+      "tc": "TC5",
+      "check": "`cat nothere` -> no such file",
+      "pass": true,
+      "detail": "no such file 'nothere'"
+    },
+    {
+      "tc": "TC5",
+      "check": "`write` -> bad name",
+      "pass": true,
+      "detail": "bad name '' (1-32 chars each, no backslash or control characters, path up to 128)"
+    },
+    {
+      "tc": "TC5",
+      "check": "`write a/b x` -> no such folder",
+      "pass": true,
+      "detail": "no such folder for 'a/b' (make it with `mkdir`)"
+    },
+    {
+      "tc": "TC5",
+      "check": "`rmdir nosuch` -> no such folder",
+      "pass": true,
+      "detail": "no such folder 'nosuch'"
+    },
+    {
+      "tc": "TC5",
+      "check": "`rm nothere` -> no such file",
+      "pass": true,
+      "detail": "no such file 'nothere'"
+    },
+    {
+      "tc": "TC5",
+      "check": "`sort 5 a` -> not a number",
+      "pass": true,
+      "detail": "not a number: a"
+    },
+    {
+      "tc": "TC5",
+      "check": "`hlep` -> Did you mean `help`",
+      "pass": true,
+      "detail": "unknown command 'hlep'. Did you mean `help`? (`help` lists everything)"
+    },
+    {
+      "tc": "TC5",
+      "check": "`dread 99999` -> no disk",
+      "pass": true,
+      "detail": "no disk"
+    },
+    {
+      "tc": "TC5",
+      "check": "after every failure the kernel and shell still answer",
+      "pass": true,
+      "detail": "kernel-alive"
+    },
+    {
+      "tc": "TC5",
+      "check": "failed ring-3 programs leaked no frames",
+      "pass": true,
+      "detail": "55131 vs 55131"
+    },
+    {
+      "tc": "TC5",
+      "check": "no ring-3 task is left behind",
+      "pass": true,
+      "detail": "{0: ('idle', 'ready', 2425), 1: ('status', 'sleeping', 52), 2: ('shell', 'running', 17)}"
+    },
+    {
+      "tc": "M6",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "M6",
+      "check": "waiter is blocked",
+      "pass": true,
+      "detail": "{0: ('idle', 'ready', 443), 1: ('status', 'sleeping', 10), 2: ('shell', 'running', 0), 3: ('waiter', 'blocked', 0)}"
+    },
+    {
+      "tc": "M6",
+      "check": "a blocked task uses 0 CPU ticks over 3 s",
+      "pass": true,
+      "detail": "('waiter', 'blocked', 0) -> ('waiter', 'blocked', 0)"
+    },
+    {
+      "tc": "M6",
+      "check": "wake releases exactly one waiter",
+      "pass": true,
+      "detail": "woke 1 task(s)\naeon> waiter: woke up"
+    },
+    {
+      "tc": "M6",
+      "check": "the woken task ran",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "M6",
+      "check": "a second wake finds nobody",
+      "pass": true,
+      "detail": "woke 0 task(s)"
+    },
+    {
+      "tc": "TC6",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC6",
+      "check": "two tasks created",
+      "pass": true,
+      "detail": "started worker-a as task 3\nstarted worker-b as task 4"
+    },
+    {
+      "tc": "TC6",
+      "check": "both workers got CPU (preemption works)",
+      "pass": true,
+      "detail": "{3: 304, 4: 304}"
+    },
+    {
+      "tc": "TC6",
+      "check": "both counters advanced",
+      "pass": true,
+      "detail": "['217', '224']->['1578', '1608']"
+    },
+    {
+      "tc": "TC6",
+      "check": "fairness: the two workers are within 25% of each other",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "TC6",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC6",
+      "check": "two tasks created",
+      "pass": true,
+      "detail": "started worker-a as task 3\nstarted worker-b as task 4"
+    },
+    {
+      "tc": "TC6",
+      "check": "both workers got CPU (preemption works)",
+      "pass": true,
+      "detail": "{3: 306, 4: 306}"
+    },
+    {
+      "tc": "TC6",
+      "check": "both counters advanced",
+      "pass": true,
+      "detail": "['222', '227']->['1547', '1584']"
+    },
+    {
+      "tc": "TC6",
+      "check": "fairness: the two workers are within 25% of each other",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "TC6",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "TC6",
+      "check": "two tasks created",
+      "pass": true,
+      "detail": "started worker-a as task 3\nstarted worker-b as task 4"
+    },
+    {
+      "tc": "TC6",
+      "check": "both workers got CPU (preemption works)",
+      "pass": true,
+      "detail": "{3: 304, 4: 304}"
+    },
+    {
+      "tc": "TC6",
+      "check": "both counters advanced",
+      "pass": true,
+      "detail": "['218', '225']->['1552', '1584']"
+    },
+    {
+      "tc": "TC6",
+      "check": "fairness: the two workers are within 25% of each other",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "TC6",
+      "check": "all repeats keep the fairness ratio above 0.75",
+      "pass": true,
+      "detail": "[1.0, 1.0, 1.0]"
+    },
+    {
+      "tc": "TC6",
+      "check": "timer rate repeats within 10%",
+      "pass": true,
+      "detail": "0.006426285255622419"
+    },
+    {
+      "tc": "TC6",
+      "check": "boot time repeats within 25%",
+      "pass": true,
+      "detail": "0.014599247896946173"
+    },
+    {
+      "tc": "TC6",
+      "check": "a deterministic command gives identical output in two fresh boots",
+      "pass": true,
+      "detail": "[['1 3 5 9'], ['1 3 5 9']]"
+    }
+  ],
+  "metrics": [
+    {
+      "tc": "M1",
+      "name": "kernel uptime when the shell starts",
+      "value": 3.245687,
+      "unit": "s"
+    },
+    {
+      "tc": "TC1",
+      "name": "worker CPU ticks (a, b)",
+      "value": [
+        304,
+        304
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "TC1",
+      "name": "fairness ratio min/max",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "TC1",
+      "name": "measured timer rate",
+      "value": 96.1,
+      "unit": "Hz"
+    },
+    {
+      "tc": "TC1",
+      "name": "CPU share per task",
+      "value": "{\"idle\": 0.0, \"status\": 0.0194, \"shell\": 0.0, \"worker-a\": 0.4903, \"worker-b\": 0.4903}",
+      "unit": ""
+    },
+    {
+      "tc": "TC2",
+      "name": "runnable tasks",
+      "value": 5,
+      "unit": ""
+    },
+    {
+      "tc": "TC2",
+      "name": "fairness ratio min/max over runnable tasks",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "TC2",
+      "name": "tasks alive",
+      "value": 9,
+      "unit": ""
+    },
+    {
+      "tc": "TC2",
+      "name": "CPU share per task",
+      "value": "{\"idle#0\": 0.0, \"status#1\": 0.016, \"shell#2\": 0.0, \"worker-a#3\": 0.1968, \"worker-b#4\": 0.1968, \"worker-a#5\": 0.1968, \"worker-b#6\": 0.1968, \"spin#7\": 0.1968, \"waiter#8\": 0.0}",
+      "unit": ""
+    },
+    {
+      "tc": "TC3",
+      "name": "CPU share of the lone worker",
+      "value": 0.982,
+      "unit": "of all ticks"
+    },
+    {
+      "tc": "TC3",
+      "name": "CPU share of one worker when two run (TC1)",
+      "value": 0.4903,
+      "unit": "of all ticks"
+    },
+    {
+      "tc": "TC4",
+      "name": "busy tasks",
+      "value": 9,
+      "unit": ""
+    },
+    {
+      "tc": "TC4",
+      "name": "fairness ratio min/max with 9 busy tasks",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "TC4",
+      "name": "CPU share of one busy task with 9 busy tasks",
+      "value": 0.109,
+      "unit": "of all ticks"
+    },
+    {
+      "tc": "TC4",
+      "name": "ring-3 launches accepted",
+      "value": 10,
+      "unit": "of 10"
+    },
+    {
+      "tc": "TC4",
+      "name": "ring-3 launches that printed their greeting",
+      "value": 10,
+      "unit": "of 10"
+    },
+    {
+      "tc": "TC4",
+      "name": "frames free before / after",
+      "value": "55131 / 55131",
+      "unit": "frames"
+    },
+    {
+      "tc": "TC4",
+      "name": "heap used before / with 20 files / after",
+      "value": "0 / 2 / 1",
+      "unit": "KiB"
+    },
+    {
+      "tc": "TC6",
+      "name": "worker CPU ticks (a, b)",
+      "value": [
+        304,
+        304
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "TC6",
+      "name": "fairness ratio min/max",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "measured timer rate",
+      "value": 96.1,
+      "unit": "Hz"
+    },
+    {
+      "tc": "TC6",
+      "name": "CPU share per task",
+      "value": "{\"idle\": 0.0, \"status\": 0.0194, \"shell\": 0.0, \"worker-a\": 0.4903, \"worker-b\": 0.4903}",
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "worker CPU ticks (a, b)",
+      "value": [
+        306,
+        306
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "TC6",
+      "name": "fairness ratio min/max",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "measured timer rate",
+      "value": 96.7,
+      "unit": "Hz"
+    },
+    {
+      "tc": "TC6",
+      "name": "CPU share per task",
+      "value": "{\"idle\": 0.0, \"status\": 0.0192, \"shell\": 0.0, \"worker-a\": 0.4904, \"worker-b\": 0.4904}",
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "worker CPU ticks (a, b)",
+      "value": [
+        304,
+        304
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "TC6",
+      "name": "fairness ratio min/max",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "measured timer rate",
+      "value": 96.1,
+      "unit": "Hz"
+    },
+    {
+      "tc": "TC6",
+      "name": "CPU share per task",
+      "value": "{\"idle\": 0.0, \"status\": 0.0194, \"shell\": 0.0, \"worker-a\": 0.4903, \"worker-b\": 0.4903}",
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "fairness ratios",
+      "value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "timer rates",
+      "value": [
+        96.1,
+        96.7,
+        96.1
+      ],
+      "unit": "Hz"
+    },
+    {
+      "tc": "TC6",
+      "name": "boot times (kernel uptime at shell start)",
+      "value": [
+        3.261044,
+        3.240348,
+        3.213766
+      ],
+      "unit": "s"
+    },
+    {
+      "tc": "TC6",
+      "name": "timer-rate spread across repeats",
+      "value": 0.64,
+      "unit": "%"
+    },
+    {
+      "tc": "TC6",
+      "name": "boot-time spread across repeats",
+      "value": 1.46,
+      "unit": "%"
+    },
+    {
+      "tc": "size",
+      "name": "kernel image (unsigned build)",
+      "value": 248832,
+      "unit": "bytes"
+    }
+  ],
+  "seconds": 444.9,
+  "window_s": 6.0,
+  "repeats": 3
+}
