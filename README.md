@@ -1,6 +1,6 @@
 # Aeon
 
-A small UEFI x86_64 boot stage and small kernel (about 245 KB signed (250,408 bytes), under the 256 KiB size limit the tests enforce; boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
+A small UEFI x86_64 boot stage and small kernel (about 261 KB signed (260,648 bytes), under the 256 KiB size limit the tests enforce; boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
 stick on a UEFI PC, shows a logo with a progress bar, measures its command line into the TPM, seeds its
 own randomness, leaves firmware control, sets up its own CPU and memory protections, and drops into a
 preemptive multitasking kernel with a shell.
@@ -169,7 +169,7 @@ Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (
 
 ### Screenshots
 
-Taken by the boot tests (`target/test-shots/`) from the 0.9.0 build in QEMU at 1280x800.
+Taken by the boot tests (`target/test-shots/`) from the 0.9.1 build in QEMU at 1280x800.
 
 | Splash | Dawn boot menu | Shell |
 |---|---|---|

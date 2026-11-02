@@ -10,11 +10,11 @@ A pure-Rust, `no_std`, zero-dependency UEFI x86_64 micro-OS. Kernel is called Ne
 
 | Task | Command (from `G:\Aeon\OS`, Git Bash) |
 |---|---|
-| Host unit tests (225) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
+| Host unit tests (237) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
 | Clippy | `cargo clippy --release -- -D warnings` and `cargo clippy --target x86_64-pc-windows-gnu --lib -- -D warnings` |
 | Release build | `cargo build --release` (output `target\x86_64-unknown-uefi\release\aeon.efi`) |
 | Full test run (about 10 min, lint + host tests + QEMU boot tests in WSL Ubuntu) | `bash tests/run.sh` (run it detached and wait; it exceeds a 10 min tool limit). One test: `bash tests/run.sh -k console` |
-| Latest result | 322 passed, 0 failed (full suite, 2026-11-02, after the second session) |
+| Latest result | 359 passed, 0 failed (full suite, 2026-11-02, 0.9.1); CA-6 evidence run 111 passed |
 | See Aeon in a QEMU window | `powershell -ExecutionPolicy Bypass -File tools\run-qemu.ps1 -Build -Disk` |
 | Signed release for the pendrive | `bash tools/release.sh` (builds with reproducible flags, signs in WSL with the key in `~/.aeon-keys`, rewrites `usb/`) |
 | Tester's checklist | `G:\AEON-TEST-GUIDE.md` |
@@ -29,7 +29,7 @@ Boot-test screenshots land in `target\test-shots\` (the console test saves `cons
 
 ## State of the pendrive
 
-`usb/` in the repo holds the signed 0.9.0 image (commit `5984d8b`, 250,408 bytes, SHA-256 `d56d5f68...6d97`; reproducible build checked). The signing certificate is unchanged, so nothing needs re-enrolling. The pendrive `D:` (label AEON, FAT32) still holds the OLD 0.8.1 files from commit `274fab4` until someone copies `usb\EFI\BOOT\BOOTX64.EFI`, `aeon-secureboot.cer` and `SHA256.txt` onto it. The copy at `S:\Works\Projects\Aeon` is old (from `ad5d657`).
+`usb/` in the repo holds the signed 0.9.1 image (built from commit `e9a6794`, 260,648 bytes, SHA-256 `7f30212a...7de6`; reproducible build checked; the older 0.9.0 image was `5984d8b`). The signing certificate is unchanged, so nothing needs re-enrolling. The pendrive `D:` (label AEON, FAT32) still holds the OLD 0.8.1 files from commit `274fab4` until someone copies `usb\EFI\BOOT\BOOTX64.EFI`, `aeon-secureboot.cer` and `SHA256.txt` onto it. The copy at `S:\Works\Projects\Aeon` is old (from `ad5d657`).
 
 ## What is built (all tested in QEMU, none on real hardware yet)
 
@@ -136,3 +136,21 @@ Asked to check `docs/` and finish what was open.
 | Tests | 225 host tests, 322 QEMU checks, 0 failed. Both clippy gates clean. |
 
 Next in the report's order: step 4 (real PC; needs a person), 9 (fuzz/Miri; needs tool approval), 10 (IOAPIC, keyboard on IRQ1), then the real-disk driver (AHCI or NVMe, depends on what `pci` shows on the owner's PC), address spaces and the ELF loader.
+
+## Fourth pass (2026-11-02): CA-6 layers completed
+
+The assignment was re-read layer by layer. My earlier "all met" claim was too generous, so these gaps were closed:
+
+| Gap found | What was added | Where to see it |
+|---|---|---|
+| No real ready queue (the scheduler scanned the task array) | `src/readyq.rs`, wired into the scheduler | `queue` command |
+| No scheduler trace | `src/schedtrace.rs`, a ring of every switch with its reason | `trace`, `trace all`, `trace reset` |
+| No cooperative against timer demonstration | `spawn coop`; 24 times the switch rate | `spawn`, `spawn coop`, `trace` |
+| Jobs never finished, so no turnaround or response | `job <units> [more]`; ratios match the equal-share prediction within 2.5% | `job 600 300 150` |
+| No shared-resource problem and fix | `race` (20,000 of 40,000 lost) and `race lock` (0 lost) | `race`, `race lock` |
+| No allocation failure path | `alloc <KiB>` with timing and clean refusal | `alloc 64`, `alloc 99999999` |
+| Report had 14 sections, viva questions were guessed | Package rewritten to the assignment's 20 sections and its real 20 viva questions | `docs/ca6/` |
+
+Results: 237 host tests, 359 QEMU checks, 111 evidence checks, all passing; signed 0.9.1 release built, release tests 16 of 16, reproducible. The image is now 260,648 bytes signed, 1.5 KB under the 256 KiB test limit, so decision 9 (size budget) is the next constraint.
+
+Still for the student: write `docs/ca6/contribution-statement.md`, check and sign `ai-disclosure.md`, answer viva Q17 (CA-5) and Q18 (CA-4), verify the references. The pendrive is not updated (it was not plugged in).
