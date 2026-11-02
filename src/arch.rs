@@ -928,6 +928,14 @@ pub fn irq_restore(was_enabled: bool) {
     }
 }
 
+/// True when the interrupt flag (IF) is set, i.e. an interrupt handler could run right now.
+pub fn interrupts_enabled() -> bool {
+    let flags: u64;
+    // SAFETY: only reads RFLAGS.
+    unsafe { asm!("pushfq", "pop {}", out(reg) flags) };
+    flags & (1 << 9) != 0
+}
+
 pub fn disable_interrupts() {
     // SAFETY: clearing IF is always safe.
     unsafe { asm!("cli", options(nomem, nostack)) };

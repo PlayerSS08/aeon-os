@@ -89,7 +89,7 @@ pub unsafe fn init_frames(info: &BootInfo) -> FrameStats {
 pub fn alloc_frames(n: usize) -> Option<u64> {
     arch::without_interrupts(|| {
         // SAFETY: interrupts are off on a single CPU, so no other reference to the allocator exists.
-        let f = unsafe { FRAMES.get() }.as_mut()?;
+        let f = unsafe { FRAMES.get_irqs_off() }.as_mut()?;
         f.alloc_contig(n).map(|i| i as u64 * FRAME_SIZE)
     })
 }
@@ -98,7 +98,7 @@ pub fn alloc_frames(n: usize) -> Option<u64> {
 pub fn free_frames(addr: u64, n: usize) {
     arch::without_interrupts(|| {
         // SAFETY: as in `alloc_frames`.
-        if let Some(f) = unsafe { FRAMES.get() }.as_mut() {
+        if let Some(f) = unsafe { FRAMES.get_irqs_off() }.as_mut() {
             let first = (addr / FRAME_SIZE) as usize;
             for i in first..first + n {
                 f.free(i);
@@ -110,9 +110,9 @@ pub fn free_frames(addr: u64, n: usize) {
 pub fn frame_stats() -> FrameStats {
     arch::without_interrupts(|| {
         // SAFETY: as in `alloc_frames`.
-        let total = unsafe { *TOTAL_FRAMES.get() };
+        let total = unsafe { *TOTAL_FRAMES.get_irqs_off() };
         // SAFETY: as above; interrupts are off.
-        match unsafe { FRAMES.get() }.as_ref() {
+        match unsafe { FRAMES.get_irqs_off() }.as_ref() {
             Some(f) => FrameStats { total, free: f.free_frames(), largest_run: f.largest_free_run() },
             None => FrameStats { total: 0, free: 0, largest_run: 0 },
         }
@@ -146,7 +146,7 @@ pub unsafe fn init_heap() -> usize {
 pub fn heap_stats() -> HeapStats {
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let h = unsafe { HEAP.get() };
+        let h = unsafe { HEAP.get_irqs_off() };
         HeapStats { capacity: h.capacity(), used: h.used(), holes: h.hole_count() }
     })
 }
@@ -158,7 +158,7 @@ pub struct KernelAlloc;
 unsafe impl GlobalAlloc for KernelAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: interrupts are disabled inside, so no other reference to HEAP exists.
-        arch::without_interrupts(|| unsafe { HEAP.get() }.alloc(layout))
+        arch::without_interrupts(|| unsafe { HEAP.get_irqs_off() }.alloc(layout))
             .map_or(core::ptr::null_mut(), NonNull::as_ptr)
     }
 
@@ -168,7 +168,7 @@ unsafe impl GlobalAlloc for KernelAlloc {
             // SAFETY: the block spans the allocator's rounded size (>= `layout.size()`) and is no longer in use.
             unsafe { core::ptr::write_bytes(ptr, 0, crate::heapalloc::Heap::adjust(layout).0) };
             // SAFETY: the caller guarantees `ptr`/`layout` came from `alloc`; interrupts are off.
-            arch::without_interrupts(|| unsafe { HEAP.get().dealloc(p, layout) });
+            arch::without_interrupts(|| unsafe { HEAP.get_irqs_off().dealloc(p, layout) });
         }
     }
 }

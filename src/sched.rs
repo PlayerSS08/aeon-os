@@ -99,7 +99,7 @@ const FRAME_QWORDS: usize = 512 / 8 + GPR_COUNT + 5;
 pub fn init() {
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         s.tasks[0] = Task { state: State::Running, name: *b"idle\0\0\0\0\0\0\0\0\0\0\0\0", name_len: 4, ..FREE_TASK };
         s.current = 0;
         s.boot_stack_top = arch::rsp0();
@@ -172,7 +172,7 @@ fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usi
 
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         let slot = s.tasks.iter().position(|t| t.state == State::Free)?;
         let mut nm = [0u8; NAME_LEN];
         let n = name.len().min(NAME_LEN);
@@ -195,7 +195,7 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     }
     // SAFETY: interrupt context on a single CPU; no other reference to SCHED is live because every
     // other access disables interrupts first.
-    let s = unsafe { SCHED.get() };
+    let s = unsafe { SCHED.get_irqs_off() };
     if !s.active {
         return sp;
     }
@@ -261,13 +261,13 @@ impl WaitQueue {
     pub fn wait(&self) {
         let blocked = arch::without_interrupts(|| {
             // SAFETY: interrupts off on a single CPU.
-            let s = unsafe { SCHED.get() };
+            let s = unsafe { SCHED.get_irqs_off() };
             let c = s.current;
             if !s.active || c == 0 {
                 return false;
             }
             // SAFETY: as above; the list is only touched with interrupts off.
-            let list = unsafe { self.list.get() };
+            let list = unsafe { self.list.get_irqs_off() };
             if !list.push(c as u8) {
                 return false;
             }
@@ -283,9 +283,9 @@ impl WaitQueue {
     pub fn wake_all(&self) -> usize {
         arch::without_interrupts(|| {
             // SAFETY: interrupts off on a single CPU.
-            let s = unsafe { SCHED.get() };
+            let s = unsafe { SCHED.get_irqs_off() };
             // SAFETY: as above.
-            let list = unsafe { self.list.get() };
+            let list = unsafe { self.list.get_irqs_off() };
             let mut woken = 0;
             list.drain(|id| {
                 let t = &mut s.tasks[id as usize % MAX_TASKS];
@@ -324,7 +324,7 @@ pub fn sleep_ms(ms: u64) {
     }
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         let c = s.current;
         // One extra tick: the current tick is already partly over, and a sleep must last at least `ms`.
         s.tasks[c].wake_tick = arch::ticks().saturating_add(ms.div_ceil(1000 / arch::TIMER_HZ).max(1)).saturating_add(1);
@@ -337,7 +337,7 @@ pub fn sleep_ms(ms: u64) {
 pub fn exit() -> ! {
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         let c = s.current;
         if c != 0 {
             s.tasks[c].state = State::Dead;
@@ -353,7 +353,7 @@ pub fn exit() -> ! {
 pub fn kill(id: usize) -> bool {
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         if id == 0 || id >= MAX_TASKS || id == s.current || matches!(s.tasks[id].state, State::Free | State::Dead) {
             return false;
         }
@@ -366,7 +366,7 @@ pub fn kill(id: usize) -> bool {
 pub fn user_alive(id: usize) -> bool {
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         id < MAX_TASKS && s.tasks[id].user && !matches!(s.tasks[id].state, State::Free | State::Dead)
     })
 }
@@ -387,7 +387,7 @@ pub struct TaskInfo<'a> {
 pub fn for_each(mut f: impl FnMut(TaskInfo<'_>)) {
     arch::without_interrupts(|| {
         // SAFETY: interrupts off on a single CPU.
-        let s = unsafe { SCHED.get() };
+        let s = unsafe { SCHED.get_irqs_off() };
         for (id, t) in s.tasks.iter().enumerate() {
             if t.state != State::Free {
                 f(TaskInfo { id, name: core::str::from_utf8(&t.name[..t.name_len]).unwrap_or("?"), state: t.state, ticks: t.ticks });

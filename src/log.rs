@@ -104,7 +104,7 @@ fn with_logger<R>(f: impl FnOnce(&mut Logger) -> R) -> Option<R> {
             return None;
         }
         // SAFETY: BUSY was clear, so no other `&mut Logger` exists; it is cleared again below.
-        let r = f(unsafe { LOGGER.get() });
+        let r = f(unsafe { LOGGER.get_irqs_off() });
         BUSY.store(false, Ordering::Release);
         Some(r)
     })
@@ -176,7 +176,7 @@ pub fn replay(mut f: impl FnMut(&[u8])) {
     loop {
         let n = with_logger(|_| {
             // SAFETY: BUSY is held by `with_logger`, so no other reference to the ring exists.
-            let (a, b) = unsafe { RING.get() }.slices();
+            let (a, b) = unsafe { RING.get_irqs_off() }.slices();
             let total = a.len() + b.len();
             if pos >= total {
                 return 0;
@@ -208,7 +208,7 @@ pub fn log(level: Level, target: &str, args: fmt::Arguments) {
     let bytes = line.finish();
     with_logger(|l| {
         // SAFETY: BUSY is held by `with_logger`, so no other reference to the ring exists.
-        unsafe { RING.get() }.push(bytes);
+        unsafe { RING.get_irqs_off() }.push(bytes);
         if let Some(u) = l.uart.as_mut() {
             u.line(level, bytes);
         }
@@ -242,7 +242,14 @@ pub fn print_raw(bytes: &[u8]) {
 }
 
 /// Releases the re-entrancy guard after a fault so the fault report can be printed.
+///
+/// The code that was interrupted may have been in the middle of a log write, so after this the logger
+/// can be in a half-updated state. That is only acceptable because the caller halts the machine when it
+/// is done: it must never return to the interrupted code, which would still believe it owns the logger.
+/// Interrupts are switched off here so nothing else can run in between either (the rule is enforced,
+/// not just promised).
 pub fn reset_after_fault() {
+    arch::disable_interrupts();
     BUSY.store(false, Ordering::SeqCst);
 }
 

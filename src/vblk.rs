@@ -5,10 +5,10 @@
 //! the device sees comes from the frame allocator, which is identity mapped, so physical = virtual.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{fence, AtomicBool, Ordering};
 
 use crate::block::{check_request, BlockDev, BlockError, SECTOR_SIZE};
-use crate::spin::SpinLock;
+use crate::global::Global;
 use crate::{arch, log, mm, paging, pci, virtio};
 
 // Common configuration register offsets (virtio spec 4.1.4.3).
@@ -103,7 +103,25 @@ fn bar_base(d: &pci::Device, bar: u8) -> Option<u64> {
     (base != 0).then_some(base)
 }
 
-static DISK: SpinLock<Option<VirtioBlk>> = SpinLock::new(None);
+/// The disk, if there is one. `DISK_BUSY` is the only thing that lets code touch it (see `with_disk`).
+///
+/// This is a flag and not a `SpinLock` on purpose: a `SpinLock` switches interrupts off, and a disk
+/// request polls for up to `TIMEOUT_SECONDS`. That would stop the timer, the scheduler and the
+/// keyboard polling for the whole wait. With a flag the timer keeps running during a request.
+static DISK: Global<Option<VirtioBlk>> = Global::new(None);
+static DISK_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Takes the disk. If another task is in the middle of a request, sleeps 10 ms and tries again.
+/// Never call it from an interrupt handler (it may sleep).
+fn take_disk() {
+    while DISK_BUSY.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        crate::sched::sleep_ms(10);
+    }
+}
+
+fn release_disk() {
+    DISK_BUSY.store(false, Ordering::Release);
+}
 
 /// Finds a virtio-blk device and brings it up. Logs the result; keeps the device for `with_disk`.
 pub fn probe() {
@@ -114,16 +132,24 @@ pub fn probe() {
     match VirtioBlk::init(&dev) {
         Ok(d) => {
             info!("vblk", "virtio-blk at {:02x}:{:02x}.{}: {} sectors ({} KiB), queue size {}", dev.bus, dev.dev, dev.func, d.sectors, d.sectors / 2, d.qsize);
-            *DISK.lock() = Some(d);
+            take_disk();
+            // SAFETY: `DISK_BUSY` is held, so no other reference to the disk exists.
+            unsafe { *DISK.get() = Some(d) };
+            release_disk();
         }
         Err(e) => warn!("vblk", "virtio-blk at {:02x}:{:02x}.{} not usable: {}", dev.bus, dev.dev, dev.func, e),
     }
 }
 
-/// Runs `f` on the disk, or returns `None` when there is none.
+/// Runs `f` on the disk, or returns `None` when there is none. Interrupts stay on while `f` runs, so
+/// `f` may be slow (a request can poll for seconds); another task asking for the disk waits its turn.
+/// Do not call it again from inside `f`, and never from an interrupt handler.
 pub fn with_disk<R>(f: impl FnOnce(&mut VirtioBlk) -> R) -> Option<R> {
-    let mut g = DISK.lock();
-    g.as_mut().map(f)
+    take_disk();
+    // SAFETY: `DISK_BUSY` is held until `release_disk`, so this is the only reference to the disk.
+    let r = unsafe { DISK.get() }.as_mut().map(f);
+    release_disk();
+    r
 }
 
 impl VirtioBlk {
