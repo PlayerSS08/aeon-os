@@ -126,7 +126,7 @@ fn calibrate_tsc(bs: &BootServices) -> u64 {
 /// Lists the firmware's screen modes and lets the pure `gopmode::choose` pick one: the largest with a
 /// linear framebuffer (so the console fills the panel), or the size asked for with `mode=WxH`.
 fn pick_gop_mode(gop: &Gop, want: Option<(u32, u32)>) -> Option<u32> {
-    const MAX_MODES: usize = 64;
+    const MAX_MODES: usize = 128;
     // SAFETY: `gop.mode` is set by firmware and valid for the protocol's lifetime.
     let (max_mode, current) = unsafe { ((*gop.mode).max_mode, (*gop.mode).mode) };
     let mut modes = [gopmode::ModeInfo { index: 0, width: 0, height: 0, linear: false }; MAX_MODES];

@@ -22,7 +22,7 @@ The image is **signed** with the Aeon release key. Two ways to run it:
 Check the copy with `SHA256.txt` (`sha256sum -c SHA256.txt` or `Get-FileHash`).
 
 While booting you see the logo fade in and a thin bar fill as the real boot stages complete. The boot menu
-(Dawn) opens first with "Boot Aeon" highlighted and counts down 2 seconds; with no key Aeon boots normally. Any key stops the countdown. Move with Up and Down, Enter selects; the letter keys still work. Booting from the menu goes back to the splash; leaving it for recovery or the firmware shell shows the full boot log. `nomenu` skips Dawn.
+(Dawn) opens first with "Boot Aeon" highlighted and counts down 1 second; with no key Aeon boots normally. Any key stops the countdown. Move with Up and Down, Enter selects; the letter keys still work. Booting from the menu goes back to the splash; leaving it for recovery or the firmware shell shows the full boot log. `nomenu` skips Dawn.
 
 Menu keys: `Enter` boot, `C` recovery mode, `S` firmware shell (a shell that runs before the kernel through the
 firmware's own input, so USB keyboards work; `boot` continues), `D` debug logging, `F` reboot into firmware
@@ -111,7 +111,7 @@ or register values. Those go to serial and debugcon only.
 |---|---|---|---|---|
 | Signed chain | shim (Microsoft-signed), then signed loader and kernel | `bootmgfw.efi`, `winload.efi`, boot drivers, ELAM | Boot ROM, LLB, iBoot, kernel; signed system volume | one signed image; certificate to enroll |
 | Measured boot | PCRs 4, 7, 9, 11, 12 | PCR 7 and the TCG log, used by BitLocker | Secure Enclave policy, no TPM | command line into PCR 12, verified by read-back |
-| Boot menu | GRUB, systemd-boot | Windows Boot Manager | Startup Options | menu first, 2 s countdown, firmware input |
+| Boot menu | GRUB, systemd-boot | Windows Boot Manager | Startup Options | menu first, 1 s countdown, firmware input |
 | Boot options | kernel command line | BCD store | boot-args | `quiet debug verbose nomenu timeout=N` |
 | Firmware setup from the menu | `systemctl reboot --firmware-setup` | "UEFI Firmware Settings" | n/a | `F` in the menu (OsIndications) |
 | Tell the OS who booted it | Boot Loader Interface variables | BCD / `bootmgr` state | iBoot handoff | publishes `LoaderInfo` |

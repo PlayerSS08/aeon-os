@@ -21,7 +21,7 @@ pub struct BootOpts {
     pub mode: Option<(u32, u32)>,
 }
 
-pub const DEFAULT_TIMEOUT: u8 = 2;
+pub const DEFAULT_TIMEOUT: u8 = 1;
 pub const MAX_TIMEOUT: u8 = 30;
 
 impl Default for BootOpts {

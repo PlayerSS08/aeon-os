@@ -274,7 +274,7 @@ def t_shell(ctx):
 
 
 def t_menu(ctx):
-    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="menu")
+    vm = Vm(make_esp(ctx.work, ctx.efi, cfg="timeout=10\n"), ctx.work, name="menu")
     try:
         r = ctx.r
         r.check("menu wait reached", vm.wait_for("menu open: boot starts in"))
@@ -290,7 +290,7 @@ def t_menu(ctx):
     finally:
         vm.close()
     # Arrow keys move the highlight: Down once is "Recovery mode".
-    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-arrows"), ctx.work, name="menu-arrows")
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-arrows", cfg="timeout=10\n"), ctx.work, name="menu-arrows")
     try:
         r.check("arrows: menu wait reached", vm.wait_for("menu open: boot starts in"))
         vm.keys("home")
@@ -662,7 +662,7 @@ def t_bootcount(ctx):
 def t_fwshell(ctx):
     """Menu key S: a shell that runs before the kernel, through the firmware's input (USB keyboards work)."""
     r = ctx.r
-    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="fwsh", tpm=True)
+    vm = Vm(make_esp(ctx.work, ctx.efi, cfg="timeout=10\n"), ctx.work, name="fwsh", tpm=True)
     try:
         r.check("menu wait reached", vm.wait_for("menu open: boot starts in"))
         vm.keys("home")
@@ -682,7 +682,7 @@ def t_fwshell(ctx):
         r.check("boot after the shell is a normal boot", "recovery=false" in vm.text())
     finally:
         vm.close()
-    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-c"), ctx.work, name="menu-c")
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-c", cfg="timeout=10\n"), ctx.work, name="menu-c")
     try:
         vm.wait_for("menu open: boot starts in")
         vm.keys("home")
