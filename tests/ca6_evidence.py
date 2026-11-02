@@ -20,6 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import boot_test as bt  # noqa: E402  (the Vm class and make_esp live there)
+import ca6_layers  # noqa: E402  (layer 4 to 8 evidence and the trace parser)
 
 PS_ROW = re.compile(r"^(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s*$", re.M)
 CHECKS = []  # (test case, description, passed, detail)
@@ -44,7 +45,14 @@ class Session:
         self.name = name
         esp = bt.make_esp(ctx.work, ctx.efi, f"esp-{name}", cfg=cfg)
         self.vm = bt.Vm(esp, ctx.work, name=name, disk=disk)
-        self.booted = self.vm.wait_for("aeon> ", 180, "serial")
+        self.booted = self.vm.wait_for("aeon> ", 120, "serial")
+        if not self.booted:
+            # A one-off slow start of the firmware or the host is not a kernel failure: try once more
+            # with a fresh VM, and say so in the log.
+            print(f"  note: {name} did not reach the prompt in 120 s, restarting it once")
+            self.vm.close()
+            self.vm = bt.Vm(esp, ctx.work, name=name + "-retry", disk=disk)
+            self.booted = self.vm.wait_for("aeon> ", 180, "serial")
         self.last_enter = time.time()
 
     def run(self, cmd, timeout=40):
@@ -499,6 +507,7 @@ def main():
     out = os.path.abspath(a.out)
     os.makedirs(os.path.join(out, "logs"), exist_ok=True)
     data = {}
+    layers = {}
     t_start = time.time()
     try:
         print("[M1/M2/M5] boot, console, diagnostics, timer")
@@ -519,12 +528,24 @@ def main():
         guarded("M6", tc_sync, ctx, out)
         print("[TC6] repeatability")
         data["tc6"] = guarded("TC6", tc6, ctx, out, a.window, a.repeats)
+        me = sys.modules[__name__]
+        print("[L4/L5] ready queue, round-robin order, time slices, scheduler trace")
+        layers["trace"] = guarded("L4/L5", ca6_layers.layer_queue_and_trace, me, ctx, out, a.window) or {}
+        print("[L6] cooperative versus timer-driven switching")
+        layers["coop"] = guarded("L6", ca6_layers.layer_coop, me, ctx, out, a.window, layers["trace"]) or {}
+        print("[L5] jobs that finish")
+        layers["jobs"] = guarded("L5", ca6_layers.layer_jobs, me, ctx, out) or {}
+        print("[L7] shared counter: the problem, the lock, the corrected run")
+        layers["race"] = guarded("L7", ca6_layers.layer_race, me, ctx, out) or {}
+        print("[L8] allocator and allocation failure")
+        layers["alloc"] = guarded("L8", ca6_layers.layer_alloc, me, ctx, out) or {}
     finally:
         shutil.rmtree(ctx.work, ignore_errors=True)
 
     img = os.path.getsize(ctx.efi)
     metric("size", "kernel image (unsigned build)", img, "bytes")
     charts = make_charts(out, data) if all(data.get(k) for k in ("tc1", "tc2", "tc4", "tc6")) else []
+    charts += ca6_layers.charts(out, layers)
     with open(os.path.join(out, "results.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["kind", "test_case", "name", "value", "unit_or_detail"])

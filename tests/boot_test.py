@@ -434,6 +434,105 @@ def t_modes(ctx):
             vm.close()
 
 
+def wait_regex(vm, pattern, timeout=60):
+    """Waits until the serial output matches `pattern` completely (a line is written in pieces, so the
+    first piece alone is not enough). Returns the match, or None on timeout."""
+    end = time.time() + timeout
+    while time.time() < end:
+        m = re.search(pattern, vm.serial_text().replace(chr(13), ""))
+        if m:
+            return m
+        time.sleep(0.2)
+    return None
+
+
+def t_sched(ctx):
+    """CA-6 layers 4 to 8: ready queue, scheduler trace, cooperative vs timer switching, a finishing job,
+    the shared-counter race and its fix, and the allocator including a refused request."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-sched"), ctx.work, name="sched")
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("queue", "queue matches the task states: yes"),
+            ("trace", "switches"),
+            ("trace x", "usage: trace"),
+            ("spawn nonsense", "usage: spawn"),
+            ("spawn", "started worker-b"),
+        ])
+        time.sleep(2.5)
+        run_cmds(vm, r, [("queue", "queue matches the task states: yes")])
+        text = vm.serial_text().replace("\r", "")
+        r.check("the queue lists a waiting worker", "worker-" in text.split("ready queue (front runs next):")[-1], text[-300:])
+
+        def counts():
+            out_before = len(vm.serial_text())
+            vm.type("trace")
+            vm.keys("ret")
+            vm.wait_for("aeon> ", 20, "serial")
+            t = vm.serial_text()[out_before:].replace("\r", "")
+            m = re.search(r"switches (\d+) \(last (\d+) kept\): timer (\d+) yield (\d+) block (\d+) sleep (\d+) exit (\d+)", t)
+            return (tuple(int(x) for x in m.groups()), t) if m else (None, t)
+
+        c, t = counts()
+        r.check("timer-driven switching: workers that never yield are switched by the timer", c is not None and c[2] > 100 and c[2] > c[3], t[-300:])
+        r.check("trace lines show tick, tasks and reason", re.search(r"tick\s+\d+\s+\d+ -> \d+\s+timer", t) is not None, t[-300:])
+        # Stop the preemptive workers, then run the cooperative pair on a cleared trace.
+        ps = vm.serial_text()
+        before = len(ps)
+        vm.type("ps")
+        vm.keys("ret")
+        vm.wait_for("aeon> ", 20, "serial")
+        for tid in re.findall(r"^(\d+)\s+worker-", vm.serial_text()[before:].replace("\r", ""), re.M):
+            run_cmds(vm, r, [(f"kill {tid}", "stopped")])
+        run_cmds(vm, r, [("trace reset", "trace cleared"), ("spawn coop", "started coop-b")])
+        time.sleep(2.5)
+        c, t = counts()
+        r.check("cooperative switching: workers that yield are switched by `yield`, not the timer", c is not None and c[3] > 100 and c[3] > 5 * c[2], f"{c}")
+        before = len(vm.serial_text())
+        vm.type("ps")
+        vm.keys("ret")
+        vm.wait_for("aeon> ", 20, "serial")
+        for tid in re.findall(r"^(\d+)\s+coop-", vm.serial_text()[before:].replace("\r", ""), re.M):
+            run_cmds(vm, r, [(f"kill {tid}", "stopped")])
+        # A job runs to the end: ready, running, terminated.
+        run_cmds(vm, r, [
+            ("job", "usage: job"),
+            ("job 0", "units must be"),
+            ("job 5 x", "usage: job"),
+            ("job 1 2 3 4 5", "usage: job"),
+            ("job 30", "started job-0"),
+        ])
+        r.check("the job finishes and reports its times", vm.wait_for("job-0 finished: 30 units", 60, "serial"), vm.serial_text()[-300:])
+        time.sleep(0.5)
+        before = len(vm.serial_text())
+        vm.type("ps")
+        vm.keys("ret")
+        vm.wait_for("aeon> ", 20, "serial")
+        r.check("a finished job leaves the task table", "job-0" not in vm.serial_text()[before:], vm.serial_text()[before:])
+        # The shared counter: lost updates without the lock, none with it.
+        run_cmds(vm, r, [("race lock x", "usage: race"), ("race", "started two racers")])
+        m = wait_regex(vm, r"race no lock: expected 40000, got (\d+), lost (\d+) update\(s\)", 120)
+        r.check("race without a lock finishes", m is not None, vm.serial_text()[-300:])
+        r.check("without a lock, updates are lost", m is not None and int(m.group(2)) > 0, m.group(0) if m else "no line")
+        run_cmds(vm, r, [("race lock", "started two racers")])
+        m = wait_regex(vm, r"race with lock: expected 40000, got (\d+), lost (\d+) update\(s\)", 120)
+        r.check("race with a lock finishes", m is not None, vm.serial_text()[-300:])
+        r.check("with the lock, no update is lost", m is not None and m.group(1) == "40000" and m.group(2) == "0", m.group(0) if m else "no line")
+        # Memory: a request that fits, one that cannot.
+        run_cmds(vm, r, [
+            ("alloc", "usage: alloc"),
+            ("alloc 64", "freed: heap used"),
+            ("alloc 99999999", "refused"),
+            ("queue", "queue matches the task states: yes"),
+        ])
+        t = vm.serial_text().replace("\r", "")
+        r.check("the 64 KiB allocation was reported", re.search(r"allocated 64 KiB in \d+ us", t) is not None, t[-400:])
+        r.check("the refusal says nothing changed", "nothing changed" in t, t[-400:])
+    finally:
+        vm.close()
+
+
 def t_text_clip(ctx):
     """Shell text on the smallest screen is clipped at the edges, never drawn outside the framebuffer."""
     r = ctx.r
@@ -1117,7 +1216,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "textclip": t_text_clip, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
