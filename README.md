@@ -1,6 +1,6 @@
 # Aeon
 
-A small UEFI x86_64 boot stage and small kernel (under 200 KB signed, boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
+A small UEFI x86_64 boot stage and small kernel (about 230 KB signed, under the 256 KiB size limit the tests enforce; boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
 stick on a UEFI PC, shows a logo with a progress bar, measures its command line into the TPM, seeds its
 own randomness, leaves firmware control, sets up its own CPU and memory protections, and drops into a
 preemptive multitasking kernel with a shell.
@@ -49,8 +49,8 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | kernel-env | copy the memory map, enable NX, GDT/TSS (double-fault stack), IDT, identity-mapped page tables with W^X, unmapped null page and stack guard pages, CR0.WP/SMEP/SMAP/UMIP when supported, own stack |
 | kernel-memory, kernel-tasks | frame allocator, 32 MB heap, tick source (local APIC timer, or the PIT if there is no xAPIC or with `nolapic`), scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
 
-Shell commands: `help info version cpu security tpm lastpanic uptime mem ps spawn counters kill memmap log echo sort ls cat write rm df run clear panic reboot
-shutdown`. `ls cat write rm df` work on a flat RAM filesystem (64 files, 1 MiB, names up to 32 characters). `run <hello|fault|gp|spin|badcall>` starts a built-in program in ring 3. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
+Shell commands: type `help` for the grouped list (`help all` for every command with a description). Files: `ls tree cd pwd mkdir rmdir cat write append edit rm df`.
+The RAM filesystem has folders (up to 64 files and folders, 1 MiB, names up to 32 characters, paths up to 128; `write` takes the two characters backslash and n for a new line, `edit <file>` takes many lines). `dls dcat disks dread pci` read a FAT16/FAT32 disk on a virtio-blk device (read-only). `run <hello|fault|gp|spin|badcall>` starts a built-in program in ring 3. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
 timer interrupt preempting them. `log` prints the boot log, which the splash held back. Shutdown uses ACPI
 S5, then firmware `ResetSystem`.
 
@@ -167,6 +167,14 @@ fault after boot; build them with `cargo build`, never into `usb/`.
 
 Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (Inter for the wordmark and menu, JetBrains Mono for the shell, both under the SIL Open Font License; texts in `docs/licenses/`). `gfont.rs` looks glyphs up and blends them, `anim.rs` has the easing used by the splash fade and the progress bar. Nothing is needed to build Aeon beyond the committed `fontdata.rs`; Pillow is only needed to regenerate it. The design notes (comparison with other systems, scheduler, security and AI plans) are in `docs/design/aeon-system-design.md`.
 
+### Screenshots
+
+Taken by the boot tests (`target/test-shots/`) from the 0.9.0 build in QEMU at 1280x800.
+
+| Splash | Dawn boot menu | Shell |
+|---|---|---|
+| ![splash](docs/img/splash.png) | ![Dawn menu](docs/img/menu.png) | ![shell](docs/img/shell.png) |
+
 ## Source layout
 
 | File | Role |
@@ -180,7 +188,11 @@ Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (
 | `paging.rs` | identity-mapped page tables, W^X, guard pages |
 | `mm.rs`, `frames.rs`, `heapalloc.rs` | frame bitmap allocator, free-list heap, `GlobalAlloc` |
 | `sched.rs` | preemptive round-robin tasks (registers + FXSAVE on each stack) |
-| `usermode.rs`, `usercopy.rs`, `syscall.rs`, `ramfs.rs` | ring-3 entry and demo programs, user-pointer checks, syscall numbers, RAM filesystem |
+| `usermode.rs`, `usercopy.rs`, `syscall.rs` | ring-3 entry and demo programs, user-pointer checks, syscall numbers |
+| `ramfs.rs` | RAM filesystem with folders, path resolution (`.`, `..`), backslash-n escapes (pure, unit-tested) |
+| `pci.rs`, `virtio.rs`, `vblk.rs`, `block.rs`, `fat.rs` | PCI scan, virtio 1.0 helpers, polling virtio-blk driver, block-device trait, read-only FAT16/FAT32 |
+| `lineedit.rs`, `cmdhelp.rs` | shell line editor, command table (help, Tab completion, did-you-mean) |
+| `schedpolicy.rs`, `banker.rs` | pure FCFS/SJF/SRTF/priority/round-robin simulator and Banker's algorithm with deadlock detection, tested with the course's worked examples (not used by the kernel yet) |
 | `shell.rs`, `keymap.rs`, `power.rs` | shell and status bar, scancode decoder, reboot and ACPI power-off |
 | `fb.rs`, `font.rs`, `log.rs` | framebuffer console, splash and stop screen, public-domain 8x8 font, logger and sinks |
 | `sha256.rs`, `entropy.rs`, `tcg2.rs`, `eventlog.rs`, `bootcount.rs`, `splash.rs`, `logfmt.rs`, `memmap.rs`, `acpi.rs`, `cpuid.rs`, `pixel.rs`, `bootopts.rs`, `bootinfo.rs`, `boot.rs` | pure logic (unit-tested) and boot state |
@@ -197,7 +209,7 @@ emulation limits, and 4K screens (the scale path is unit-tested but not seen; 64
 
 ## Limits and roadmap
 
-Single CPU, identity mapping only, RAM-only filesystem, one built-in ring-3 program at a time (no loading from files, no networking).
+Single CPU, identity mapping only, RAM-only files (a FAT16/FAT32 disk can be read but not written), one built-in ring-3 program at a time (no loading from files, no networking).
 A separate kernel hash check would add nothing today: loader and kernel are one image, and the firmware already
 verifies that whole image under Secure Boot. Splitting them only pays off for two kernels to choose between.
-Next: spinlocks and a blocking ready queue, a USB keyboard driver, SMP, loading programs from files, and an `aarch64` port.
+Next (see `docs/HANDOFF.md` and the research report): per-program address spaces and loading programs from files, a USB keyboard driver, AHCI and NVMe disks, device interrupts through the IOAPIC, SMP, and an `aarch64` port. Spinlocks and wait queues already exist.

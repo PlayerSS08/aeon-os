@@ -1,5 +1,8 @@
 # Console upgrade plan
 
+> **Status (checked 2026-11-02): complete.** Scrollback, new keys, history and grouped help landed in 499c228, 6247a6a and 80919c6. The "not in scope" cursor editing was built too (Left/Right/Home/End/Delete, Ctrl keys, Tab completion). 2026-11-02: `help all` lines were shortened to fit the 71 columns of a 640 px screen, and the status bar now has a short form for narrow screens.
+
+
 Goal: the shell can scroll back, uses the whole screen, recalls old commands, and has a readable `help`.
 
 Why: in the QEMU window the log area was about half the screen (the big wordmark sat above it), long output such as `help` scrolled past with no way back, and the command list was one long wall of text.

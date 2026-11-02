@@ -11,7 +11,7 @@ Written 2026-11-01. Sources: the books in `S:\clg\Books` (OSTEP, Windows Interna
 | Memory isolation | page tables per process, KASLR, SMEP/SMAP, NX | same, plus VBS/HVCI (hypervisor-protected kernel code) | same, plus KTRR/PPL and pointer authentication on Apple silicon | capabilities decide what memory a thread may touch | one shared identity map, W^X, NX, guard pages, SMEP/SMAP/UMIP |
 | Boot trust | shim + signed loader/kernel, measured into TPM PCRs | Boot Manager + winload, measured boot, early-launch anti-malware | ROM to iBoot to kernel, signed system volume | not their focus | signed image, measured command line, event-log replay, boot counting |
 | Program isolation | namespaces, cgroups, seccomp, LSMs | job objects, AppContainer, integrity levels | sandbox profiles, entitlements, SIP | capabilities | ring 3 window, syscall pointer checks |
-| Drivers | in kernel (any bug = kernel bug) | in kernel, signed, some user-mode | DriverKit moves drivers out | user-space | none beyond PS/2 keyboard |
+| Drivers | in kernel (any bug = kernel bug) | in kernel, signed, some user-mode | DriverKit moves drivers out | user-space | PS/2 keyboard, PCI scan, polling virtio-blk (read-only FAT) |
 
 What this says: Aeon already matches the *boot* side of the big systems and is far behind on the *process, driver and scheduler* side. That is where the work is.
 
@@ -32,7 +32,7 @@ Plan, in order:
 ## 3. Small footprint: what is measured
 
 - Measured with `tests/min_ram.py`: Aeon boots to its shell in **64 MB** of RAM under QEMU, and fails at 48 MB and below (the firmware itself may be the limit there). At 64 MB the heap is 14 MB.
-- Kernel image: 116 KB signed. Heap cap 32 MB.
+- Kernel image: about 230 KB signed (the tests enforce a 256 KiB limit). Heap cap 32 MB.
 - Limits to lift for real laptops: the frame bitmap tracks 16 GiB, paging maps 64 GiB (fine for laptops, not for servers).
 - **The real gate is hardware, not RAM.** A laptop needs: a keyboard (the shell reads PS/2 only; many laptops still emulate it, but USB and I2C keyboards are not supported), a disk driver (NVMe or AHCI), a framebuffer (works: UEFI GOP), a touchpad (I2C-HID), Wi-Fi (the hardest). None of these exist yet. "Works on any laptop" means writing those drivers; there is no shortcut.
 - Targets: idle RAM under 24 MB including the UI; boot to shell in under 3 s (now about 2.7 s in QEMU, mostly the 2 s menu wait).
@@ -81,9 +81,9 @@ Staged goal: (A) no AI, build the prerequisites; (B) a tiny model running as a B
 
 ## 7. Backlog (what we do, in order)
 
-1. Look and feel plan (`docs/superpowers/plans/2026-11-01-look-and-feel.md`): Tasks 1 and 2 done (font pipeline, animation maths). Tasks 3 to 7 next.
-2. `c-lock`, `c-queue`, wait queues, priority classes, tickless idle.
-3. PCI scan, virtio-blk, block layer, FAT, then VFS.
+1. Look and feel plan (`docs/superpowers/plans/2026-11-01-look-and-feel.md`): font pipeline, animation maths, scrollback, line editing, Tab completion and grouped help are done (see `git log`). Check the plan file for what is left.
+2. Done: `c-lock` (spinlock), `c-queue` (wait queues). Not done: priority classes, tickless idle (the pure policy simulator in `schedpolicy.rs` is ready to guide them).
+3. Done: PCI scan, virtio-blk, block layer, read-only FAT, RAM folders. Not done: disk writes, AHCI/NVMe, a VFS that joins RAM and disk.
 4. Per-process address spaces, ELF loader, process model, capabilities.
 5. USB keyboard (xHCI) and a laptop input path.
 6. IOMMU, signed programs, scan 4 and 5 repeats.

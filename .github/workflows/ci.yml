@@ -1,0 +1,53 @@
+# Checks on every push and pull request: lint, host unit tests, the UEFI build and the size limit.
+# The QEMU boot tests (tests/run.sh) need WSL or Linux with QEMU, OVMF and swtpm and take about 10
+# minutes, so they stay a manual step for now (see docs/HANDOFF.md).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Install Rust (stable) with clippy and the UEFI target
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --target x86_64-unknown-uefi
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Clippy, kernel build (UEFI)
+        run: cargo clippy --release -- -D warnings
+
+      - name: Clippy, host-testable library
+        run: cargo clippy --target x86_64-unknown-linux-gnu --lib -- -D warnings
+
+      - name: Host unit tests
+        run: cargo test --lib --target x86_64-unknown-linux-gnu
+
+      - name: Release build (UEFI)
+        run: cargo build --release
+
+      - name: Image must stay under 256 KiB
+        run: |
+          size=$(stat -c %s target/x86_64-unknown-uefi/release/aeon.efi)
+          echo "aeon.efi is $size bytes (limit 262144)"
+          test "$size" -lt 262144
+
+      - name: Count unsafe blocks (information only)
+        run: |
+          echo "unsafe blocks and functions in src/:"
+          grep -rEc 'unsafe[[:space:]]*(\{|fn|impl)' src | grep -v ':0$' || true
+
+      - name: Reproducible build check
+        run: bash tools/repro-check.sh
