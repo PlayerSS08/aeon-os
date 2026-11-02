@@ -29,7 +29,7 @@ Boot-test screenshots land in `target\test-shots\` (the console test saves `cons
 
 ## State of the pendrive
 
-`D:` (label AEON, FAT32) holds `EFI\BOOT\BOOTX64.EFI`, `aeon-secureboot.cer`, `SHA256.txt` from commit `274fab4`. The signing certificate is unchanged, so nothing needs re-enrolling. The copy at `S:\Works\Projects\Aeon` is old (from `ad5d657`).
+`usb/` in the repo holds the signed 0.9.0 image (commit `5984d8b`, 250,408 bytes, SHA-256 `d56d5f68...6d97`; reproducible build checked). The signing certificate is unchanged, so nothing needs re-enrolling. The pendrive `D:` (label AEON, FAT32) still holds the OLD 0.8.1 files from commit `274fab4` until someone copies `usb\EFI\BOOT\BOOTX64.EFI`, `aeon-secureboot.cer` and `SHA256.txt` onto it. The copy at `S:\Works\Projects\Aeon` is old (from `ad5d657`).
 
 ## What is built (all tested in QEMU, none on real hardware yet)
 
@@ -118,8 +118,8 @@ Not done, and why:
 | Real-PC disks (AHCI, NVMe), disk writes, address spaces, ELF loader, USB | Each is a large task (L). The PC test showed "no disk" because only virtio-blk exists. |
 | Report item 17: shell `panic` command in the release image | The boot tests use it (`lastpanic`); putting it behind a feature needs a test-build change. Owner's call. |
 | Roadmap and mock pages in `G:\Aeon\extras` | Outside git; `build.js` generates the roadmap. Fix with the roadmap's own tooling. |
-| Re-signed `usb/` image and pendrive | Run `bash tools/release.sh` after you approve; then copy the three files to `D:`. The signing key was not touched. |
-| Commit | Not committed. Suggested message: `feat(shell): folders, edit/append, checked interrupts-off rule, disk lock fix` plus a separate `docs:` commit. |
+| Re-signed `usb/` image and pendrive | DONE for `usb/` (commit `5984d8b`). Copying the three files to `D:` is still to do. |
+| Commit | Done, see the first section. |
 
 Choices made without you (change them if you disagree): version 0.9.0; size budget 256 KiB (the existing test gate); the disk flag lock instead of a sleeping mutex.
 
