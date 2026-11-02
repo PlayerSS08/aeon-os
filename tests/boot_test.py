@@ -364,7 +364,7 @@ def t_image(ctx):
         r.check(f"{label}: .sbat names the SBAT version and the aeon component",
                 sbat.startswith(b"sbat,1,SBAT Version,sbat,1,") and b"\naeon,1,Aeon,aeon," in sbat, repr(sbat[:120]))
         r.check(f"{label}: .sbat is NUL-terminated", sbat.endswith(b"\n\0"))
-    r.check("image is small (under 256 KiB)", os.path.getsize(ctx.efi) < 256 * 1024, str(os.path.getsize(ctx.efi)))
+    r.check("image is small (under 512 KiB)", os.path.getsize(ctx.efi) < 512 * 1024, str(os.path.getsize(ctx.efi)))
 
 
 def t_commands(ctx):

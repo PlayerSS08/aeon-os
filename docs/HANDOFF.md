@@ -167,3 +167,12 @@ The assignment was re-read layer by layer. My earlier "all met" claim was too ge
 Results: 237 host tests, 359 QEMU checks, 111 evidence checks, all passing; signed 0.9.1 release built, release tests 16 of 16, reproducible. The image is now 260,648 bytes signed, 1.5 KB under the 256 KiB test limit, so decision 9 (size budget) is the next constraint.
 
 Still for the student: write `docs/ca6/contribution-statement.md`, check and sign `ai-disclosure.md`, answer viva Q17 (CA-5) and Q18 (CA-4), verify the references. The pendrive is not updated (it was not plugged in).
+
+## Decisions made on 2026-11-03 (owner said "do all")
+
+| Decision | Choice | Why and how to undo |
+|---|---|---|
+| Size limit (decision 9) | Raised from 256 KiB to **512 KiB** (test, CI file, README) | 512 bytes were left, so no driver fit. Change the number in `tests/boot_test.py` and `.github/workflows/ci.yml` to undo. |
+| Third-party crates | **Allowed**, but each one is pinned to an exact version (`=x.y.z`), has its source read before use, passes `cargo audit` and `cargo deny` once those are set up, and is listed here | Aeon's own rule: treat third-party code as code that runs as you. Prefer own code for small things. |
+
+Crates in use: none yet.
