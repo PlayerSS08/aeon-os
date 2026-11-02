@@ -47,7 +47,7 @@ ELF loader and per-process address spaces (apps from files), USB (xHCI) keyboard
 
 `G:\Aeon\reports\Aeon and clg improvements.md` ranks 21 improvements and gives a 10-step build order. Notes behind it: `G:\Aeon\research_notes\Aeon and clg improvements\`. Summary of the order:
 
-1. Fix the record: `Cargo.toml` says 0.8.1 but the release commit said 0.9.0; the size claims in docs (115 to 200 KB) differ from the real image (about 230 KB signed, test cap 256 KiB); the roadmap overclaims `fs-fat`, `fs-blk`, `r-unsafe`, `t-apic`; stale README and design-doc lines.
+1. Fix the record: `Cargo.toml` says 0.8.1 but the release commit said 0.9.0; the size claims in docs (115 to 200 KB) differ from the real image (about 245 KB signed, test cap 256 KiB); the roadmap overclaims `fs-fat`, `fs-blk`, `r-unsafe`, `t-apic`; stale README and design-doc lines.
 2. Move disk I/O out of the interrupts-off lock (`src/vblk.rs` around lines 42 and 124-127; 2 s timeout stops the timer).
 3. Make the interrupts-off rule checkable; fix `reset_after_fault` in `src/log.rs` (clears a busy flag an interrupted writer may hold).
 4. Boot the signed stick on 2 or 3 real PCs and report what is seen.

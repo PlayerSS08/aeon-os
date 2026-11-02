@@ -32,7 +32,7 @@ Plan, in order:
 ## 3. Small footprint: what is measured
 
 - Measured with `tests/min_ram.py`: Aeon boots to its shell in **64 MB** of RAM under QEMU, and fails at 48 MB and below (the firmware itself may be the limit there). At 64 MB the heap is 14 MB.
-- Kernel image: about 230 KB signed (the tests enforce a 256 KiB limit). Heap cap 32 MB.
+- Kernel image: about 245 KB signed, 250,408 bytes (the tests enforce a 256 KiB limit; about 11 KB of room is left). Heap cap 32 MB.
 - Limits to lift for real laptops: the frame bitmap tracks 16 GiB, paging maps 64 GiB (fine for laptops, not for servers).
 - **The real gate is hardware, not RAM.** A laptop needs: a keyboard (the shell reads PS/2 only; many laptops still emulate it, but USB and I2C keyboards are not supported), a disk driver (NVMe or AHCI), a framebuffer (works: UEFI GOP), a touchpad (I2C-HID), Wi-Fi (the hardest). None of these exist yet. "Works on any laptop" means writing those drivers; there is no shortcut.
 - Targets: idle RAM under 24 MB including the UI; boot to shell in under 3 s (now about 2.7 s in QEMU, mostly the 2 s menu wait).
