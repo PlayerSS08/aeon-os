@@ -1,76 +1,76 @@
 [2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
 BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
-[   0.020666] INFO  stage enter firmware-entry
-[   0.021982] INFO  boot Aeon 0.9.0 git=unknown arch=x86_64 profile=release
-[   0.022117] INFO  boot sinks serial=true debugcon=true watchdog_disabled=true
-[   0.022277] INFO  time tsc_hz=2422953850 source=uefi-stall
-[   0.022477] INFO  stage enter early-init
-[   0.022884] INFO  cpu vendor=AuthenticAMD max_leaf=0xd max_ext=0x80000021 phys_bits=40 virt_bits=57
-[   0.023220] INFO  cpu supported nx=true smep=true smap=true umip=true sse2=true rdrand=true rdseed=true cet_ss=false cet_ibt=false hypervisor=true
-[   0.023494] INFO  cpu state-at-entry cr0.wp=true cr4.smep=false cr4.smap=false cr4.umip=false efer.nxe=true
-[   0.031173] INFO  bootcount failed_boots=0 counting=true recovery=false
-[   0.226818] INFO  fb gop 1280x800 stride=1280 fmt=Bgr base=0x80000000 console=142x38
-[   0.267457] INFO  stage enter platform-discovery
-[   0.268054] INFO  fw vendor="Ubuntu distribution of EDK II" fw_rev=0x10000 uefi=2.7.0
-[   0.268326] INFO  fw secure_boot=unknown tpm2=false
-[   0.268427] INFO  image base=0xde9b000 size=0x1af000 cmdline=""
-[   0.268559] INFO  acpi rsdp=0xfb7e014 rev=2 xsdt=0xfb7d0e8 checksum=ok
-[   0.268671] DEBUG smbios not present
-[   0.308762] INFO  stage enter security-init
-[   0.319506] INFO  seed boot seed ready from 2 hardware source(s); stack canary randomised
-[   0.319663] INFO  seed seed from the previous boot mixed in: false
-[   0.319834] INFO  tpm measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)
-[   0.320408] INFO  menu press any key within 2 s for the boot menu
-[   2.342559] INFO  loader Boot Loader Interface: 5 of 5 variables published and read back
-[   2.382763] INFO  stage enter exit-boot-services
-[   2.511839] INFO  stage enter kernel-env
-[   2.512008] INFO  boot boot services exited after 1 attempt(s)
-[   2.512206] INFO  mem descriptors=122 kept=122 dropped=0 desc_size=48
-[   2.512383] INFO  mem ram_mb=255 usable_mb=207 reclaimable_mb=42 acpi_mb=2 runtime_mb=3 mmio_mb=4 top_of_ram_mb=256
-[   2.512557] INFO  mem largest_free_block_mb=167
-[   2.515453] INFO  paging identity map active: pd_tables=16 split_tables=3 skipped=0 nx=true wc=true
-[   2.515897] INFO  cpu state-now cr0.wp=true cr4.smep=true cr4.smap=true cr4.umip=true efer.nxe=true
-[   2.517029] INFO  cpu gdt/tss/idt loaded, double-fault IST stack set, switching to kernel stack 0xdeda000..0xdeea000
-[   2.517405] INFO  kernel kernel_main entered on kernel stack rsp=0xdee9ca0
-[   2.558140] INFO  stage enter kernel-memory
-[   2.780376] INFO  mm frames: 63357 free (247 MB), largest run 213 MB
-[   2.811999] INFO  pci 00:00.0 8086:29c0 Host bridge
-[   2.812332] INFO  pci 00:01.0 1234:1111 VGA controller
-[   2.812422] INFO  pci 00:02.0 8086:10d3 Ethernet controller
-[   2.812507] INFO  pci 00:1f.0 8086:2918 ISA bridge
-[   2.812608] INFO  pci 00:1f.2 8086:2922 SATA controller
-[   2.812700] INFO  pci 00:1f.3 8086:2930 SMBus controller
-[   2.812908] INFO  vblk no virtio-blk device
-[   2.813012] INFO  mm heap: 32768 KiB
-[   2.853725] INFO  timer lapic timer ok hz=100 ticks_seen=3
-[   2.894105] INFO  stage enter kernel-tasks
-[   2.894309] INFO  stage firmware-entry took 2098 us
-[   2.894398] INFO  stage early-init took 204840 us
-[   2.894470] INFO  stage platform-discovery took 41430 us
-[   2.894548] INFO  stage security-init took 2073968 us
-[   2.894622] INFO  stage exit-boot-services took 129074 us
-[   2.894701] INFO  stage kernel-env took 45745 us
-[   2.894773] INFO  stage kernel-memory took 336428 us
-[   2.894929] INFO  stage kernel-tasks took 40911 us
-[   2.895054] INFO  boot boot complete uptime_us=2895006 mode=preemptive
-[   3.219454] INFO  seed stored seed hidden from runtime access: true
-[   3.231318] INFO  bootcount boot succeeded, counter cleared
-[   3.233052] INFO  sched task status started as id 1
-[   3.233447] INFO  sched task shell started as id 2
+[   0.020573] INFO  stage enter firmware-entry
+[   0.021696] INFO  boot Aeon 0.9.1 git=unknown arch=x86_64 profile=release
+[   0.021819] INFO  boot sinks serial=true debugcon=true watchdog_disabled=true
+[   0.021957] INFO  time tsc_hz=2421822400 source=uefi-stall
+[   0.022138] INFO  stage enter early-init
+[   0.022564] INFO  cpu vendor=AuthenticAMD max_leaf=0xd max_ext=0x80000021 phys_bits=40 virt_bits=57
+[   0.023021] INFO  cpu supported nx=true smep=true smap=true umip=true sse2=true rdrand=true rdseed=true cet_ss=false cet_ibt=false hypervisor=true
+[   0.023282] INFO  cpu state-at-entry cr0.wp=true cr4.smep=false cr4.smap=false cr4.umip=false efer.nxe=true
+[   0.031255] INFO  bootcount failed_boots=0 counting=true recovery=false
+[   0.225243] INFO  fb gop 1280x800 stride=1280 fmt=Bgr base=0x80000000 console=142x38
+[   0.265964] INFO  stage enter platform-discovery
+[   0.266657] INFO  fw vendor="Ubuntu distribution of EDK II" fw_rev=0x10000 uefi=2.7.0
+[   0.266919] INFO  fw secure_boot=unknown tpm2=false
+[   0.267016] INFO  image base=0xde91000 size=0x1b6000 cmdline=""
+[   0.267141] INFO  acpi rsdp=0xfb7e014 rev=2 xsdt=0xfb7d0e8 checksum=ok
+[   0.267253] DEBUG smbios not present
+[   0.307365] INFO  stage enter security-init
+[   0.317418] INFO  seed boot seed ready from 2 hardware source(s); stack canary randomised
+[   0.317579] INFO  seed seed from the previous boot mixed in: false
+[   0.317756] INFO  tpm measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)
+[   0.318342] INFO  menu press any key within 2 s for the boot menu
+[   2.322433] INFO  loader Boot Loader Interface: 5 of 5 variables published and read back
+[   2.362643] INFO  stage enter exit-boot-services
+[   2.490583] INFO  stage enter kernel-env
+[   2.490800] INFO  boot boot services exited after 1 attempt(s)
+[   2.491031] INFO  mem descriptors=122 kept=122 dropped=0 desc_size=48
+[   2.491225] INFO  mem ram_mb=255 usable_mb=207 reclaimable_mb=42 acpi_mb=2 runtime_mb=3 mmio_mb=4 top_of_ram_mb=256
+[   2.491436] INFO  mem largest_free_block_mb=167
+[   2.494178] INFO  paging identity map active: pd_tables=16 split_tables=3 skipped=0 nx=true wc=true
+[   2.494569] INFO  cpu state-now cr0.wp=true cr4.smep=true cr4.smap=true cr4.umip=true efer.nxe=true
+[   2.495734] INFO  cpu gdt/tss/idt loaded, double-fault IST stack set, switching to kernel stack 0xded3000..0xdee3000
+[   2.496057] INFO  kernel kernel_main entered on kernel stack rsp=0xdee2ca0
+[   2.536822] INFO  stage enter kernel-memory
+[   2.764088] INFO  mm frames: 63350 free (247 MB), largest run 213 MB
+[   2.795267] INFO  pci 00:00.0 8086:29c0 Host bridge
+[   2.795595] INFO  pci 00:01.0 1234:1111 VGA controller
+[   2.795683] INFO  pci 00:02.0 8086:10d3 Ethernet controller
+[   2.795782] INFO  pci 00:1f.0 8086:2918 ISA bridge
+[   2.795889] INFO  pci 00:1f.2 8086:2922 SATA controller
+[   2.795981] INFO  pci 00:1f.3 8086:2930 SMBus controller
+[   2.796190] INFO  vblk no virtio-blk device
+[   2.796289] INFO  mm heap: 32768 KiB
+[   2.837003] INFO  timer lapic timer ok hz=100 ticks_seen=3
+[   2.877210] INFO  stage enter kernel-tasks
+[   2.877423] INFO  stage firmware-entry took 1819 us
+[   2.877526] INFO  stage early-init took 203569 us
+[   2.877600] INFO  stage platform-discovery took 41620 us
+[   2.877679] INFO  stage security-init took 2055278 us
+[   2.877753] INFO  stage exit-boot-services took 127918 us
+[   2.877832] INFO  stage kernel-env took 45656 us
+[   2.877900] INFO  stage kernel-memory took 340959 us
+[   2.878052] INFO  stage kernel-tasks took 40863 us
+[   2.878176] INFO  boot boot complete uptime_us=2878129 mode=preemptive
+[   3.203052] INFO  seed stored seed hidden from runtime access: true
+[   3.214540] INFO  bootcount boot succeeded, counter cleared
+[   3.216340] INFO  sched task status started as id 1
+[   3.216750] INFO  sched task shell started as id 2
 
 Aeon shell. Type `help`.
 aeon> block
 started waiter as task 3 (it waits until you type `wake`)
 aeon> ps
 id name             state     cpu-ticks
-0  idle             ready     121
+0  idle             ready     123
 1  status           sleeping  3
 2  shell            running   0
 3  waiter           blocked   0
 aeon> ps
 id name             state     cpu-ticks
-0  idle             ready     443
-1  status           sleeping  10
+0  idle             ready     449
+1  status           sleeping  9
 2  shell            running   0
 3  waiter           blocked   0
 aeon> wake

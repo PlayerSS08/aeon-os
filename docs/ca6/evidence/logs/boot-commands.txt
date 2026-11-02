@@ -1,11 +1,11 @@
 == version
-Aeon 0.9.0 git=unknown x86_64 UEFI, sbat generation 1
+Aeon 0.9.1 git=unknown x86_64 UEFI, sbat generation 1
 == info
 firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7
 secure boot unknown
-tsc        2422 MHz
+tsc        2423 MHz
 timer      lapic
-image      base 0xde8e000 size 1724 KiB
+image      base 0xde84000 size 1752 KiB
 == cpu
 cpus        1 usable (ACPI MADT)
 local APIC  0xfee00000

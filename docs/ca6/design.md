@@ -1,12 +1,12 @@
 # Aeon: design document (CA-6)
 
-This document explains the choices behind each mechanism, what was rejected, and where the risky (`unsafe`) code lives. Numbers come from the source tree at commit `42fd956`.
+This document explains the choices behind each mechanism, what was rejected, and where the risky (`unsafe`) code lives. Numbers come from the 0.9.1 source tree.
 
 ## 1. Design principles
 
 | Principle | What it means in the code | Why |
 |---|---|---|
-| Pure logic, thin hardware layer | Allocators, wait list, file system, FAT reader, parsers, scheduler policies and the Banker's algorithm take plain data and return plain data. Hardware access is a thin wrapper around them. | The logic can be unit-tested on the PC in milliseconds. 225 host tests run without a VM. |
+| Pure logic, thin hardware layer | Allocators, wait list, file system, FAT reader, parsers, scheduler policies and the Banker's algorithm take plain data and return plain data. Hardware access is a thin wrapper around them. | The logic can be unit-tested on the PC in milliseconds. 237 host tests run without a VM. |
 | One CPU, so interrupts are the only concurrency | The only way two pieces of code touch the same data at once is an interrupt arriving in the middle of the first. | Keeps locking simple, and makes the rule checkable (section 5). |
 | Small and readable over fast | Round robin over an array, a first-fit heap, a bitmap frame allocator. | The goal is to make the mechanisms visible, as the assignment asks. |
 | Fail loudly | A broken invariant stops the kernel with a message (panic screen) instead of continuing. | A silent wrong answer in a kernel is harder to debug than a stop. |
@@ -16,7 +16,7 @@ This document explains the choices behind each mechanism, what was rejected, and
 | Item | Design | Alternative not taken, and why |
 |---|---|---|
 | Task storage | Fixed array of 16 slots (`MAX_TASKS`) with a 32 KiB stack and a guard page each | A linked list: needs the heap before the scheduler exists, and a heap bug would hide a scheduler bug |
-| Ready queue | The array itself, scanned from the task after the current one | A separate queue: more state to keep consistent with the task array. Scanning 16 slots costs about the same as a queue pop |
+| Ready queue | `ReadyQueue<16>` (`readyq.rs`): a first-in-first-out ring of task ids holding exactly the tasks in state `Ready`; insert at the back, select from the front, remove on `kill` | Scanning the task array for the next ready slot: it works, but hides insertion, selection, removal and ordering, which the assignment asks to see. The invariant "queue = ready tasks" is checkable with the `queue` command |
 | Policy | Round robin, one 10 ms slice (100 Hz tick), no priorities | MLFQ and priorities are written and tested as pure code in `schedpolicy.rs` but are not wired in: a priority scheduler needs tickless idle and priority classes first (see the limits section of the report) |
 | Preemption | LAPIC timer interrupt calls `sched::tick`; the switch routine saves FPU/SSE state, 15 general registers and the interrupt frame on the old stack and restores them from the new one | Cooperative only: a task that never yields would hang the system. Test TC1 shows two never-yielding workers sharing the CPU |
 | Timer | LAPIC timer calibrated against the TSC; the legacy PIT is the fallback (`nolapic` option) | PIT only: slower to program and it cannot be per-core later |
@@ -57,18 +57,18 @@ On one CPU, a `static` that an interrupt handler can reach is the main source of
 
 ## 6. Where the `unsafe` code is
 
-Rust forbids unsafe operations inside an `unsafe fn` unless they sit in their own `unsafe` block (`#![deny(unsafe_op_in_unsafe_fn)]`). Counted with `grep` over `src/`: 239 unsafe blocks, functions and impls; 206 `SAFETY:` comments, with the rest covered by `# Safety` sections in function docs.
+Rust forbids unsafe operations inside an `unsafe fn` unless they sit in their own `unsafe` block (`#![deny(unsafe_op_in_unsafe_fn)]`). Counted with `grep` over `src/`: 245 unsafe blocks, functions and impls; 212 `SAFETY:` comments, with the rest covered by `# Safety` sections in function docs.
 
 | File | Sites | Why unsafe is needed there |
 |---|---|---|
 | `arch.rs` | 62 | Port I/O, control registers, descriptor tables, inline assembly for the switch and interrupt stubs |
 | `main.rs` | 47 | Calling firmware (UEFI) functions through raw tables |
-| `sched.rs` | 18 | Building and switching stack frames |
+| `sched.rs` | 24 | Building and switching stack frames, the scheduler and trace statics |
 | `mm.rs`, `heapalloc.rs` | 16 each | Raw memory handed out and taken back |
 | `paging.rs` | 14 | Writing page tables |
 | `vblk.rs` | 12 | Device registers and DMA memory |
 
-Every site carries a `SAFETY:` comment naming the invariant it relies on. The invariants are tested where a test can reach them: the allocators, wait list and file system run under unit tests on the PC; the hardware wrappers are exercised by the 322 QEMU checks, which include deliberate faults (invalid opcode, page fault, stack overflow, W^X violation, NX violation, panic).
+Every site carries a `SAFETY:` comment naming the invariant it relies on. The invariants are tested where a test can reach them: the allocators, wait list and file system run under unit tests on the PC; the hardware wrappers are exercised by the 359 QEMU checks, which include deliberate faults (invalid opcode, page fault, stack overflow, W^X violation, NX violation, panic).
 
 ## 7. Specialization: Security (containment and boot trust)
 

@@ -16,7 +16,7 @@
       "tc": "M5",
       "check": "timer source is reported (lapic or pit)",
       "pass": true,
-      "detail": "firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7\nsecure boot unknown\ntsc        2422 MHz\ntimer      lapic\nimage      base 0xde8e000 size 1724 KiB"
+      "detail": "firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7\nsecure boot unknown\ntsc        2423 MHz\ntimer      lapic\nimage      base 0xde84000 size 1752 KiB"
     },
     {
       "tc": "M2",
@@ -40,13 +40,13 @@
       "tc": "TC1",
       "check": "both workers got CPU (preemption works)",
       "pass": true,
-      "detail": "{3: 304, 4: 304}"
+      "detail": "{3: 306, 4: 306}"
     },
     {
       "tc": "TC1",
       "check": "both counters advanced",
       "pass": true,
-      "detail": "['223', '227']->['1591', '1622']"
+      "detail": "['222', '228']->['1558', '1593']"
     },
     {
       "tc": "TC1",
@@ -76,13 +76,13 @@
       "tc": "TC2",
       "check": "4 workers all got CPU",
       "pass": true,
-      "detail": "{3: 123, 4: 123, 5: 123, 6: 123}"
+      "detail": "{3: 124, 4: 124, 5: 123, 6: 123}"
     },
     {
       "tc": "TC2",
       "check": "the ring-3 task got CPU",
       "pass": true,
-      "detail": "{7: 123}"
+      "detail": "{7: 124}"
     },
     {
       "tc": "TC2",
@@ -94,13 +94,13 @@
       "tc": "TC2",
       "check": "fairness: runnable tasks within 40% of each other",
       "pass": true,
-      "detail": "1.0"
+      "detail": "0.9919354838709677"
     },
     {
       "tc": "TC2",
       "check": "wake releases the blocked task",
       "pass": true,
-      "detail": "woke 1 task(s)\naeon> waiter: woke up"
+      "detail": "woke 1 task(s)\nwaiter: woke up"
     },
     {
       "tc": "TC3",
@@ -124,13 +124,13 @@
       "tc": "TC3",
       "check": "the lone worker keeps running",
       "pass": true,
-      "detail": "[0.9818181818181818]"
+      "detail": "[0.9823434991974318]"
     },
     {
       "tc": "TC3",
       "check": "the lone worker gets about twice the share of a worker in TC1",
       "pass": true,
-      "detail": "0.982 vs 0.4903"
+      "detail": "0.982 vs 0.4904"
     },
     {
       "tc": "TC3",
@@ -160,7 +160,7 @@
       "tc": "TC4",
       "check": "every busy task got CPU",
       "pass": true,
-      "detail": "[70, 70, 70, 70, 70, 70, 70, 70, 70]"
+      "detail": "[70, 69, 70, 69, 70, 70, 70, 70, 70]"
     },
     {
       "tc": "TC4",
@@ -178,7 +178,7 @@
       "tc": "TC4",
       "check": "no frame leak: free frames are back to the starting value",
       "pass": true,
-      "detail": "55131 vs 55131"
+      "detail": "55124 vs 55124"
     },
     {
       "tc": "TC4",
@@ -208,13 +208,13 @@
       "tc": "TC5",
       "check": "`run fault` -> killed: #PF",
       "pass": true,
-      "detail": "ted fault as task 3\naeon> [   9.993698] WARN  user task 3 killed: #PF page fault at rip=0x2912005 error_code=0x7 cr2=0x100000\n[user] task killed: #PF page fault"
+      "detail": "ted fault as task 3\naeon> [   9.951351] WARN  user task 3 killed: #PF page fault at rip=0x2912005 error_code=0x7 cr2=0x100000\n[user] task killed: #PF page fault"
     },
     {
       "tc": "TC5",
       "check": "`run gp` -> #GP",
       "pass": true,
-      "detail": "k 3\naeon> [  11.076466] WARN  user task 3 killed: #GP general protection at rip=0x2912000 error_code=0x0 cr2=0x100000\n[user] task killed: #GP general protection"
+      "detail": "11.030803] WARN  user task 3 killed: #GP general protection at rip=0x2912000 error_code=0x0 cr2=0x100000\n[user] task killed: #GP general protection\ngp as task 3"
     },
     {
       "tc": "TC5",
@@ -280,13 +280,13 @@
       "tc": "TC5",
       "check": "failed ring-3 programs leaked no frames",
       "pass": true,
-      "detail": "55131 vs 55131"
+      "detail": "55124 vs 55124"
     },
     {
       "tc": "TC5",
       "check": "no ring-3 task is left behind",
       "pass": true,
-      "detail": "{0: ('idle', 'ready', 2425), 1: ('status', 'sleeping', 52), 2: ('shell', 'running', 17)}"
+      "detail": "{0: ('idle', 'ready', 2429), 1: ('status', 'sleeping', 51), 2: ('shell', 'running', 15)}"
     },
     {
       "tc": "M6",
@@ -298,7 +298,7 @@
       "tc": "M6",
       "check": "waiter is blocked",
       "pass": true,
-      "detail": "{0: ('idle', 'ready', 443), 1: ('status', 'sleeping', 10), 2: ('shell', 'running', 0), 3: ('waiter', 'blocked', 0)}"
+      "detail": "{0: ('idle', 'ready', 449), 1: ('status', 'sleeping', 9), 2: ('shell', 'running', 0), 3: ('waiter', 'blocked', 0)}"
     },
     {
       "tc": "M6",
@@ -340,19 +340,19 @@
       "tc": "TC6",
       "check": "both workers got CPU (preemption works)",
       "pass": true,
-      "detail": "{3: 304, 4: 304}"
+      "detail": "{3: 304, 4: 305}"
     },
     {
       "tc": "TC6",
       "check": "both counters advanced",
       "pass": true,
-      "detail": "['217', '224']->['1578', '1608']"
+      "detail": "['226', '226']->['1579', '1604']"
     },
     {
       "tc": "TC6",
       "check": "fairness: the two workers are within 25% of each other",
       "pass": true,
-      "detail": "1.0"
+      "detail": "0.9967213114754099"
     },
     {
       "tc": "TC6",
@@ -370,19 +370,19 @@
       "tc": "TC6",
       "check": "both workers got CPU (preemption works)",
       "pass": true,
-      "detail": "{3: 306, 4: 306}"
+      "detail": "{3: 304, 4: 305}"
     },
     {
       "tc": "TC6",
       "check": "both counters advanced",
       "pass": true,
-      "detail": "['222', '227']->['1547', '1584']"
+      "detail": "['223', '223']->['1578', '1603']"
     },
     {
       "tc": "TC6",
       "check": "fairness: the two workers are within 25% of each other",
       "pass": true,
-      "detail": "1.0"
+      "detail": "0.9967213114754099"
     },
     {
       "tc": "TC6",
@@ -400,58 +400,286 @@
       "tc": "TC6",
       "check": "both workers got CPU (preemption works)",
       "pass": true,
-      "detail": "{3: 304, 4: 304}"
+      "detail": "{3: 304, 4: 305}"
     },
     {
       "tc": "TC6",
       "check": "both counters advanced",
       "pass": true,
-      "detail": "['218', '225']->['1552', '1584']"
+      "detail": "['224', '227']->['1585', '1614']"
     },
     {
       "tc": "TC6",
       "check": "fairness: the two workers are within 25% of each other",
       "pass": true,
-      "detail": "1.0"
+      "detail": "0.9967213114754099"
     },
     {
       "tc": "TC6",
       "check": "all repeats keep the fairness ratio above 0.75",
       "pass": true,
-      "detail": "[1.0, 1.0, 1.0]"
+      "detail": "[0.9967213114754099, 0.9967213114754099, 0.9967213114754099]"
     },
     {
       "tc": "TC6",
       "check": "timer rate repeats within 10%",
       "pass": true,
-      "detail": "0.006426285255622419"
+      "detail": "7.906878256196228e-06"
     },
     {
       "tc": "TC6",
       "check": "boot time repeats within 25%",
       "pass": true,
-      "detail": "0.014599247896946173"
+      "detail": "0.01082648336712505"
     },
     {
       "tc": "TC6",
       "check": "a deterministic command gives identical output in two fresh boots",
       "pass": true,
       "detail": "[['1 3 5 9'], ['1 3 5 9']]"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "L4/L5",
+      "check": "idle system: the ready queue is empty and matches the task states",
+      "pass": true,
+      "detail": "ready queue (front runs next): (empty: only the idle task can run)\nqueue matches the task states: yes"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "with 4 workers the queue lists 3 or 4 of them (one is running, unless a short task has the CPU)",
+      "pass": true,
+      "detail": "ready queue (front runs next): 5(worker-a) 1(status) 6(worker-b) 4(worker-b) 3(worker-a)\nqueue matches the task states: yes"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "the trace has events and a summary",
+      "pass": true,
+      "detail": "ck     1368  2 -> 4  sleep\ntick     1369  4 -> 1  timer\ntick     1370  1 -> 3  timer\ntick     1371  3 -> 5  timer\ntick     1372  5 -> 6  timer\ntick     1373  6 -> 4  timer\ntick     1374  4 -> 2  timer"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "four workers are running",
+      "pass": true,
+      "detail": "[3, 4, 5, 6]"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "a worker that never yields always loses the CPU to the timer (at least 99% of its departures)",
+      "pass": true,
+      "detail": "1.0 of 830"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "time slice: at least 90% of worker stretches last exactly one tick",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "round-robin order: the workers take turns in the same cycle (at least 90%)",
+      "pass": true,
+      "detail": "1.0"
+    },
+    {
+      "tc": "L4/L5",
+      "check": "scheduling latency is about (workers - 1) time slices",
+      "pass": true,
+      "detail": "3.072639225181598"
+    },
+    {
+      "tc": "L6",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "L6",
+      "check": "the trace has events and a summary",
+      "pass": true,
+      "detail": "ck     1082  3 -> 4  yield\ntick     1082  4 -> 3  yield\ntick     1083  3 -> 4  timer\ntick     1083  4 -> 1  yield\ntick     1084  1 -> 3  timer\ntick     1084  3 -> 4  yield\ntick     1084  4 -> 2  yield"
+    },
+    {
+      "tc": "L6",
+      "check": "cooperative workers are switched by `yield` (at least 90% of switches)",
+      "pass": true,
+      "detail": "0.9584974250227204"
+    },
+    {
+      "tc": "L6",
+      "check": "cooperative switching is not limited by the 100 Hz tick (switches far more often)",
+      "pass": true,
+      "detail": "4401.333333333333 vs 183.16666666666666"
+    },
+    {
+      "tc": "L5",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "L5",
+      "check": "one command started three jobs",
+      "pass": true,
+      "detail": "started job-0 as task 3 (600 units)\nstarted job-1 as task 4 (300 units)\nstarted job-2 as task 5 (150 units)"
+    },
+    {
+      "tc": "L5",
+      "check": "all three jobs finished and reported",
+      "pass": true,
+      "detail": "[('2', '150', '2', '127'), ('1', '300', '1', '216'), ('0', '600', '0', '300')]"
+    },
+    {
+      "tc": "L5",
+      "check": "round robin finishes the shortest job first (order 150, 300, 600)",
+      "pass": true,
+      "detail": "[150, 300, 600]"
+    },
+    {
+      "tc": "L5",
+      "check": "every job first ran within 3 ticks of creation (three jobs share the queue)",
+      "pass": true,
+      "detail": "[2, 1, 0]"
+    },
+    {
+      "tc": "L5",
+      "check": "measured turnaround follows equal-share round robin within 15%",
+      "pass": true,
+      "detail": "1.701 2.362"
+    },
+    {
+      "tc": "L5",
+      "check": "finished jobs have left the task table (state terminated, slot freed)",
+      "pass": true,
+      "detail": "{0: ('idle', 'ready', 250), 1: ('status', 'sleeping', 11), 2: ('shell', 'running', 0)}"
+    },
+    {
+      "tc": "L5",
+      "check": "after completion the queue is empty and consistent",
+      "pass": true,
+      "detail": "ready queue (front runs next): 1(status)\nqueue matches the task states: yes"
+    },
+    {
+      "tc": "L7",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "L7",
+      "check": "`race` finished and reported",
+      "pass": true,
+      "detail": "INFO  sched task shell started as id 2\r\n\r\nAeon shell. Type `help`.\r\naeon> race\r\nstarted two racers, 20000 additions each, no lock\r\naeon> race no lock: expected 40000, got 20000, lost 20000 update(s)\r\n"
+    },
+    {
+      "tc": "L7",
+      "check": "`race lock` finished and reported",
+      "pass": true,
+      "detail": "race no lock: expected 40000, got 20000, lost 20000 update(s)\r\nrace lock\r\nstarted two racers, 20000 additions each, with a spinlock\r\naeon> race with lock: expected 40000, got 40000, lost 0 update(s)\r\n"
+    },
+    {
+      "tc": "L7",
+      "check": "`race` finished and reported",
+      "pass": true,
+      "detail": "nlock\r\naeon> race with lock: expected 40000, got 40000, lost 0 update(s)\r\nrace\r\nstarted two racers, 20000 additions each, no lock\r\naeon> race no lock: expected 40000, got 20000, lost 20000 update(s)\r\n"
+    },
+    {
+      "tc": "L7",
+      "check": "`race lock` finished and reported",
+      "pass": true,
+      "detail": "race no lock: expected 40000, got 20000, lost 20000 update(s)\r\nrace lock\r\nstarted two racers, 20000 additions each, with a spinlock\r\naeon> race with lock: expected 40000, got 40000, lost 0 update(s)\r\n"
+    },
+    {
+      "tc": "L7",
+      "check": "the problem is real: every unprotected run lost updates",
+      "pass": true,
+      "detail": "[(40000, 20000, 20000), (40000, 20000, 20000)]"
+    },
+    {
+      "tc": "L7",
+      "check": "the fix works: every locked run lost nothing and reached the expected total",
+      "pass": true,
+      "detail": "[(40000, 40000, 0), (40000, 40000, 0)]"
+    },
+    {
+      "tc": "L8",
+      "check": "boot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "tc": "L8",
+      "check": "alloc 1 KiB succeeds and is freed",
+      "pass": true,
+      "detail": "allocated 1 KiB in 419 us: heap used 0 -> 1 KiB of 32768 KiB\nfreed: heap used 0 KiB, 1 free hole(s)"
+    },
+    {
+      "tc": "L8",
+      "check": "alloc 64 KiB succeeds and is freed",
+      "pass": true,
+      "detail": "allocated 64 KiB in 10 us: heap used 0 -> 64 KiB of 32768 KiB\nfreed: heap used 0 KiB, 1 free hole(s)"
+    },
+    {
+      "tc": "L8",
+      "check": "alloc 1024 KiB succeeds and is freed",
+      "pass": true,
+      "detail": "allocated 1024 KiB in 8 us: heap used 0 -> 1024 KiB of 32768 KiB\nfreed: heap used 0 KiB, 1 free hole(s)"
+    },
+    {
+      "tc": "L8",
+      "check": "alloc 8192 KiB succeeds and is freed",
+      "pass": true,
+      "detail": "allocated 8192 KiB in 9 us: heap used 0 -> 8192 KiB of 32768 KiB\nfreed: heap used 0 KiB, 1 free hole(s)"
+    },
+    {
+      "tc": "L8",
+      "check": "alloc 16384 KiB succeeds and is freed",
+      "pass": true,
+      "detail": "allocated 16384 KiB in 6 us: heap used 0 -> 16384 KiB of 32768 KiB\nfreed: heap used 0 KiB, 1 free hole(s)"
+    },
+    {
+      "tc": "L8",
+      "check": "an impossible request is refused cleanly and nothing changes",
+      "pass": true,
+      "detail": "allocation of 99999999 KiB refused after 89 us: not enough heap (32768 KiB free of 32768 KiB, 1 hole(s)); nothing changed"
+    },
+    {
+      "tc": "L8",
+      "check": "the heap is intact after the refusal (used and holes unchanged)",
+      "pass": true,
+      "detail": "{'frames_free': 55140, 'frames_total': 63350, 'heap_used_kib': 0, 'heap_holes': 1} -> {'frames_free': 55140, 'frames_total': 63350, 'heap_used_kib': 0, 'heap_holes': 1}"
+    },
+    {
+      "tc": "L8",
+      "check": "a request of zero is accepted",
+      "pass": true,
+      "detail": "allocated 0 KiB in 31 us: heap used 0 -> 0 KiB of 32768 KiB\nfreed: heap used 0 KiB, 1 free hole(s)"
+    },
+    {
+      "tc": "L8",
+      "check": "the kernel carries on after allocation failure",
+      "pass": true,
+      "detail": "allocator-ok"
     }
   ],
   "metrics": [
     {
       "tc": "M1",
       "name": "kernel uptime when the shell starts",
-      "value": 3.245687,
+      "value": 3.273941,
       "unit": "s"
     },
     {
       "tc": "TC1",
       "name": "worker CPU ticks (a, b)",
       "value": [
-        304,
-        304
+        306,
+        306
       ],
       "unit": "ticks"
     },
@@ -464,13 +692,13 @@
     {
       "tc": "TC1",
       "name": "measured timer rate",
-      "value": 96.1,
+      "value": 96.7,
       "unit": "Hz"
     },
     {
       "tc": "TC1",
       "name": "CPU share per task",
-      "value": "{\"idle\": 0.0, \"status\": 0.0194, \"shell\": 0.0, \"worker-a\": 0.4903, \"worker-b\": 0.4903}",
+      "value": "{\"idle\": 0.0, \"status\": 0.0192, \"shell\": 0.0, \"worker-a\": 0.4904, \"worker-b\": 0.4904}",
       "unit": ""
     },
     {
@@ -482,7 +710,7 @@
     {
       "tc": "TC2",
       "name": "fairness ratio min/max over runnable tasks",
-      "value": 1.0,
+      "value": 0.992,
       "unit": ""
     },
     {
@@ -494,7 +722,7 @@
     {
       "tc": "TC2",
       "name": "CPU share per task",
-      "value": "{\"idle#0\": 0.0, \"status#1\": 0.016, \"shell#2\": 0.0, \"worker-a#3\": 0.1968, \"worker-b#4\": 0.1968, \"worker-a#5\": 0.1968, \"worker-b#6\": 0.1968, \"spin#7\": 0.1968, \"waiter#8\": 0.0}",
+      "value": "{\"idle#0\": 0.0, \"status#1\": 0.0159, \"shell#2\": 0.0, \"worker-a#3\": 0.1975, \"worker-b#4\": 0.1975, \"worker-a#5\": 0.1959, \"worker-b#6\": 0.1959, \"spin#7\": 0.1975, \"waiter#8\": 0.0}",
       "unit": ""
     },
     {
@@ -506,7 +734,7 @@
     {
       "tc": "TC3",
       "name": "CPU share of one worker when two run (TC1)",
-      "value": 0.4903,
+      "value": 0.4904,
       "unit": "of all ticks"
     },
     {
@@ -518,13 +746,13 @@
     {
       "tc": "TC4",
       "name": "fairness ratio min/max with 9 busy tasks",
-      "value": 1.0,
+      "value": 0.986,
       "unit": ""
     },
     {
       "tc": "TC4",
       "name": "CPU share of one busy task with 9 busy tasks",
-      "value": 0.109,
+      "value": 0.1092,
       "unit": "of all ticks"
     },
     {
@@ -542,7 +770,7 @@
     {
       "tc": "TC4",
       "name": "frames free before / after",
-      "value": "55131 / 55131",
+      "value": "55124 / 55124",
       "unit": "frames"
     },
     {
@@ -556,53 +784,26 @@
       "name": "worker CPU ticks (a, b)",
       "value": [
         304,
-        304
+        305
       ],
       "unit": "ticks"
     },
     {
       "tc": "TC6",
       "name": "fairness ratio min/max",
-      "value": 1.0,
+      "value": 0.997,
       "unit": ""
     },
     {
       "tc": "TC6",
       "name": "measured timer rate",
-      "value": 96.1,
+      "value": 96.2,
       "unit": "Hz"
     },
     {
       "tc": "TC6",
       "name": "CPU share per task",
-      "value": "{\"idle\": 0.0, \"status\": 0.0194, \"shell\": 0.0, \"worker-a\": 0.4903, \"worker-b\": 0.4903}",
-      "unit": ""
-    },
-    {
-      "tc": "TC6",
-      "name": "worker CPU ticks (a, b)",
-      "value": [
-        306,
-        306
-      ],
-      "unit": "ticks"
-    },
-    {
-      "tc": "TC6",
-      "name": "fairness ratio min/max",
-      "value": 1.0,
-      "unit": ""
-    },
-    {
-      "tc": "TC6",
-      "name": "measured timer rate",
-      "value": 96.7,
-      "unit": "Hz"
-    },
-    {
-      "tc": "TC6",
-      "name": "CPU share per task",
-      "value": "{\"idle\": 0.0, \"status\": 0.0192, \"shell\": 0.0, \"worker-a\": 0.4904, \"worker-b\": 0.4904}",
+      "value": "{\"idle\": 0.0, \"status\": 0.0193, \"shell\": 0.0, \"worker-a\": 0.4895, \"worker-b\": 0.4911}",
       "unit": ""
     },
     {
@@ -610,35 +811,62 @@
       "name": "worker CPU ticks (a, b)",
       "value": [
         304,
-        304
+        305
       ],
       "unit": "ticks"
     },
     {
       "tc": "TC6",
       "name": "fairness ratio min/max",
-      "value": 1.0,
+      "value": 0.997,
       "unit": ""
     },
     {
       "tc": "TC6",
       "name": "measured timer rate",
-      "value": 96.1,
+      "value": 96.2,
       "unit": "Hz"
     },
     {
       "tc": "TC6",
       "name": "CPU share per task",
-      "value": "{\"idle\": 0.0, \"status\": 0.0194, \"shell\": 0.0, \"worker-a\": 0.4903, \"worker-b\": 0.4903}",
+      "value": "{\"idle\": 0.0, \"status\": 0.0193, \"shell\": 0.0, \"worker-a\": 0.4895, \"worker-b\": 0.4911}",
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "worker CPU ticks (a, b)",
+      "value": [
+        304,
+        305
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "TC6",
+      "name": "fairness ratio min/max",
+      "value": 0.997,
+      "unit": ""
+    },
+    {
+      "tc": "TC6",
+      "name": "measured timer rate",
+      "value": 96.2,
+      "unit": "Hz"
+    },
+    {
+      "tc": "TC6",
+      "name": "CPU share per task",
+      "value": "{\"idle\": 0.0, \"status\": 0.0193, \"shell\": 0.0, \"worker-a\": 0.4895, \"worker-b\": 0.4911}",
       "unit": ""
     },
     {
       "tc": "TC6",
       "name": "fairness ratios",
       "value": [
-        1.0,
-        1.0,
-        1.0
+        0.997,
+        0.997,
+        0.997
       ],
       "unit": ""
     },
@@ -646,9 +874,9 @@
       "tc": "TC6",
       "name": "timer rates",
       "value": [
-        96.1,
-        96.7,
-        96.1
+        96.2,
+        96.2,
+        96.2
       ],
       "unit": "Hz"
     },
@@ -656,32 +884,241 @@
       "tc": "TC6",
       "name": "boot times (kernel uptime at shell start)",
       "value": [
-        3.261044,
-        3.240348,
-        3.213766
+        3.228418,
+        3.248571,
+        3.26357
       ],
       "unit": "s"
     },
     {
       "tc": "TC6",
       "name": "timer-rate spread across repeats",
-      "value": 0.64,
+      "value": 0.0,
       "unit": "%"
     },
     {
       "tc": "TC6",
       "name": "boot-time spread across repeats",
-      "value": 1.46,
+      "value": 1.08,
       "unit": "%"
+    },
+    {
+      "tc": "L4/L5",
+      "name": "context switches in the window",
+      "value": 1099,
+      "unit": ""
+    },
+    {
+      "tc": "L4/L5",
+      "name": "switches per second",
+      "value": 183.2,
+      "unit": "1/s"
+    },
+    {
+      "tc": "L4/L5",
+      "name": "share of all switches caused by the timer",
+      "value": 0.8244,
+      "unit": ""
+    },
+    {
+      "tc": "L4/L5",
+      "name": "busy workers (task ids from ps)",
+      "value": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "unit": "task ids"
+    },
+    {
+      "tc": "L4/L5",
+      "name": "share of the workers' departures caused by the timer",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "L4/L5",
+      "name": "worker stretches that lasted exactly one tick (one 10 ms slice)",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "L4/L5",
+      "name": "round-robin order repeats (fraction of turns that match one cycle earlier)",
+      "value": 1.0,
+      "unit": ""
+    },
+    {
+      "tc": "L4/L5",
+      "name": "scheduling latency of the workers, mean / max",
+      "value": "3.07 / 4",
+      "unit": "ticks (10 ms each)"
+    },
+    {
+      "tc": "L6",
+      "name": "context switches in the window (cooperative)",
+      "value": 26408,
+      "unit": ""
+    },
+    {
+      "tc": "L6",
+      "name": "switches per second (cooperative)",
+      "value": 4401.3,
+      "unit": "1/s"
+    },
+    {
+      "tc": "L6",
+      "name": "share of switches that were `yield`",
+      "value": 0.9585,
+      "unit": ""
+    },
+    {
+      "tc": "L6",
+      "name": "switch-rate ratio cooperative / timer-driven",
+      "value": 24.0,
+      "unit": "x"
+    },
+    {
+      "tc": "L5",
+      "name": "response time of the three jobs (first run after creation)",
+      "value": [
+        2,
+        1,
+        0
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "L5",
+      "name": "turnaround of the jobs of 150, 300, 600 units",
+      "value": [
+        127,
+        216,
+        300
+      ],
+      "unit": "ticks"
+    },
+    {
+      "tc": "L5",
+      "name": "turnaround ratios 300:150 and 600:150 (measured)",
+      "value": [
+        1.701,
+        2.362
+      ],
+      "unit": ""
+    },
+    {
+      "tc": "L5",
+      "name": "turnaround ratios predicted by equal-share round robin",
+      "value": [
+        1.667,
+        2.333
+      ],
+      "unit": ""
+    },
+    {
+      "tc": "L5",
+      "name": "throughput",
+      "value": 350.0,
+      "unit": "units/s"
+    },
+    {
+      "tc": "L5",
+      "name": "time for one unit of work (from the longest job)",
+      "value": 2.86,
+      "unit": "ms per unit of work"
+    },
+    {
+      "tc": "L7",
+      "name": "without a lock: (expected, got, lost) per run",
+      "value": [
+        [
+          40000,
+          20000,
+          20000
+        ],
+        [
+          40000,
+          20000,
+          20000
+        ]
+      ],
+      "unit": ""
+    },
+    {
+      "tc": "L7",
+      "name": "with the lock: (expected, got, lost) per run",
+      "value": [
+        [
+          40000,
+          40000,
+          0
+        ],
+        [
+          40000,
+          40000,
+          0
+        ]
+      ],
+      "unit": ""
+    },
+    {
+      "tc": "L7",
+      "name": "share of additions lost without the lock",
+      "value": [
+        50.0,
+        50.0
+      ],
+      "unit": "%"
+    },
+    {
+      "tc": "L8",
+      "name": "allocation time by size (KiB, microseconds)",
+      "value": [
+        [
+          1,
+          419
+        ],
+        [
+          64,
+          10
+        ],
+        [
+          1024,
+          8
+        ],
+        [
+          8192,
+          9
+        ],
+        [
+          16384,
+          6
+        ]
+      ],
+      "unit": ""
+    },
+    {
+      "tc": "L8",
+      "name": "heap capacity",
+      "value": 32768,
+      "unit": "KiB"
+    },
+    {
+      "tc": "L8",
+      "name": "heap utilization at rest",
+      "value": "0 of 32768",
+      "unit": "KiB"
     },
     {
       "tc": "size",
       "name": "kernel image (unsigned build)",
-      "value": 248832,
+      "value": 259072,
       "unit": "bytes"
     }
   ],
-  "seconds": 444.9,
+  "seconds": 465.8,
   "window_s": 6.0,
   "repeats": 3
 }

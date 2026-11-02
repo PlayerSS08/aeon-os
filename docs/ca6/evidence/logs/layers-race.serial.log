@@ -1,0 +1,73 @@
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[   0.020650] INFO  stage enter firmware-entry
+[   0.021853] INFO  boot Aeon 0.9.1 git=unknown arch=x86_64 profile=release
+[   0.021989] INFO  boot sinks serial=true debugcon=true watchdog_disabled=true
+[   0.022132] INFO  time tsc_hz=2422987850 source=uefi-stall
+[   0.022310] INFO  stage enter early-init
+[   0.022714] INFO  cpu vendor=AuthenticAMD max_leaf=0xd max_ext=0x80000021 phys_bits=40 virt_bits=57
+[   0.023068] INFO  cpu supported nx=true smep=true smap=true umip=true sse2=true rdrand=true rdseed=true cet_ss=false cet_ibt=false hypervisor=true
+[   0.023310] INFO  cpu state-at-entry cr0.wp=true cr4.smep=false cr4.smap=false cr4.umip=false efer.nxe=true
+[   0.030916] INFO  bootcount failed_boots=0 counting=true recovery=false
+[   0.224625] INFO  fb gop 1280x800 stride=1280 fmt=Bgr base=0x80000000 console=142x38
+[   0.265505] INFO  stage enter platform-discovery
+[   0.266380] INFO  fw vendor="Ubuntu distribution of EDK II" fw_rev=0x10000 uefi=2.7.0
+[   0.266675] INFO  fw secure_boot=unknown tpm2=false
+[   0.266782] INFO  image base=0xde91000 size=0x1b6000 cmdline=""
+[   0.266937] INFO  acpi rsdp=0xfb7e014 rev=2 xsdt=0xfb7d0e8 checksum=ok
+[   0.267066] DEBUG smbios not present
+[   0.307386] INFO  stage enter security-init
+[   0.319272] INFO  seed boot seed ready from 2 hardware source(s); stack canary randomised
+[   0.319432] INFO  seed seed from the previous boot mixed in: false
+[   0.319608] INFO  tpm measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)
+[   0.320131] INFO  menu press any key within 2 s for the boot menu
+[   2.342952] INFO  loader Boot Loader Interface: 5 of 5 variables published and read back
+[   2.383135] INFO  stage enter exit-boot-services
+[   2.510652] INFO  stage enter kernel-env
+[   2.510786] INFO  boot boot services exited after 1 attempt(s)
+[   2.510991] INFO  mem descriptors=122 kept=122 dropped=0 desc_size=48
+[   2.511165] INFO  mem ram_mb=255 usable_mb=207 reclaimable_mb=42 acpi_mb=2 runtime_mb=3 mmio_mb=4 top_of_ram_mb=256
+[   2.511338] INFO  mem largest_free_block_mb=167
+[   2.513943] INFO  paging identity map active: pd_tables=16 split_tables=3 skipped=0 nx=true wc=true
+[   2.514323] INFO  cpu state-now cr0.wp=true cr4.smep=true cr4.smap=true cr4.umip=true efer.nxe=true
+[   2.515461] INFO  cpu gdt/tss/idt loaded, double-fault IST stack set, switching to kernel stack 0xded3000..0xdee3000
+[   2.515780] INFO  kernel kernel_main entered on kernel stack rsp=0xdee2ca0
+[   2.556524] INFO  stage enter kernel-memory
+[   2.779476] INFO  mm frames: 63350 free (247 MB), largest run 213 MB
+[   2.819407] INFO  pci 00:00.0 8086:29c0 Host bridge
+[   2.819752] INFO  pci 00:01.0 1234:1111 VGA controller
+[   2.819842] INFO  pci 00:02.0 8086:10d3 Ethernet controller
+[   2.819926] INFO  pci 00:1f.0 8086:2918 ISA bridge
+[   2.820026] INFO  pci 00:1f.2 8086:2922 SATA controller
+[   2.820117] INFO  pci 00:1f.3 8086:2930 SMBus controller
+[   2.820332] INFO  vblk no virtio-blk device
+[   2.820431] INFO  mm heap: 32768 KiB
+[   2.861171] INFO  timer lapic timer ok hz=100 ticks_seen=3
+[   2.901370] INFO  stage enter kernel-tasks
+[   2.901559] INFO  stage firmware-entry took 1919 us
+[   2.901656] INFO  stage early-init took 202829 us
+[   2.901730] INFO  stage platform-discovery took 42010 us
+[   2.901814] INFO  stage security-init took 2075959 us
+[   2.901892] INFO  stage exit-boot-services took 127506 us
+[   2.901972] INFO  stage kernel-env took 45291 us
+[   2.902041] INFO  stage kernel-memory took 345414 us
+[   2.902191] INFO  stage kernel-tasks took 40822 us
+[   2.902316] INFO  boot boot complete uptime_us=2902269 mode=preemptive
+[   3.226538] INFO  seed stored seed hidden from runtime access: true
+[   3.238567] INFO  bootcount boot succeeded, counter cleared
+[   3.240267] INFO  sched task status started as id 1
+[   3.240733] INFO  sched task shell started as id 2
+
+Aeon shell. Type `help`.
+aeon> race
+started two racers, 20000 additions each, no lock
+aeon> race no lock: expected 40000, got 20000, lost 20000 update(s)
+race lock
+started two racers, 20000 additions each, with a spinlock
+aeon> race with lock: expected 40000, got 40000, lost 0 update(s)
+race
+started two racers, 20000 additions each, no lock
+aeon> race no lock: expected 40000, got 20000, lost 20000 update(s)
+race lock
+started two racers, 20000 additions each, with a spinlock
+aeon> race with lock: expected 40000, got 40000, lost 0 update(s)

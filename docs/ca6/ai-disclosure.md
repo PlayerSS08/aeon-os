@@ -28,7 +28,7 @@
 |---|---|
 | Does it build and pass lint | `cargo clippy -- -D warnings` (two gates) before every commit |
 | Does the logic work | 225 host unit tests |
-| Does the real kernel work | 322 QEMU boot checks, run after every substantial change |
+| Does the real kernel work | 359 QEMU boot checks, run after every substantial change |
 | Are the numbers right | The scheduler and Banker's tests use worked examples from the course notes; one of those examples turned out to be wrong and was documented (debugging log, entry 2) |
 | Is every `unsafe` justified | Each site has a `SAFETY:` comment; the invariants are listed in the design document |
 | Are claims honest | Documents state what was not tested (real hardware) and what is not built (per-program memory, disk writes) |

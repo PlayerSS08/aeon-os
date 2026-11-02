@@ -1,56 +1,38 @@
-# Viva preparation (CA-6)
+# Viva preparation (CA-6): the 20 questions from the assignment
 
-The assignment says it provides 20 sample viva questions; I could not read them (the document was only available as a summary). These are the questions an examiner would most likely ask about this particular kernel, with short answers tied to the code. Learn the reasons, not the wording.
+These are the 20 sample questions printed in the assignment. Answers are short and tied to the code and to the evidence in this repository. Learn the reasons, not the wording. Questions 17 and 18 depend on your own CA-4 and CA-5 work, so they are left for you.
 
-## Scheduling and timer
+| # | Question | Answer | Where to point |
+|---|---|---|---|
+| 1 | What happens immediately after the kernel starts? | The firmware has loaded the signed image. `efi_main` builds a `BootInfo` (memory map, framebuffer, ACPI, CPU features), leaves the firmware, then the kernel sets up the descriptor tables, W^X paging, the frame allocator, the heap and the logger. The boot thread becomes task 0 (idle), the `status` and `shell` tasks are created, interrupts are enabled, and the shell prompt appears. A startup banner and a numbered stage log are printed on the way. | `main.rs`, boot log in `evidence/logs/boot.serial.log` |
+| 2 | How is a task represented? | A fixed slot (one of 16) holding its state, the saved stack pointer (the whole CPU context lives on the task's own kernel stack), the stack base with an overflow canary, a tick counter, a name, and a flag for ring 3. States: free, ready, running, sleeping, blocked, dead. | `struct Task` in `sched.rs`; `ps` |
+| 3 | How does the scheduler select the next task? | From the ready queue: it takes the task at the front. Tasks join the back when they are created, woken, or preempted. If the queue is empty it runs the idle task. | `ReadyQueue` in `readyq.rs`; `aeon_sched_irq` in `sched.rs`; `queue` command |
+| 4 | Why did you choose Round Robin? | It is the required baseline, it is fair by construction (every ready task gets one slice per cycle), and it needs no priorities or run-time estimates, so the mechanism stays visible. The other policies (FCFS, SJF, SRTF, priority) are written as a tested pure simulator and reproduce the course numbers. | `schedpolicy.rs`; performance.md section 6 |
+| 5 | What triggers a scheduling decision? | Four things: the timer interrupt every 10 ms (preemption), a task calling `yield_now`, a task blocking on a wait queue or sleeping, and a task ending. The trace records which one caused each switch. | `trace`; switch-reasons chart |
+| 6 | What happens during a timer tick? | The LAPIC interrupt pushes the registers and calls `aeon_sched_irq` with the stack pointer. It counts the tick for the running task, checks its stack canary, frees dead tasks' stacks, wakes sleepers whose time has come (inserting them at the back), puts the preempted task at the back, pops the front, records the switch, and returns the next task's stack pointer to resume. | `sched.rs` |
+| 7 | How is shared kernel data protected? | By one rule, checked in code: on one CPU the only concurrency is an interrupt, so data an interrupt handler can reach must be touched with interrupts off (`Global::get_irqs_off` stops the kernel otherwise). Short sections use `SpinLock` (interrupts off); slow work (the disk) uses an owner flag and sleeps while waiting. Every global is listed with its rule. | `global.rs`, `docs/design/globals.md` |
+| 8 | Why is synchronization required? | Two tasks doing read, work, write on one counter lose updates when the timer switches tasks in the middle. `race` shows it: without a lock, thousands of additions are lost; with the lock, none. | L7 evidence, `race-lock.png` |
+| 9 | How does your allocator work? | Two layers. Frames: a bitmap, one bit per 4 KiB, next-fit search. Heap: a first-fit free list with 16-byte headers stored in the free blocks, merging neighbouring holes when memory is freed. The heap is carved from frames and implements Rust's `GlobalAlloc`. | `frames.rs`, `heapalloc.rs`; `mem`, `alloc` |
+| 10 | What happens when allocation fails? | The heap returns a null pointer. Code that asks politely (`try_reserve`, as the `alloc` command does) gets an error and the kernel reports "refused: not enough heap, nothing changed"; the heap is intact. A failed frame allocation makes `spawn` return `None` ("cannot start: no free task slot or memory"). Code that uses the plain `Vec::push` on exhaustion would panic, which stops the kernel with a message: that is the honest limit. | `alloc 99999999`; TC5 and L8 |
+| 11 | Where is `unsafe` used and why? | 239 sites in about 15,000 lines: port I/O and control registers, descriptor tables, inline assembly for the context switch and interrupt stubs, calling firmware through raw tables, page-table writes, raw memory in the allocators, device registers and DMA memory. None of it can be written in safe Rust. | `design.md` section 6 |
+| 12 | What invariant does your `unsafe` code rely on? | Every site has a `SAFETY:` comment naming one. Examples: "interrupts are off on a single CPU, so no other reference to `SCHED` exists" (checked at run time); "the frames were just allocated, identity-mapped and exclusively ours"; "the code page is writable and the program is shorter than one page". | `global.rs`, `sched.rs::create` |
+| 13 | What happens if two tasks access the same resource? | Without protection, updates are lost (shown by `race`). With a spinlock, interrupts are off in the critical section, so the timer cannot switch tasks inside it; the second task simply runs after the first leaves. | `race`, `race lock` |
+| 14 | How did you test the scheduler? | Three ways: 7 unit tests of the ready queue (one runs 5000 random operations against a reference queue) and 5 of the trace ring; boot tests (`sched` group, 35 checks) for queue consistency, timer versus yield switching, a finishing job, and the race; and the evidence run, which parses the scheduler trace in Python. | `test-plan.md` |
+| 15 | How did you establish that the scheduler is actually working? | From the trace, not from "it runs": switches are 1 tick apart, the workers take turns in a repeating order, each waits (workers - 1) slices between turns, shares are 1/n, and a blocked task gets zero ticks. A wrong scheduler would show up as uneven shares or a broken cycle. | L4/L5 evidence, `trace-gantt.png` |
+| 16 | How is your Micro-OS different from Linux? | Same mechanisms, far less of everything: one CPU against many; round robin against CFS/EEVDF with classes and per-CPU queues; one shared address space against per-process page tables; a first-fit heap against slab allocators; a spinlock and wait queue against many lock types and futexes; one disk driver against hundreds; a handful of system calls against hundreds. The comparison table is in the report. | `final-report.md` section 5 |
+| 17 | What did CA-5 teach you that helped this project? | **Yours to answer.** Say what you learned in CA-5 and which part of Aeon it explains. | |
+| 18 | What CA-4 research question could be extended into your Micro-OS? | **Yours to answer.** Hint from the assignment's Track G: "Can a mechanism investigated experimentally in CA-4 be implemented at a lower systems level?" For example, a round-robin quantum study maps onto `TIMER_HZ` and the switch-rate measurements. | |
+| 19 | What would you implement next? | In order: boot on real PCs, an AHCI/NVMe disk driver, IOAPIC and keyboard interrupts, per-program address spaces, an ELF loader, priority classes and tickless idle. | `final-report.md` section 18 |
+| 20 | What is the most important limitation of your current system? | One shared address space: a ring-3 program is contained by page permissions and pointer checks, but not by a private page table. Close behind: one CPU, RAM-only files, and no measurement on real hardware. | limits section |
 
-| Question | Short answer | Where to point |
-|---|---|---|
-| How does preemption work? | The LAPIC timer fires 100 times a second. The handler calls `sched::tick`, which saves the running task's registers on its stack, picks the next ready task round robin, and returns on that task's stack. | `apic.rs`, `sched.rs`, switch stub in `arch.rs` |
-| Why can two tasks that never yield still share the CPU? | Only the timer interrupt takes the CPU away; the tasks do not have to cooperate. TC1 runs two such workers and gets a fairness ratio near 1. | TC1 in `results.csv` |
-| What is saved in a context switch? | 512 bytes of FPU/SSE state (`fxsave`), 15 general registers and the 5-word interrupt return frame. | `FRAME_QWORDS` in `sched.rs` |
-| What is the time slice? | 10 ms (100 Hz). | `TIMER_HZ` in `arch.rs` |
-| What happens if no task is ready? | Task 0, `idle`, runs and halts the CPU until the next interrupt. | `sched.rs` |
-| Why not a priority scheduler? | Round robin is the required baseline. FCFS, SJF, SRTF, priority and RR are implemented and tested as pure code in `schedpolicy.rs` against the course's worked examples, but wiring priorities in needs tickless idle and priority classes first. | `schedpolicy.rs` |
-
-## Synchronization
+## Questions an examiner may add
 
 | Question | Short answer |
 |---|---|
 | Why does the spinlock switch interrupts off? | Otherwise the timer could interrupt the holder and run code that wants the same lock, which on one CPU would spin forever. |
-| What stops a deadlock on the spinlock? | On one CPU, finding it taken is a bug, so after about 4 million spins the kernel stops with a message instead of hanging. |
-| How does a blocked task avoid using CPU? | `wait()` marks it `Blocked` and yields; the scheduler skips `Blocked` tasks until `wake_all()` marks them `Ready`. M6 shows 0 ticks over 3 seconds. |
-| Why a flag, not a spinlock, for the disk? | A request can poll for 2 seconds. A spinlock would keep interrupts off for all of it, stopping the timer. |
-
-## Memory
-
-| Question | Short answer |
-|---|---|
-| How are frames allocated? | A bitmap, one bit per 4 KiB frame, next-fit search. |
-| How does the heap work? | First-fit free list, with neighbouring free blocks merged on free. `mem` shows used bytes and the number of free holes. |
-| How do you know nothing leaks? | TC4 compares free frames before and after a heavy run, and heap use before and after writing and removing 20 files. |
-| What is W^X? | A page is never writable and executable at the same time, so data cannot be run as code. |
-| What is the guard page below each stack? | An unmapped page; overflowing the stack faults instead of silently overwriting memory. |
-
-## Security (specialization)
-
-| Question | Short answer |
-|---|---|
-| What does ring 3 give you? | The CPU refuses privileged instructions and memory the page tables do not allow. The only way back is the `syscall` gate. |
-| What if a program passes a bad pointer to a system call? | `usercopy` checks that the range is inside the user window, with no overflow, before the kernel touches it; SMAP is lifted only during the copy. |
-| What happens when a user program faults? | `user_fault` reports it and ends that task; the kernel carries on (TC5: `run fault`, `run gp`). |
-| What is measured boot? | The firmware and the loader record hashes of what started into TPM registers, so a later check can see if the path changed. |
-| What is recovery mode? | After 3 failed boots in a row, the next boot is a minimal one: no timer, no scheduler, a single-task shell. |
-
-## Rust and `unsafe`
-
-| Question | Short answer |
-|---|---|
-| Why `unsafe` at all? | Port I/O, page tables, raw memory and assembly cannot be expressed in safe Rust. |
-| How do you limit it? | 239 sites in about 14,500 lines, each with a `SAFETY:` comment; the compiler setting `deny(unsafe_op_in_unsafe_fn)` forces every unsafe operation into its own block. |
-| What is the rule for global state? | See `global.rs` and `docs/design/globals.md`: nobody else, interrupts off (checked at run time), or an owner flag. |
-| Why `no_std`? | There is no operating system under the kernel to provide the standard library. |
-
-## Honest limits to be ready to state
-
-One CPU. One shared address space. RAM-only files. Read-only virtio disk, so a real PC's disk is not seen. Real-hardware boot not yet tested. Image is 250,408 bytes, near the 256 KiB test limit.
+| What stops a spinlock deadlock? | On one CPU, finding it taken is a bug, so after about 4 million spins the kernel stops with a message. |
+| How does a blocked task avoid using CPU? | `wait()` marks it `Blocked` and removes it from scheduling; it is not in the ready queue until `wake_all` puts it back. M6 shows 0 ticks over 3 s. |
+| What is W^X, and why does it matter? | A page is never writable and executable at once, so injected data cannot run as code. |
+| What does ring 3 give you? | The CPU refuses privileged instructions and memory the page tables do not allow; the only way back is the `syscall` gate. |
+| What is the guard page under each stack for? | An overflow faults at once instead of silently overwriting a neighbour. |
+| Why did the evidence say 96 Hz and not 100? | The rate is measured from outside the VM, by typed commands, so the two snapshots are separated by typing time. The kernel itself divides the TSC for exactly 100 Hz; a kernel-side check is future work. |
