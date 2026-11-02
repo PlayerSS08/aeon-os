@@ -1050,9 +1050,8 @@ pub extern "C" fn shell_task(_: usize) {
     let mut editing: Option<(String, Vec<u8>)> = None;
     // The wordmark is for the splash and the menu; from here the log gets the whole screen.
     log::with_console(Console::fullscreen_log);
-    // A line never wraps: it must fit between the prompt and the right edge.
-    let cols = log::with_console(|c| c.size().0).unwrap_or(80);
-    ed.set_max(cols.saturating_sub(PROMPT.len() + 2));
+    // A line may be longer than the screen is wide: the console wraps it onto the next rows.
+    ed.set_max(MAX_LINE);
     out!("\nAeon shell. Type `help`.\n{}", PROMPT);
     loop {
         let mut idle = true;

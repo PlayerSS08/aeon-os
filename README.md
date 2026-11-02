@@ -21,8 +21,8 @@ The image is **signed** with the Aeon release key. Two ways to run it:
 
 Check the copy with `SHA256.txt` (`sha256sum -c SHA256.txt` or `Get-FileHash`).
 
-While booting you see the logo fade in and a thin bar fill as the real boot stages complete. Press any key
-in the first 2 seconds for the boot menu (Dawn). Move with Up and Down, Enter selects; the letter keys still work. Leaving the menu shows the full boot log.
+While booting you see the logo fade in and a thin bar fill as the real boot stages complete. The boot menu
+(Dawn) opens first with "Boot Aeon" highlighted and counts down 2 seconds; with no key Aeon boots normally. Any key stops the countdown. Move with Up and Down, Enter selects; the letter keys still work. Booting from the menu goes back to the splash; leaving it for recovery or the firmware shell shows the full boot log. `nomenu` skips Dawn.
 
 Menu keys: `Enter` boot, `C` recovery mode, `S` firmware shell (a shell that runs before the kernel through the
 firmware's own input, so USB keyboards work; `boot` continues), `D` debug logging, `F` reboot into firmware
@@ -44,7 +44,7 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | platform-discovery | firmware vendor/revision, image base/size, ACPI RSDP checksums, SMBIOS, Secure Boot / Setup Mode, TPM 2.0 presence |
 | security-init | boot random seed from the firmware RNG and RDRAND, randomised stack canary, command line measured into TPM PCR 12 and read back to verify |
 | exit-boot-services | a boot-phase marker is measured into PCR 11 just before leaving the firmware |
-| boot menu | wait for a key through the firmware (works with USB keyboards) |
+| boot menu | Dawn opens first and counts down; keys come through the firmware (works with USB keyboards) |
 | (same stage) | size the memory-map buffer from the firmware, fetch map, exit, retry on a stale key; no logging in between |
 | kernel-env | copy the memory map, enable NX, GDT/TSS (double-fault stack), IDT, identity-mapped page tables with W^X, unmapped null page and stack guard pages, CR0.WP/SMEP/SMAP/UMIP when supported, own stack |
 | kernel-memory, kernel-tasks | frame allocator, 32 MB heap, tick source (local APIC timer, or the PIT if there is no xAPIC or with `nolapic`), scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
@@ -111,7 +111,7 @@ or register values. Those go to serial and debugcon only.
 |---|---|---|---|---|
 | Signed chain | shim (Microsoft-signed), then signed loader and kernel | `bootmgfw.efi`, `winload.efi`, boot drivers, ELAM | Boot ROM, LLB, iBoot, kernel; signed system volume | one signed image; certificate to enroll |
 | Measured boot | PCRs 4, 7, 9, 11, 12 | PCR 7 and the TCG log, used by BitLocker | Secure Enclave policy, no TPM | command line into PCR 12, verified by read-back |
-| Boot menu | GRUB, systemd-boot | Windows Boot Manager | Startup Options | 2 s menu through firmware input |
+| Boot menu | GRUB, systemd-boot | Windows Boot Manager | Startup Options | menu first, 2 s countdown, firmware input |
 | Boot options | kernel command line | BCD store | boot-args | `quiet debug verbose nomenu timeout=N` |
 | Firmware setup from the menu | `systemctl reboot --firmware-setup` | "UEFI Firmware Settings" | n/a | `F` in the menu (OsIndications) |
 | Tell the OS who booted it | Boot Loader Interface variables | BCD / `bootmgr` state | iBoot handoff | publishes `LoaderInfo` |

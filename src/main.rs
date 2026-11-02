@@ -21,6 +21,7 @@ use aeon::cpuid;
 use aeon::entropy;
 use aeon::eventlog;
 use aeon::fb::Console;
+use aeon::gopmode;
 use aeon::splash;
 use aeon::tcg2;
 use aeon::log;
@@ -122,37 +123,15 @@ fn calibrate_tsc(bs: &BootServices) -> u64 {
     }
 }
 
+/// Lists the firmware's screen modes and lets the pure `gopmode::choose` pick one: the largest with a
+/// linear framebuffer (so the console fills the panel), or the size asked for with `mode=WxH`.
 fn pick_gop_mode(gop: &Gop, want: Option<(u32, u32)>) -> Option<u32> {
+    const MAX_MODES: usize = 64;
     // SAFETY: `gop.mode` is set by firmware and valid for the protocol's lifetime.
     let (max_mode, current) = unsafe { ((*gop.mode).max_mode, (*gop.mode).mode) };
-    // A mode asked for with `mode=WxH` wins when the firmware offers it with a linear framebuffer.
-    if let Some((ww, hh)) = want {
-        for m in 0..max_mode {
-            let mut size = 0usize;
-            let mut info: *const GopModeInfo = core::ptr::null();
-            if (gop.query_mode)(gop as *const Gop as *mut Gop, m, &mut size, &mut info) != uefi::SUCCESS || info.is_null() {
-                continue;
-            }
-            // SAFETY: query_mode succeeded, so `info` points at a firmware-allocated GopModeInfo.
-            let i = unsafe { &*info };
-            if i.pixel_format != 3 && i.horizontal_resolution == ww && i.vertical_resolution == hh {
-                return Some(m);
-            }
-        }
-    }
-    // The firmware's current mode is normally the panel's native one: keep it when it has a linear
-    // framebuffer, so the image is sharp instead of scaled by the display.
-    let mut size = 0usize;
-    let mut cur: *const GopModeInfo = core::ptr::null();
-    if (gop.query_mode)(gop as *const Gop as *mut Gop, current, &mut size, &mut cur) == uefi::SUCCESS && !cur.is_null() {
-        // SAFETY: query_mode succeeded, so `cur` points at a firmware-allocated GopModeInfo.
-        let i = unsafe { &*cur };
-        if i.pixel_format != 3 && i.horizontal_resolution >= 640 && i.vertical_resolution >= 480 {
-            return Some(current);
-        }
-    }
-    let mut best: Option<(u32, u64)> = None;
-    for m in 0..max_mode {
+    let mut modes = [gopmode::ModeInfo { index: 0, width: 0, height: 0, linear: false }; MAX_MODES];
+    let mut n = 0;
+    for m in 0..max_mode.min(MAX_MODES as u32) {
         let mut size = 0usize;
         let mut info: *const GopModeInfo = core::ptr::null();
         if (gop.query_mode)(gop as *const Gop as *mut Gop, m, &mut size, &mut info) != uefi::SUCCESS || info.is_null() {
@@ -160,19 +139,10 @@ fn pick_gop_mode(gop: &Gop, want: Option<(u32, u32)>) -> Option<u32> {
         }
         // SAFETY: query_mode succeeded, so `info` points at a firmware-allocated GopModeInfo.
         let i = unsafe { &*info };
-        if i.pixel_format == 3 || (i.horizontal_resolution as u64 * i.vertical_resolution as u64) > 1_100_000 || i.vertical_resolution > 768 {
-            continue; // blt-only modes have no linear framebuffer; very large modes are slow to draw
-        }
-        let area = i.horizontal_resolution as u64 * i.vertical_resolution as u64;
-        let better = match best {
-            None => true,
-            Some((bm, ba)) => area > ba || (area == ba && m == current && bm != current),
-        };
-        if better {
-            best = Some((m, area));
-        }
+        modes[n] = gopmode::ModeInfo { index: m, width: i.horizontal_resolution, height: i.vertical_resolution, linear: i.pixel_format != 3 };
+        n += 1;
     }
-    best.map(|(m, _)| m)
+    gopmode::choose(&modes[..n], current, want)
 }
 
 fn init_gop(bs: &BootServices, want: Option<(u32, u32)>) -> Option<FbInfo> {
@@ -744,42 +714,51 @@ fn firmware_shell(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices) {
     }
 }
 
-/// Boot menu in the spirit of GRUB, systemd-boot and the Windows Boot Manager: wait a few seconds for
-/// a key (through the firmware, so USB keyboards work), otherwise continue booting. Returns the
-/// possibly updated options.
+/// Boot menu in the spirit of GRUB, systemd-boot and the Windows Boot Manager: Dawn opens at once with
+/// "Boot Aeon" selected and counts down; when the count reaches 0 Aeon boots normally. Any key (read
+/// through the firmware, so USB keyboards work) stops the countdown and is used as a menu key. Returns
+/// the possibly updated options.
 fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts: BootOpts) -> BootOpts {
     if opts.menu_timeout == 0 || st.con_in.is_null() {
         return opts;
     }
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
-    info!("menu", "press any key within {} s for the boot menu", opts.menu_timeout);
-    let _ = log::with_console(|c| c.hint(b"press any key for the boot menu"));
-    let mut pressed = false;
-    let t0 = aeon::arch::rdtsc();
-    let budget = log::tsc_hz().saturating_mul(u64::from(opts.menu_timeout));
-    while aeon::arch::rdtsc().wrapping_sub(t0) < budget {
-        let _ = (bs.stall)(20_000);
-        if read_key(st).is_some() {
-            pressed = true;
-            break;
-        }
-    }
-    let _ = log::with_console(|c| c.hint(b""));
-    if !pressed {
-        return opts;
-    }
+    info!("menu", "menu open: boot starts in {} s, any key stops the countdown", opts.menu_timeout);
     // Dawn, the arrow-key menu. It owns the screen; log lines are held back and replayed when it closes.
     info!("menu", "Enter boot | C recovery mode | S firmware shell | D toggle debug | F firmware setup | R reboot | O power off");
     let mut sel = 0usize;
+    let t0 = aeon::arch::rdtsc();
+    let hz = log::tsc_hz().max(1);
+    let budget = hz.saturating_mul(u64::from(opts.menu_timeout));
+    let mut counting = true;
+    let mut left = opts.menu_timeout;
     draw_menu(sel, opts.debug);
+    show_countdown(Some(left));
     loop {
         let (scan, ch) = loop {
             let _ = (bs.stall)(20_000);
             if let Some(k) = read_key(st) {
                 break k;
             }
+            if counting {
+                let spent = aeon::arch::rdtsc().wrapping_sub(t0);
+                if spent >= budget {
+                    // Nobody pressed a key: boot normally.
+                    leave_menu(true);
+                    return opts;
+                }
+                let now_left = ((budget - spent) / hz) as u8 + 1;
+                if now_left != left {
+                    left = now_left;
+                    show_countdown(Some(left));
+                }
+            }
         };
+        if counting {
+            counting = false;
+            show_countdown(None);
+        }
         // UEFI scan codes: 0x01 up, 0x02 down, 0x05 home, 0x06 end. Letters stay as shortcuts.
         let pick = match (scan, ch as u8 as char) {
             (0x01, _) => {
@@ -815,17 +794,17 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
         sel = action;
         match action {
             0 => {
-                leave_menu();
+                leave_menu(true);
                 return opts;
             }
             1 => {
                 boot_info().recovery = true;
                 info!("menu", "recovery mode selected: no timer, no scheduler");
-                leave_menu();
+                leave_menu(false);
                 return opts;
             }
             2 => {
-                leave_menu();
+                leave_menu(false);
                 firmware_shell(st, bs, rt);
                 return opts;
             }
@@ -858,9 +837,42 @@ fn draw_menu(sel: usize, debug: bool) {
     let _ = log::with_console(|c| c.menu_draw(&entries, sel, "Up and Down to move, Enter to select"));
 }
 
-/// Closes the menu and shows everything logged so far on the normal log screen.
-fn leave_menu() {
-    let _ = log::with_console(|c| c.menu_end());
+/// Writes the line under the menu: the countdown, or the key help once the countdown is stopped.
+fn show_countdown(left: Option<u8>) {
+    let mut buf = [0u8; 64];
+    let text: &[u8] = match left {
+        Some(n) => {
+            let head = b"Boot Aeon in ";
+            let tail = b" s. Any key stops the countdown";
+            let mut len = head.len();
+            buf[..len].copy_from_slice(head);
+            if n >= 10 {
+                buf[len] = b'0' + n / 10;
+                len += 1;
+            }
+            buf[len] = b'0' + n % 10;
+            len += 1;
+            buf[len..len + tail.len()].copy_from_slice(tail);
+            len += tail.len();
+            &buf[..len]
+        }
+        None => b"Up and Down to move, Enter to select",
+    };
+    let s = core::str::from_utf8(text).unwrap_or("");
+    let _ = log::with_console(|c| c.menu_footer(s));
+}
+
+/// Closes the menu. With `boot_on` the splash comes back (the normal boot carries on); otherwise
+/// everything logged so far is shown on the normal log screen.
+fn leave_menu(boot_on: bool) {
+    if boot_on {
+        let _ = log::with_console(|c| c.menu_resume());
+        if log::with_console(|c| c.splash_active()).unwrap_or(false) {
+            return; // the splash holds the log back, as in any normal boot
+        }
+    } else {
+        let _ = log::with_console(|c| c.menu_end());
+    }
     log::replay(|bytes| {
         let _ = log::with_console(|c| c.write_line(Level::Info, bytes));
     });
@@ -1137,6 +1149,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     // Boot menu (through the firmware console, so USB keyboards work here).
     opts = boot_menu(st, bs, rt, opts);
     let _ = opts;
+    info!("menu", "boot continues after the menu");
     set_loader_var(rt, &uefi::utf16(b"LoaderInfo\0"), concat!("Aeon ", env!("CARGO_PKG_VERSION")));
     publish_loader_interface(rt);
 

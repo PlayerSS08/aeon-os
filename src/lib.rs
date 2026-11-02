@@ -25,6 +25,7 @@ pub mod eventlog;
 pub mod font;
 pub mod fontdata;
 pub mod gfont;
+pub mod gopmode;
 pub mod frames;
 pub mod heapalloc;
 pub mod keymap;

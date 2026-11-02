@@ -210,7 +210,7 @@ def t_boot_and_splash(ctx):
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="boot")
     try:
         r = ctx.r
-        r.check("menu wait reached", vm.wait_for("press any key within"), vm.text()[-600:])
+        r.check("menu wait reached", vm.wait_for("boot continues after the menu"), vm.text()[-600:])
         time.sleep(0.3)
         w, h, pix = vm.shot(os.path.join(ctx.shots, "1-splash.png"))
         bar = find_bar(pix, w, h)
@@ -235,7 +235,7 @@ def t_boot_and_splash(ctx):
         time.sleep(1.0)
         w, h, pix2 = vm.shot(os.path.join(ctx.shots, "2-shell.png"))
         r.check("splash cleared after boot", find_bar(pix2, w, h) is None)
-        status_lit = sum(1 for xx in range(0, w, 2) if px(pix2, w, xx, h - 8) != (0, 0, 0))
+        status_lit = max(sum(1 for xx in range(0, w, 2) if px(pix2, w, xx, yy) != (0, 0, 0)) for yy in range(h - 48, h))
         r.check("status bar painted", status_lit > w // 4)
     finally:
         vm.close()
@@ -277,9 +277,9 @@ def t_menu(ctx):
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="menu")
     try:
         r = ctx.r
-        r.check("menu wait reached", vm.wait_for("press any key within"))
-        vm.keys("spc")
-        r.check("menu opens on a key", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-500:])
+        r.check("menu wait reached", vm.wait_for("menu open: boot starts in"))
+        vm.keys("home")
+        r.check("menu is open and stopped by a key", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-500:])
         time.sleep(0.5)
         w, h, pix = vm.shot(os.path.join(ctx.shots, "4-menu.png"))
         r.check("menu leaves the splash (log visible)", find_bar(pix, w, h) is None)
@@ -292,8 +292,8 @@ def t_menu(ctx):
     # Arrow keys move the highlight: Down once is "Recovery mode".
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-arrows"), ctx.work, name="menu-arrows")
     try:
-        r.check("arrows: menu wait reached", vm.wait_for("press any key within"))
-        vm.keys("spc")
+        r.check("arrows: menu wait reached", vm.wait_for("menu open: boot starts in"))
+        vm.keys("home")
         r.check("arrows: menu opens", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-400:])
         time.sleep(0.4)
         w, h, pix_a = vm.shot(os.path.join(ctx.shots, "4-menu-a.png"))
@@ -395,7 +395,7 @@ def t_config(ctx):
         r.check("boots", vm.wait_for("boot complete", 150), vm.text()[-600:])
         t = vm.text()
         r.check("config file was read", "options from aeon.cfg" in t and 'effective options "verbose nomenu"' in t, t[:600])
-        r.check("nomenu skips the boot menu", "press any key within" not in t)
+        r.check("nomenu skips the boot menu", "menu open" not in t)
         w, h, pix = vm.shot(os.path.join(ctx.shots, "6-config-verbose.png"))
         r.check("verbose: no splash bar, log on screen", find_bar(pix, w, h) is None)
         after = [l.split("pcr12_after=")[1].strip() for l in t.splitlines() if "pcr12_after=" in l]
@@ -412,7 +412,7 @@ def t_modes(ctx):
     for (mw, mh) in ((640, 480), (1024, 768), (1920, 1080)):
         vm = Vm(make_esp(ctx.work, ctx.efi, f"esp-{mw}", cfg=f"mode={mw}x{mh}\n"), ctx.work, name=f"mode{mw}")
         try:
-            r.check(f"{mw}x{mh}: menu wait reached", vm.wait_for("press any key within", 150), vm.text()[-400:])
+            r.check(f"{mw}x{mh}: menu wait reached", vm.wait_for("boot continues after the menu", 150), vm.text()[-400:])
             t = vm.text()
             if f"console=" not in t:
                 time.sleep(0.2)
@@ -559,6 +559,48 @@ def t_text_clip(ctx):
         vm.close()
 
 
+def t_long_line(ctx):
+    """A typed line longer than the screen is wide continues on the next row, and Backspace follows it back."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-long", cfg="mode=640x480\n"), ctx.work, name="longline")
+    try:
+        r.check("shell prompt at 640x480 (71 columns)", vm.wait_for("aeon> ", 150, "serial"))
+
+        def lowest_lit(pix, w, h):
+            body = h - 40  # the status bar sits below
+            for yy in range(body - 1, -1, -1):
+                if any(px(pix, w, xx, yy) != (0, 0, 0) for xx in range(0, w, 2)):
+                    return yy
+            return -1
+
+        # 100 letters: the prompt "aeon> " takes 6 cells, so the line needs two rows at 71 columns.
+        word = "abcdefghij"
+        line = "echo " + word * 10
+        vm.type(line)
+        time.sleep(0.8)
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "9-long-line-a.png"))
+        two_rows = lowest_lit(pix, w, h)
+        # Backspace 70 times: the cursor must travel back up across the row boundary.
+        for _ in range(70):
+            vm.keys("backspace")
+        time.sleep(0.8)
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "9-long-line-b.png"))
+        one_row = lowest_lit(pix, w, h)
+        r.check("the second row is gone and the cursor is back on the first", one_row < two_rows - 8, f"two_rows={two_rows} one_row={one_row}")
+        vm.type("z")
+        vm.keys("ret")
+        r.check("the shortened line runs with its text intact", vm.wait_for(word * 3 + "z", 30, "serial"), vm.text()[-300:])
+        # The full 100-character line is accepted and run in one piece.
+        vm.type(line)
+        vm.keys("ret")
+        r.check("a 105-character line is run whole", vm.wait_for(word * 10, 30, "serial"), vm.text()[-300:])
+        vm.type("echo wrap-ok")
+        vm.keys("ret")
+        r.check("shell still answers", vm.wait_for("wrap-ok", 30, "serial"))
+    finally:
+        vm.close()
+
+
 def t_bootcount(ctx):
     """Three failed boots in a row switch the next boot to recovery mode; a good boot clears the counter."""
     r = ctx.r
@@ -580,7 +622,7 @@ def t_bootcount(ctx):
         r.check("3 failures trigger recovery", "failed_boots=3 counting=true recovery=true" in t)
         r.check("recovery banner logged", "RECOVERY MODE" in t)
         r.check("no timer or scheduler in recovery", "timer and scheduler are off" in t and "pit irq0 ok" not in t and "task shell started" not in t)
-        r.check("menu waits in recovery", "press any key within 10 s" in t)
+        r.check("menu waits in recovery", "boot starts in 10 s" in t)
         r.check("a different phase marker is measured", "measured phase" in t)
         p11a = [l.split("pcr11_after=")[1].strip() for l in t.splitlines() if "pcr11_after=" in l]
         normal = hashlib.sha256(b"\x00" * 32 + hashlib.sha256(b"aeon:exit-boot-services").digest()).hexdigest()
@@ -622,8 +664,8 @@ def t_fwshell(ctx):
     r = ctx.r
     vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="fwsh", tpm=True)
     try:
-        r.check("menu wait reached", vm.wait_for("press any key within"))
-        vm.keys("spc")
+        r.check("menu wait reached", vm.wait_for("menu open: boot starts in"))
+        vm.keys("home")
         r.check("menu offers the firmware shell", vm.wait_for("S firmware shell"), vm.text()[-500:])
         vm.keys("s")
         r.check("firmware shell prompt", vm.wait_for("fw> ", 30, "serial"), vm.serial_text()[-300:])
@@ -642,8 +684,8 @@ def t_fwshell(ctx):
         vm.close()
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-c"), ctx.work, name="menu-c")
     try:
-        vm.wait_for("press any key within")
-        vm.keys("spc")
+        vm.wait_for("menu open: boot starts in")
+        vm.keys("home")
         vm.wait_for("C recovery mode")
         vm.keys("c")
         r.check("menu key C boots recovery mode", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text(), vm.text()[-400:])
@@ -1216,7 +1258,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

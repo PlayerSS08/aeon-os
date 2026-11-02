@@ -100,6 +100,11 @@ pub struct Console {
     /// Last bar position drawn, in thousandths.
     bar_pm: u32,
     logo_row: usize,
+    /// For each history line: true when it continues the line above (the text wrapped at the right
+    /// edge). Backspace at column 0 of such a line steps back up to the end of the line above.
+    cont: [bool; HIST_ROWS],
+    /// The boot menu was opened over the splash screen, so it can hand the splash back.
+    menu_from_splash: bool,
 }
 
 impl Console {
@@ -149,6 +154,8 @@ impl Console {
             menu: false,
             bar_pm: 0,
             logo_row: 0,
+            cont: [false; HIST_ROWS],
+            menu_from_splash: false,
         };
         c.logo_row = rows.saturating_sub(logo_rows) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
@@ -204,6 +211,7 @@ impl Console {
         // SAFETY: single-threaded; no other reference to the history is live here.
         let cells = unsafe { HIST.get() };
         cells.fill(BLANK);
+        self.cont.fill(false);
         self.cur_col = 0;
         self.newest = 0;
         self.scroll = 0;
@@ -214,6 +222,7 @@ impl Console {
         // SAFETY: single-threaded (interrupts off in callers); no other reference to the history is live.
         let cells = unsafe { HIST.get() };
         cells.fill(BLANK);
+        self.cont.fill(false);
         self.cur_col = 0;
         self.newest = 0;
         self.scroll = 0;
@@ -453,6 +462,7 @@ impl Console {
         let first = !self.menu;
         if first {
             self.menu = true;
+            self.menu_from_splash = self.splash;
             self.splash = false;
             let bg = self.px(BG);
             self.fill_rect(0, 0, self.width, self.height, bg);
@@ -482,11 +492,40 @@ impl Console {
             self.draw_text(face, (panel_x + panel_w).saturating_sub(pad + kw), ty, if on { MENU_KEY_SELECTED } else { MENU_KEY }, bg, key, sc, 0);
         }
         if first {
-            let f = &gfont::SANS_16;
-            let w = gfont::text_width(f, footer) * sc;
-            let y = self.height.saturating_sub(f.height as usize * sc + 28 * sc);
-            self.draw_text(f, self.width.saturating_sub(w) / 2, y, MENU_KEY, BG, footer, sc, 0);
+            self.menu_footer(footer);
         }
+    }
+
+    /// Repaints the line at the bottom of the boot menu (the countdown or the key help).
+    pub fn menu_footer(&self, footer: &str) {
+        if !self.menu {
+            return;
+        }
+        let sc = if self.width >= 3000 { 2 } else { 1 };
+        let f = &gfont::SANS_16;
+        let line_h = f.height as usize * sc;
+        let y = self.height.saturating_sub(line_h + 28 * sc);
+        self.fill_rect(0, y, self.width, line_h, self.px(BG));
+        let w = gfont::text_width(f, footer) * sc;
+        self.draw_text(f, self.width.saturating_sub(w) / 2, y, MENU_KEY, BG, footer, sc, 0);
+    }
+
+    /// Leaves the boot menu to carry on booting: back to the splash with the bar where it was, when
+    /// the menu was opened over the splash; otherwise the same as [`Console::menu_end`].
+    pub fn menu_resume(&mut self) {
+        if !self.menu {
+            return;
+        }
+        if !self.menu_from_splash {
+            self.menu_end();
+            return;
+        }
+        let pm = self.bar_pm;
+        self.menu = false;
+        self.menu_from_splash = false;
+        self.begin_splash();
+        self.fade_logo(255);
+        self.progress(pm);
     }
 
     /// Leaves the boot menu: the screen returns to the logo with an empty log area.
@@ -605,6 +644,7 @@ impl Console {
         self.cur_col = 0;
         let old_top = self.live_top() - self.scroll;
         self.newest += 1;
+        self.cont[self.newest % HIST_ROWS] = false;
         // SAFETY: single-threaded; no other reference to the history is live.
         let cells = unsafe { HIST.get() };
         let at = (self.newest % HIST_ROWS) * MAX_COLS;
@@ -619,14 +659,33 @@ impl Console {
         }
     }
 
+    /// Backspace at the start of a wrapped line: the cursor returns to the last column of the line above.
+    fn line_up(&mut self) {
+        let old_top = self.live_top() - self.scroll;
+        self.newest -= 1;
+        self.cur_col = self.cols - 1;
+        self.scroll = self.scroll.min(self.max_scroll());
+        if self.live_top() - self.scroll != old_top {
+            self.redraw_log();
+        }
+    }
+
     fn put_byte(&mut self, b: u8, color: u8) {
         match b {
             b'\n' => self.newline(),
             b'\r' => self.cur_col = 0,
-            0x08 => self.cur_col = self.cur_col.saturating_sub(1),
+            0x08 => {
+                if self.cur_col == 0 && self.newest > 0 && self.cont[self.newest % HIST_ROWS] {
+                    self.line_up();
+                } else {
+                    self.cur_col = self.cur_col.saturating_sub(1);
+                }
+            }
             _ => {
                 if self.cur_col >= self.cols {
                     self.newline();
+                    // The text carries on from the line above: remember it, so Backspace can go back.
+                    self.cont[self.newest % HIST_ROWS] = true;
                 }
                 // SAFETY: single-threaded; no other reference to the history is live.
                 let cells = unsafe { HIST.get() };

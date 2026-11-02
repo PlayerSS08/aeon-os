@@ -137,6 +137,19 @@ Asked to check `docs/` and finish what was open.
 
 Next in the report's order: step 4 (real PC; needs a person), 9 (fuzz/Miri; needs tool approval), 10 (IOAPIC, keyboard on IRQ1), then the real-disk driver (AHCI or NVMe, depends on what `pci` shows on the owner's PC), address spaces and the ELF loader.
 
+## Fifth pass (2026-11-02): screen, typing and menu
+
+From your PC test. Plan: `docs/superpowers/plans/2026-11-02-screen-and-menu.md`.
+
+| Request | What was done | Proof |
+|---|---|---|
+| Typing stopped at one row | A typed line may use several rows (up to 240 characters); Backspace steps back up across rows (`fb.rs` marks wrapped lines) | 2 editor tests with a wrapping terminal; boot test `longline` (screenshot checked) |
+| "Auto resize to the screen" | Aeon picks the largest linear mode the firmware offers (`src/gopmode.rs`); `mode=WxH` still wins | 8 unit tests; QEMU now starts at 2048x2048 |
+| Menu first, then boot | Dawn opens at once with "Boot Aeon" highlighted and a countdown (default 2 s); any key stops it; booting returns to the splash; `nomenu` skips it | boot groups `boot menu modes config fwshell bootcount` |
+| Checklist | `docs/ca6/CHECKLIST.md` | n/a |
+
+Result: 247 host tests, 364 QEMU checks, 0 failed; clippy clean. Version 0.9.2 is in `Cargo.toml` but **not released**: the signed image has not been rebuilt, and the evidence run was stopped by low memory and not repeated (the saved evidence is still the 0.9.1 run). The unsigned image is 261,632 bytes against the 262,144 test limit (512 bytes left); signed it will be about 263 KB, so decision 9 (size budget) must be made before the next feature.
+
 ## Fourth pass (2026-11-02): CA-6 layers completed
 
 The assignment was re-read layer by layer. My earlier "all met" claim was too generous, so these gaps were closed:

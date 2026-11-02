@@ -1,10 +1,10 @@
 //! The shell's line editor: insert and delete anywhere in the line, move the cursor, kill to the start
 //! or end or by word, recall a line. Every operation changes the text and tells the caller what bytes to
-//! print so the screen matches: only printable bytes, spaces and backspace (0x08) are ever sent, and a
-//! line never wraps (the caller sets the limit from the screen width). Pure, host-tested against a
-//! simulated terminal.
+//! print so the screen matches: only printable bytes, spaces and backspace (0x08) are ever sent. A line
+//! may be longer than the screen is wide: the console wraps it onto the next row, and Backspace at the
+//! start of a wrapped row steps back up. Pure, host-tested against simulated terminals.
 
-pub const MAX_LINE: usize = 120;
+pub const MAX_LINE: usize = 240;
 
 pub struct LineEditor {
     buf: [u8; MAX_LINE],
@@ -49,7 +49,7 @@ impl LineEditor {
         Self { buf: [0; MAX_LINE], len: 0, pos: 0, max: MAX_LINE }
     }
 
-    /// Longest line allowed (at most [`MAX_LINE`]); keeps a line on one screen row.
+    /// Longest line allowed (at most [`MAX_LINE`]).
     pub fn set_max(&mut self, n: usize) {
         self.max = n.clamp(1, MAX_LINE);
     }
@@ -381,6 +381,129 @@ mod tests {
         ed2.set(b"ab", &mut sink);
         assert!(!ed2.replace_before_cursor(b"abcdef", &mut sink));
         assert_eq!(ed2.text(), b"ab");
+    }
+
+    /// A terminal that wraps like the framebuffer console: a character written at the right edge
+    /// continues on the next row, and backspace at column 0 of such a continued row goes back up to
+    /// the last column of the row above. `col == width` is the "pending wrap" position.
+    struct WrapTerm {
+        width: usize,
+        rows: Vec<Vec<u8>>,
+        cont: Vec<bool>,
+        row: usize,
+        col: usize,
+    }
+
+    impl WrapTerm {
+        fn new(width: usize) -> Self {
+            Self { width, rows: vec![vec![b' '; width]; 40], cont: vec![false; 40], row: 0, col: 0 }
+        }
+        fn feed(&mut self, bytes: &[u8]) {
+            for &b in bytes {
+                if b == 0x08 {
+                    if self.col == 0 && self.cont[self.row] {
+                        self.row -= 1;
+                        self.col = self.width - 1;
+                    } else {
+                        self.col = self.col.saturating_sub(1);
+                    }
+                } else {
+                    assert!((0x20..0x7F).contains(&b), "only printable bytes and backspace: {b:#x}");
+                    if self.col >= self.width {
+                        self.row += 1;
+                        self.col = 0;
+                        self.cont[self.row] = true;
+                    }
+                    self.rows[self.row][self.col] = b;
+                    self.col += 1;
+                }
+            }
+        }
+        /// All rows joined: the line as the screen shows it, trailing blanks removed.
+        fn screen(&self) -> Vec<u8> {
+            let mut v: Vec<u8> = self.rows.iter().flatten().copied().collect();
+            while v.last() == Some(&b' ') {
+                v.pop();
+            }
+            v
+        }
+        /// The cursor as an index into the line (row * width + col).
+        fn index(&self) -> usize {
+            self.row * self.width + self.col
+        }
+    }
+
+    fn check_wrapped(ed: &LineEditor, t: &WrapTerm) {
+        assert_eq!(t.screen(), ed.text(), "screen text across rows");
+        assert_eq!(t.index(), ed.pos(), "cursor index across rows");
+    }
+
+    #[test]
+    fn a_line_longer_than_one_row_edits_cleanly() {
+        let mut ed = LineEditor::new();
+        let mut t = WrapTerm::new(10);
+        for c in b"abcdefghij0123456789xyz" {
+            assert!(ed.insert(*c, &mut |b| t.feed(b)));
+            check_wrapped(&ed, &t);
+        }
+        assert_eq!(t.row, 2);
+        for _ in 0..13 {
+            ed.backspace(&mut |b| t.feed(b));
+            check_wrapped(&ed, &t);
+        }
+        assert_eq!(ed.text(), b"abcdefghij");
+        // Exactly one row full: the cursor is at (row 0, col 10) or (row 1, col 0), the same spot.
+        assert_eq!(t.index(), 10);
+        ed.backspace(&mut |b| t.feed(b));
+        check_wrapped(&ed, &t);
+        ed.set(b"a line that needs three rows!", &mut |b| t.feed(b));
+        check_wrapped(&ed, &t);
+        ed.home(&mut |b| t.feed(b));
+        check_wrapped(&ed, &t);
+        ed.end(&mut |b| t.feed(b));
+        check_wrapped(&ed, &t);
+        ed.kill_to_start(&mut |b| t.feed(b));
+        check_wrapped(&ed, &t);
+    }
+
+    #[test]
+    fn random_operations_across_wrapped_rows() {
+        let mut seed = 0x0bad_cafe_1234_5678u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut ed = LineEditor::new();
+        ed.set_max(75);
+        let mut t = WrapTerm::new(10);
+        for _ in 0..5000 {
+            let r = next();
+            let mut w = |b: &[u8]| t.feed(b);
+            match r % 12 {
+                0..=4 => {
+                    ed.insert(b'a' + (r >> 8) as u8 % 26, &mut w);
+                }
+                5 | 6 => ed.backspace(&mut w),
+                7 => ed.delete(&mut w),
+                8 => ed.left(&mut w),
+                9 => ed.right(&mut w),
+                10 => match (r >> 8) % 5 {
+                    0 => ed.kill_word(&mut w),
+                    1 => ed.kill_to_end(&mut w),
+                    2 => ed.kill_to_start(&mut w),
+                    3 => ed.home(&mut w),
+                    _ => ed.end(&mut w),
+                },
+                _ => {
+                    let n = (r >> 8) as usize % 40;
+                    let text: Vec<u8> = (0..n).map(|i| b'a' + (i % 26) as u8).collect();
+                    ed.set(&text, &mut w);
+                }
+            }
+            check_wrapped(&ed, &t);
+        }
     }
 
     /// Random operations never leave the screen different from the text.
