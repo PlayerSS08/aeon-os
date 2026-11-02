@@ -1,5 +1,6 @@
 //! Interactive kernel shell and the status-bar task. Both run as scheduler tasks.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +18,7 @@ use crate::logfmt::LineBuf;
 use crate::memmap;
 use crate::mm;
 use crate::power;
-use crate::ramfs::{FsError, RamFs, MAX_NAME};
+use crate::ramfs::{resolve, unescape, FsError, RamFs, MAX_NAME, MAX_PATH};
 use crate::sched;
 use crate::usermode;
 
@@ -417,47 +418,189 @@ fn cmd_spawn() {
     }
 }
 
-fn cmd_ls() {
+/// The folder `cd` last moved to (empty means the root). Only the shell task touches it.
+static CWD: Global<String> = Global::new(String::new());
+
+fn cwd() -> &'static mut String {
+    // SAFETY: only the single shell task calls this, and no result is held across another command.
+    unsafe { CWD.get() }
+}
+
+/// Turns what was typed into an absolute path (relative to the current folder). A name that is
+/// empty or not allowed prints the "bad name" message and gives `None`.
+fn path_arg(arg: &str) -> Option<String> {
+    let here = if cwd().is_empty() { "/" } else { cwd().as_str() };
+    match resolve(here, arg) {
+        Some(p) if !arg.is_empty() || p != "/" => Some(p),
+        _ => {
+            fs_error(FsError::BadName, arg);
+            None
+        }
+    }
+}
+
+/// Like `path_arg`, but an empty argument means the current folder (for `ls`, `tree`, `cd`).
+fn folder_arg(arg: &str) -> Option<String> {
+    let here = if cwd().is_empty() { "/" } else { cwd().as_str() };
+    let p = resolve(here, arg);
+    if p.is_none() {
+        fs_error(FsError::BadName, arg);
+    }
+    p
+}
+
+fn cmd_pwd() {
+    out!("{}\n", if cwd().is_empty() { "/" } else { cwd().as_str() });
+}
+
+fn cmd_cd(arg: &str) {
+    let Some(p) = folder_arg(if arg.is_empty() { "/" } else { arg }) else { return };
+    if fs().is_dir(&p) {
+        *cwd() = if p == "/" { String::new() } else { p };
+    } else if fs().read(&p).is_some() {
+        fs_error(FsError::NotDir, arg);
+    } else {
+        out!("no such folder '{}'\n", arg);
+    }
+}
+
+fn cmd_mkdir(arg: &str) {
+    let Some(p) = path_arg(arg) else { return };
+    match fs().mkdir(&p) {
+        Ok(()) => out!("made folder {}\n", p),
+        Err(e) => fs_error(e, arg),
+    }
+}
+
+fn cmd_rmdir(arg: &str) {
+    let Some(p) = path_arg(arg) else { return };
+    match fs().rmdir(&p) {
+        Ok(()) => {
+            out!("removed folder {}\n", p);
+            // Never leave the shell standing in a folder that no longer exists.
+            if !fs().is_dir(cwd().as_str()) && !cwd().is_empty() {
+                cwd().clear();
+            }
+        }
+        Err(e) => fs_error(e, arg),
+    }
+}
+
+fn cmd_ls(arg: &str) {
+    let Some(p) = folder_arg(arg) else { return };
+    if !fs().is_dir(&p) {
+        match fs().read(&p) {
+            Some(d) => out!("{:>8}  {}\n", d.len(), arg),
+            None => out!("no such folder '{}'\n", arg),
+        }
+        return;
+    }
     let mut n = 0;
-    for (name, size) in fs().names() {
-        out!("{:>8}  {}\n", size, name);
+    for (name, size) in fs().list(&p) {
+        match size {
+            Some(s) => out!("{:>8}  {}\n", s, name),
+            None => out!("{:>8}  {}/\n", "<dir>", name),
+        }
         n += 1;
     }
     if n == 0 {
-        out!("(no files)\n");
+        out!("{}\n", if p == "/" { "(no files)" } else { "(empty folder)" });
     }
+}
+
+/// Prints the tree below `dir`, one indented line per entry. `depth` stops runaway nesting.
+fn print_tree(dir: &str, indent: usize, depth: usize) {
+    // Copy the names out first: printing must not hold a borrow of the file system.
+    let entries: Vec<(String, Option<usize>)> = fs().list(dir).map(|(n, s)| (String::from(n), s)).collect();
+    for (name, size) in entries {
+        match size {
+            Some(s) => out!("{:indent$}{}  ({} bytes)\n", "", name, s, indent = indent),
+            None => {
+                out!("{:indent$}{}/\n", "", name, indent = indent);
+                if depth < 16 {
+                    let child = if dir == "/" { alloc::format!("/{name}") } else { alloc::format!("{dir}/{name}") };
+                    print_tree(&child, indent + 2, depth + 1);
+                }
+            }
+        }
+    }
+}
+
+fn cmd_tree(arg: &str) {
+    let Some(p) = folder_arg(arg) else { return };
+    if !fs().is_dir(&p) {
+        out!("no such folder '{}'\n", arg);
+        return;
+    }
+    out!("{}\n", p);
+    print_tree(&p, 2, 0);
 }
 
 fn cmd_df() {
     let f = fs();
-    out!("{} file(s), used {} of {} bytes\n", f.count(), f.used_bytes(), f.max_bytes());
+    out!("{} file(s), used {} of {} bytes", f.count(), f.used_bytes(), f.max_bytes());
+    if f.dir_count() > 0 {
+        out!(", {} folder(s)", f.dir_count());
+    }
+    out!("\n");
 }
 
-fn cmd_cat(name: &str) {
-    match fs().read(name) {
+fn cmd_cat(arg: &str) {
+    let Some(p) = path_arg(arg) else { return };
+    match fs().read(&p) {
         Some(data) => {
             log::print_raw(data);
             out!("\n");
         }
-        None => out!("no such file '{}'\n", name),
+        None if fs().is_dir(&p) => fs_error(FsError::IsDir, arg),
+        None => out!("no such file '{}'\n", arg),
     }
 }
 
 fn cmd_write(args: &str) {
     let (name, text) = args.split_once(' ').map_or((args, ""), |(n, t)| (n, t.trim_start()));
-    match fs().write(name, text.as_bytes()) {
-        Ok(()) => out!("wrote {} byte(s) to {}\n", text.len(), name),
-        Err(FsError::BadName) => out!("bad name '{}' (1-{} chars, no / or control characters)\n", name, MAX_NAME),
-        Err(FsError::Full) => out!("filesystem full: too many files\n"),
-        Err(FsError::TooBig) => out!("filesystem full: out of space\n"),
+    let Some(p) = path_arg(name) else { return };
+    let data = unescape(text);
+    match fs().write(&p, &data) {
+        Ok(()) => out!("wrote {} byte(s) to {}\n", data.len(), name),
+        Err(e) => fs_error(e, name),
     }
 }
 
-fn cmd_rm(name: &str) {
-    if fs().remove(name) {
-        out!("removed {}\n", name);
+/// `append <file> <text>`: adds the text and a new line to the end of the file.
+fn cmd_append(args: &str) {
+    let (name, text) = args.split_once(' ').map_or((args, ""), |(n, t)| (n, t.trim_start()));
+    let Some(p) = path_arg(name) else { return };
+    let mut data = unescape(text);
+    data.push(b'\n');
+    match fs().append(&p, &data) {
+        Ok(()) => out!("added {} byte(s) to {}\n", data.len(), name),
+        Err(e) => fs_error(e, name),
+    }
+}
+
+fn fs_error(e: FsError, name: &str) {
+    match e {
+        FsError::BadName => out!("bad name '{}' (1-{} chars each, no backslash or control characters, path up to {})\n", name, MAX_NAME, MAX_PATH),
+        FsError::Full => out!("filesystem full: too many files and folders\n"),
+        FsError::TooBig => out!("filesystem full: out of space\n"),
+        FsError::NoParent => out!("no such folder for '{}' (make it with `mkdir`)\n", name),
+        FsError::IsDir => out!("'{}' is a folder\n", name),
+        FsError::NotDir => out!("'{}' is not a folder\n", name),
+        FsError::Exists => out!("'{}' already exists\n", name),
+        FsError::NotEmpty => out!("folder '{}' is not empty\n", name),
+        FsError::NotFound => out!("no such folder '{}'\n", name),
+    }
+}
+
+fn cmd_rm(arg: &str) {
+    let Some(p) = path_arg(arg) else { return };
+    if fs().remove(&p) {
+        out!("removed {}\n", arg);
+    } else if fs().is_dir(&p) {
+        out!("'{}' is a folder: use `rmdir`\n", arg);
     } else {
-        out!("no such file '{}'\n", name);
+        out!("no such file '{}'\n", arg);
     }
 }
 
@@ -518,10 +661,18 @@ fn run(line: &str, hist: &History) {
         "echo" => out!("{}\n", rest),
         "sort" => cmd_sort(rest),
         "run" => cmd_run(rest),
-        "ls" | "dir" => cmd_ls(),
+        "ls" | "dir" => cmd_ls(rest),
+        "tree" => cmd_tree(rest),
+        "cd" => cmd_cd(rest),
+        "pwd" => cmd_pwd(),
+        "mkdir" => cmd_mkdir(rest),
+        "rmdir" => cmd_rmdir(rest),
         "df" => cmd_df(),
         "cat" => cmd_cat(rest),
         "write" => cmd_write(rest),
+        "append" => cmd_append(rest),
+        // `edit <file>` is handled in the shell loop (it needs to keep state between lines).
+        "edit" => out!("usage: edit <file>\n"),
         "rm" => cmd_rm(rest),
         "clear" | "cls" => {
             log::with_console(Console::clear_log);
@@ -589,6 +740,7 @@ impl History {
 }
 
 const PROMPT: &str = "aeon> ";
+const EDIT_PROMPT: &str = "   | ";
 
 fn put(b: &[u8]) {
     log::print_raw(b);
@@ -644,6 +796,8 @@ pub extern "C" fn shell_task(_: usize) {
     let mut kbd = Keyboard::new();
     let mut ed = LineEditor::new();
     let mut hist = History::new();
+    // Set while `edit <file>` is collecting lines: (file name, text so far).
+    let mut editing: Option<(String, Vec<u8>)> = None;
     // The wordmark is for the splash and the menu; from here the log gets the whole screen.
     log::with_console(Console::fullscreen_log);
     // A line never wraps: it must fit between the prompt and the right edge.
@@ -716,14 +870,55 @@ pub extern "C" fn shell_task(_: usize) {
                     let n = ed.text().len();
                     text[..n].copy_from_slice(ed.text());
                     ed.reset();
+                    let line = core::str::from_utf8(&text[..n]).unwrap_or("");
+                    if let Some(doc) = editing.as_mut() {
+                        // Inside `edit`: a lone "." saves, anything else is one more line.
+                        if line == "." {
+                            let (name, buf) = editing.take().unwrap_or_default();
+                            match fs().write(&name, &buf) {
+                                Ok(()) => out!("saved {} byte(s) to {}\n", buf.len(), name),
+                                Err(e) => fs_error(e, &name),
+                            }
+                            out!("{}", PROMPT);
+                        } else if doc.1.len() + n + 1 > fs().max_bytes() {
+                            editing = None;
+                            out!("too much text for the RAM disk: edit cancelled, nothing saved\n{}", PROMPT);
+                        } else {
+                            doc.1.extend_from_slice(&text[..n]);
+                            doc.1.push(b'\n');
+                            out!("{}", EDIT_PROMPT);
+                        }
+                        continue;
+                    }
                     hist.push(&text[..n]);
-                    run(core::str::from_utf8(&text[..n]).unwrap_or(""), &hist);
-                    out!("{}", PROMPT);
+                    let edit_name = line.trim().strip_prefix("edit ").map(str::trim).filter(|s| !s.is_empty());
+                    if let Some(name) = edit_name {
+                        let target = path_arg(name).filter(|p| match fs().check_writable(p) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                fs_error(e, name);
+                                false
+                            }
+                        });
+                        if let Some(p) = target {
+                            out!("editing {}: type lines, a line with only . saves, Ctrl+C cancels\n{}", p, EDIT_PROMPT);
+                            editing = Some((p, Vec::new()));
+                        } else {
+                            out!("{}", PROMPT);
+                        }
+                    } else {
+                        run(line, &hist);
+                        out!("{}", PROMPT);
+                    }
                 }
                 Key::Interrupt => {
                     ed.reset();
                     hist.shown = 0;
-                    out!("^C\n{}", PROMPT);
+                    if editing.take().is_some() {
+                        out!("^C edit cancelled, nothing saved\n{}", PROMPT);
+                    } else {
+                        out!("^C\n{}", PROMPT);
+                    }
                 }
                 Key::ClearScreen => {
                     log::with_console(Console::clear_log);
@@ -750,18 +945,25 @@ pub extern "C" fn status_task(_: usize) {
         let mut line = LineBuf::<256>::new();
         let h = mm::heap_stats();
         let f = mm::frame_stats();
-        let _ = write!(
-            line,
-            " AEON {} | up {:02}:{:02}:{:02} | {} MB free | heap {}K | tasks {} | {}",
-            crate::VERSION,
-            secs / 3600,
-            (secs / 60) % 60,
-            secs % 60,
-            f.free as u64 * 4 / 1024,
-            h.used / 1024,
-            task_count(),
-            if back > 0 { "SCROLLED (End = live)" } else { "help | Up/Down scroll" }
-        );
+        // A narrow screen (640 px has 71 columns) gets a shorter bar, so the scroll hint is not cut off.
+        let cols = log::with_console(|c| c.size().0).unwrap_or(80);
+        let (secs_h, secs_m, secs_s) = (secs / 3600, (secs / 60) % 60, secs % 60);
+        let free_mb = f.free as u64 * 4 / 1024;
+        if cols >= 84 {
+            let hint = if back > 0 { "SCROLLED (End = live)" } else { "help | Up/Down scroll" };
+            let _ = write!(
+                line,
+                " AEON {} | up {:02}:{:02}:{:02} | {} MB free | heap {}K | tasks {} | {}",
+                crate::VERSION, secs_h, secs_m, secs_s, free_mb, h.used / 1024, task_count(), hint
+            );
+        } else {
+            let hint = if back > 0 { "SCROLLED, End=live" } else { "Up/Down scroll" };
+            let _ = write!(
+                line,
+                " AEON {} | up {:02}:{:02}:{:02} | {} MB free | tasks {} | {}",
+                crate::VERSION, secs_h, secs_m, secs_s, free_mb, task_count(), hint
+            );
+        }
         let bytes = line.finish();
         let bytes = &bytes[..bytes.len() - 1];
         log::with_console(|c| c.status(bytes));

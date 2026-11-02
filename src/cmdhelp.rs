@@ -28,7 +28,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("system", "uname", "uname", "system name, version and architecture"),
     c("system", "ver", "ver", "same as `version`"),
     c("system", "man", "man <command>", "same as `help <command>`"),
-    c("system", "history", "history", "the commands you ran lately (Ctrl+Up/Down recall them)"),
+    c("system", "history", "history", "your latest commands (Ctrl+Up/Down recall them)"),
     c("status", "log", "log", "replay the boot log"),
     c("hardware", "pci", "pci", "devices on the PCI bus"),
     c("hardware", "disks", "disks", "the disk, if there is one"),
@@ -42,15 +42,22 @@ pub const COMMANDS: &[Cmd] = &[
     c("tasks", "block", "block", "start a task that waits on a queue"),
     c("tasks", "wake", "wake", "wake the tasks waiting on that queue"),
     c("tasks", "kill", "kill <id>", "stop a task"),
-    c("files", "ls", "ls", "list the files in RAM"),
-    c("files", "dir", "dir", "same as `ls`"),
+    c("files", "ls", "ls [folder]", "list a folder in RAM (default: the current one)"),
+    c("files", "dir", "dir [folder]", "same as `ls`"),
+    c("files", "tree", "tree [folder]", "show a folder and everything inside it"),
+    c("files", "cd", "cd [folder]", "go into a folder (`cd ..` up, `cd` back to /)"),
+    c("files", "pwd", "pwd", "show the current folder"),
+    c("files", "mkdir", "mkdir <folder>", "make a folder"),
+    c("files", "rmdir", "rmdir <folder>", "delete an empty folder"),
     c("files", "df", "df", "space used by the RAM files"),
     c("files", "cat", "cat <file>", "print a file"),
-    c("files", "write", "write <file> <text>", "create or replace a file in RAM"),
+    c("files", "write", "write <file> <text>", "create or replace a file (\\n in text = new line)"),
+    c("files", "append", "append <file> <text>", "add a line to the end of a file"),
+    c("files", "edit", "edit <file>", "type many lines, end with a line holding only ."),
     c("files", "rm", "rm <file>", "delete a file"),
     c("disk", "dls", "dls [path]", "list a directory on the disk (FAT16/FAT32)"),
     c("disk", "dcat", "dcat <path>", "print a file from the disk (first 64 KiB)"),
-    c("programs", "run", "run <program>", "run a built-in in ring 3: hello fault gp spin badcall"),
+    c("programs", "run", "run <program>", "ring 3 demo: hello fault gp spin badcall"),
     c("tools", "echo", "echo <text>", "print text"),
     c("tools", "sort", "sort <n> <n> ...", "sort numbers (uses the heap)"),
     c("tools", "clear", "clear", "clear the screen (or press Ctrl+L)"),
@@ -145,15 +152,15 @@ mod tests {
     }
 
     #[test]
-    fn lines_fit_an_80_column_screen() {
+    fn lines_fit_a_71_column_screen() {
         for c in COMMANDS {
-            // `help all` prints "  {usage:<20} {about}".
+            // `help all` prints "  {usage:<20} {about}". The smallest screen (640 px, 9 px cells) has 71 columns.
             assert!(c.usage.len() <= 20, "{}", c.usage);
-            assert!(2 + 20 + 1 + c.about.len() <= 80, "{} is too long for one line", c.name);
+            assert!(2 + 20 + 1 + c.about.len() <= 71, "{} is too long for one line ({} columns)", c.name, 23 + c.about.len());
         }
         for g in GROUPS {
             let names: usize = COMMANDS.iter().filter(|c| c.group == *g).map(|c| c.name.len() + 1).sum();
-            assert!(10 + names <= 80, "group line {} too long", g);
+            assert!(10 + names <= 71, "group line {} too long", g);
         }
     }
 
@@ -190,7 +197,7 @@ mod tests {
 
     #[test]
     fn find_works() {
-        assert_eq!(find("ls").map(|c| c.usage), Some("ls"));
+        assert_eq!(find("ls").map(|c| c.usage), Some("ls [folder]"));
         assert!(find("nosuch").is_none());
         assert!(find("").is_none());
     }

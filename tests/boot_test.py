@@ -434,6 +434,32 @@ def t_modes(ctx):
             vm.close()
 
 
+def t_text_clip(ctx):
+    """Shell text on the smallest screen is clipped at the edges, never drawn outside the framebuffer."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-clip", cfg="mode=640x480\n"), ctx.work, name="textclip")
+    try:
+        r.check("shell prompt at 640x480", vm.wait_for("aeon> ", 150, "serial"))
+        vm.type("help all")
+        vm.keys("ret")
+        r.check("help all printed", vm.wait_for("shutdown", 30, "serial"))
+        time.sleep(0.6)
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "9-text-clip.png"))
+        r.check("screen is 640x480", (w, h) == (640, 480), f"got {w}x{h}")
+        body = h - 40  # the status bar sits below
+        lit_text = sum(1 for yy in range(body) for xx in range(0, w, 2) if px(pix, w, xx, yy) != (0, 0, 0))
+        r.check("shell text is on screen", lit_text > 300, f"lit={lit_text}")
+        # Text starts at x=0 by design, so only the right edge is checked: lines wrap at the last whole
+        # cell and nothing may reach the final pixel column.
+        right = sum(1 for yy in range(body) if px(pix, w, w - 1, yy) != (0, 0, 0))
+        r.check("nothing is drawn in the last pixel column", right == 0, f"right={right}")
+        vm.type("echo clip-ok")
+        vm.keys("ret")
+        r.check("shell still answers after the long output", vm.wait_for("clip-ok", 30, "serial"))
+    finally:
+        vm.close()
+
+
 def t_bootcount(ctx):
     """Three failed boots in a row switch the next boot to recovery mode; a good boot clears the counter."""
     r = ctx.r
@@ -743,6 +769,45 @@ def t_fs(ctx):
             ("rm note", "removed note"),
             ("cat note", "no such file 'note'"),
             ("df", "0 file(s), used 0 of"),
+            # Many lines: `edit` collects lines until a lone ".", `append` adds one more.
+            ("edit poem", "Ctrl+C cancels"),
+            ("line one", "   | "),
+            ("line two", "   | "),
+            (".", "saved 18 byte(s) to /poem"),
+            ("append poem line three", "added 11 byte(s) to poem"),
+            ("cat poem", "line three"),
+            ("df", "1 file(s), used 29 of"),
+        ])
+        text = vm.serial_text().replace("\r", "")
+        r.check("the file keeps its lines apart", "line one\nline two\nline three\n" in text, text[-300:])
+        run_cmds(vm, r, [("rm poem", "removed poem")])
+        # Folders: make one, step into it, write there, come back, look at the tree, remove it.
+        run_cmds(vm, r, [
+            ("mkdir docs", "made folder /docs"),
+            ("mkdir docs", "already exists"),
+            ("write nodir/x hi", "no such folder for"),
+        ])
+        vm.type("cd docs")
+        vm.keys("ret")
+        run_cmds(vm, r, [
+            ("pwd", "/docs"),
+            ("write a.txt inside", "wrote 6 byte(s) to a.txt"),
+            ("ls", "6  a.txt"),
+            ("mkdir sub", "made folder /docs/sub"),
+        ])
+        vm.type("cd ..")
+        vm.keys("ret")
+        run_cmds(vm, r, [
+            ("pwd", "/\r\naeon> "),
+            ("cat docs/a.txt", "inside"),
+            ("tree", "a.txt  (6 bytes)"),
+            ("rm docs", "is a folder"),
+            ("rmdir docs", "is not empty"),
+            ("cd docs/a.txt", "is not a folder"),
+            ("rm docs/a.txt", "removed docs/a.txt"),
+            ("rmdir docs/sub", "removed folder /docs/sub"),
+            ("rmdir docs", "removed folder /docs"),
+            ("df", "0 file(s), used 0 of"),
         ])
     finally:
         vm.close()
@@ -922,7 +987,7 @@ def t_console(ctx):
         run_cmds(vm, r, [
             ("help", "hardware  pci disks dread"),
             ("help", "Up/Down scroll the screen"),
-            ("help ls", "list the files in RAM"),
+            ("help ls", "list a folder in RAM"),
             ("help dread", "dread <n> [off]"),
             ("help nosuch", "no command 'nosuch'"),
             ("help all", "shutdown" + " " * 13 + "power off"),
@@ -1009,7 +1074,7 @@ def t_console(ctx):
             ("free", "frames"),
             ("dir", "(no files)"),
             ("history", "echo edited"),
-            ("man ls", "list the files in RAM"),
+            ("man ls", "list a folder in RAM"),
         ])
         # The cursor is a light block on the prompt row.
         time.sleep(0.8)
@@ -1052,7 +1117,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "textclip": t_text_clip, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
