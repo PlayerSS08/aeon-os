@@ -3,7 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::acpi;
 use crate::arch;
@@ -20,6 +20,7 @@ use crate::mm;
 use crate::power;
 use crate::ramfs::{resolve, unescape, FsError, RamFs, MAX_NAME, MAX_PATH};
 use crate::sched;
+use crate::spin::SpinLock;
 use crate::usermode;
 
 struct Out;
@@ -409,12 +410,256 @@ fn cmd_wake() {
     out!("woke {} task(s)\n", DEMO_QUEUE.wake_all());
 }
 
-fn cmd_spawn() {
-    for (i, name) in ["worker-a", "worker-b"].into_iter().enumerate() {
-        match sched::spawn(name, worker, i) {
+/// Cooperative worker: does a little work and then gives the CPU up itself, so every switch away from it
+/// is a `yield`, not a timer preemption. Compare `worker`, which never yields (CA-6 layer 6).
+extern "C" fn coop_worker(slot: usize) {
+    loop {
+        COUNTERS[slot % COUNTERS.len()].fetch_add(1, Ordering::Relaxed);
+        for _ in 0..2_000 {
+            core::hint::spin_loop();
+        }
+        sched::yield_now();
+    }
+}
+
+/// `spawn` starts two workers that never yield (only the timer takes the CPU away); `spawn coop` starts
+/// two that yield by themselves. `trace` then shows the difference in why each switch happened.
+fn cmd_spawn(arg: &str) {
+    let coop = arg == "coop";
+    if !arg.is_empty() && !coop {
+        out!("usage: spawn [coop]\n");
+        return;
+    }
+    let (names, entry): ([&str; 2], extern "C" fn(usize)) = if coop { (["coop-a", "coop-b"], coop_worker) } else { (["worker-a", "worker-b"], worker) };
+    for (i, name) in names.into_iter().enumerate() {
+        match sched::spawn(name, entry, i) {
             Some(id) => out!("started {} as task {}\n", name, id),
             None => out!("cannot start {}: no free task slot or memory\n", name),
         }
+    }
+}
+
+/// `queue`: the ready queue, front first. The front task runs next; a task that is blocked, sleeping or
+/// running is not in it.
+fn cmd_queue() {
+    let mut n = 0;
+    out!("ready queue (front runs next):");
+    sched::ready_order(|id, name| {
+        out!(" {}({})", id, name);
+        n += 1;
+    });
+    if n == 0 {
+        out!(" (empty: only the idle task can run)");
+    }
+    out!("\nqueue matches the task states: {}\n", if sched::queue_consistent() { "yes" } else { "NO (bug)" });
+}
+
+/// `trace`: the scheduler trace. Totals, then the last 12 context switches (or `n`, or `all`), each with
+/// the tick it happened at, the task that left, the task that came in and why it left.
+fn cmd_trace(arg: &str) {
+    use crate::schedtrace::Reason;
+    let show = match arg {
+        "reset" => {
+            sched::trace_reset();
+            out!("trace cleared\n");
+            return;
+        }
+        "" => 12,
+        "all" => sched::TRACE_LEN,
+        n => match n.parse::<usize>() {
+            Ok(v) => v,
+            Err(_) => {
+                out!("usage: trace [n|all|reset]\n");
+                return;
+            }
+        },
+    };
+    let s = sched::trace_summary();
+    out!("switches {} (last {} kept):", s.total, s.held);
+    for r in Reason::ALL {
+        out!(" {} {}", r.name(), s.by_reason[r.index()]);
+    }
+    out!("\n");
+    for e in sched::trace_snapshot(show) {
+        out!("tick {:>8} {:>2} -> {:<2} {}\n", e.tick, e.from, e.to, e.reason.name());
+    }
+}
+
+/// Four job slots: a job is a task that does `units` of work, reports when it started and finished, and
+/// ends (so the task goes through ready, running and terminated, CA-6 layer 5).
+static JOB_BUSY: [AtomicBool; 4] = [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)];
+static JOB_CREATED: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+const JOB_NAMES: [&str; 4] = ["job-0", "job-1", "job-2", "job-3"];
+
+extern "C" fn job(arg: usize) {
+    let (slot, units) = (arg & 0xFF, arg >> 8);
+    let started = arch::ticks();
+    for _ in 0..units {
+        for _ in 0..20_000 {
+            core::hint::spin_loop();
+        }
+    }
+    let ended = arch::ticks();
+    let created = JOB_CREATED[slot].load(Ordering::Relaxed);
+    out!("job-{} finished: {} units; first ran {} ticks after it was created, done after {} ticks\n", slot, units, started - created, ended - created);
+    JOB_BUSY[slot].store(false, Ordering::Release);
+}
+
+/// `job <units> [more units]`: starts one job per number, all in the same instant, so their turns
+/// interleave and the shortest ends first. One unit is 20,000 spins, about 3 ms in QEMU.
+fn cmd_job(arg: &str) {
+    let mut sizes: Vec<usize> = Vec::new();
+    for w in arg.split_whitespace() {
+        match w.parse::<usize>() {
+            Ok(u) if (1..=100_000).contains(&u) => sizes.push(u),
+            Ok(_) => {
+                out!("units must be 1 to 100000\n");
+                return;
+            }
+            Err(_) => {
+                sizes.clear();
+                break;
+            }
+        }
+    }
+    if sizes.is_empty() || sizes.len() > JOB_BUSY.len() {
+        out!("usage: job <units> [more units]   (1 to 4 jobs, each 1 to 100000 units)\n");
+        return;
+    }
+    // Claim every slot first, so either all the jobs start or none does.
+    let mut slots: Vec<usize> = Vec::new();
+    for _ in &sizes {
+        match (0..JOB_BUSY.len()).find(|&i| JOB_BUSY[i].compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_ok()) {
+            Some(i) => slots.push(i),
+            None => {
+                for &i in &slots {
+                    JOB_BUSY[i].store(false, Ordering::Release);
+                }
+                out!("not enough free job slots (4 in all): wait for a job to finish, see `ps`\n");
+                return;
+            }
+        }
+    }
+    let created = arch::ticks();
+    for (&slot, &units) in slots.iter().zip(&sizes) {
+        JOB_CREATED[slot].store(created, Ordering::Relaxed);
+        match sched::spawn(JOB_NAMES[slot], job, (units << 8) | slot) {
+            Some(id) => out!("started {} as task {} ({} units)\n", JOB_NAMES[slot], id, units),
+            None => {
+                JOB_BUSY[slot].store(false, Ordering::Release);
+                out!("cannot start {}: no free task slot or memory\n", JOB_NAMES[slot]);
+            }
+        }
+    }
+}
+
+/// The shared-resource problem (CA-6 layer 7). Two tasks each add 1 to one counter `n` times. The add is
+/// a read, some work, then a write, so when the timer switches tasks in the middle, the other task's
+/// additions are overwritten and lost. With `race lock` the read-modify-write sits inside a spinlock
+/// (interrupts off), so no switch can happen in the middle and no update is lost.
+static RACE_RAW: AtomicU64 = AtomicU64::new(0);
+static RACE_LOCKED: SpinLock<u64> = SpinLock::new(0);
+static RACE_DONE: AtomicU32 = AtomicU32::new(0);
+static RACE_N: AtomicU32 = AtomicU32::new(0);
+static RACE_USE_LOCK: AtomicBool = AtomicBool::new(false);
+static RACE_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Spin iterations between the read and the write: makes the unprotected window wide.
+const RACE_WINDOW: usize = 2_000;
+
+extern "C" fn racer(_: usize) {
+    let n = RACE_N.load(Ordering::Relaxed);
+    let locked = RACE_USE_LOCK.load(Ordering::Relaxed);
+    for _ in 0..n {
+        if locked {
+            let mut g = RACE_LOCKED.lock();
+            let v = *g;
+            for _ in 0..RACE_WINDOW {
+                core::hint::spin_loop();
+            }
+            *g = v + 1;
+        } else {
+            let v = RACE_RAW.load(Ordering::Relaxed);
+            for _ in 0..RACE_WINDOW {
+                core::hint::spin_loop();
+            }
+            RACE_RAW.store(v + 1, Ordering::Relaxed);
+        }
+    }
+    if RACE_DONE.fetch_add(1, Ordering::SeqCst) == 1 {
+        let got = if locked { *RACE_LOCKED.lock() } else { RACE_RAW.load(Ordering::Relaxed) };
+        let want = 2 * u64::from(n);
+        out!("race {}: expected {}, got {}, lost {} update(s)\n", if locked { "with lock" } else { "no lock" }, want, got, want.saturating_sub(got));
+        RACE_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+fn cmd_race(arg: &str) {
+    let mut locked = false;
+    let mut n: u32 = 20_000;
+    for w in arg.split_whitespace() {
+        match w {
+            "lock" => locked = true,
+            _ => match w.parse::<u32>() {
+                Ok(v) if (1..=1_000_000).contains(&v) => n = v,
+                _ => {
+                    out!("usage: race [lock] [n]   (n = additions per task, 1 to 1000000, default 20000)\n");
+                    return;
+                }
+            },
+        }
+    }
+    if RACE_RUNNING.swap(true, Ordering::AcqRel) {
+        out!("a race is already running\n");
+        return;
+    }
+    RACE_RAW.store(0, Ordering::Relaxed);
+    *RACE_LOCKED.lock() = 0;
+    RACE_DONE.store(0, Ordering::Relaxed);
+    RACE_N.store(n, Ordering::Relaxed);
+    RACE_USE_LOCK.store(locked, Ordering::Relaxed);
+    let a = sched::spawn("racer-a", racer, 0);
+    let b = sched::spawn("racer-b", racer, 1);
+    match (a, b) {
+        (Some(_), Some(_)) => out!("started two racers, {} additions each, {}\n", n, if locked { "with a spinlock" } else { "no lock" }),
+        _ => {
+            // One could not start: stop the other and free the race for next time.
+            for id in [a, b].into_iter().flatten() {
+                sched::kill(id);
+            }
+            RACE_RUNNING.store(false, Ordering::Release);
+            out!("cannot start the racers: no free task slot or memory\n");
+        }
+    }
+}
+
+/// `alloc <KiB>`: asks the heap for that much memory, says how long it took and how the heap changed,
+/// then frees it. A request that does not fit is refused cleanly and changes nothing.
+fn cmd_alloc(arg: &str) {
+    let Ok(kib) = arg.parse::<usize>() else {
+        out!("usage: alloc <KiB>\n");
+        return;
+    };
+    let before = mm::heap_stats();
+    let mut v: Vec<u8> = Vec::new();
+    let t0 = arch::rdtsc();
+    let r = v.try_reserve_exact(kib.saturating_mul(1024));
+    let us = arch::rdtsc().wrapping_sub(t0).saturating_mul(1_000_000) / log::tsc_hz().max(1);
+    match r {
+        Ok(()) => {
+            let mid = mm::heap_stats();
+            out!("allocated {} KiB in {} us: heap used {} -> {} KiB of {} KiB\n", kib, us, before.used / 1024, mid.used / 1024, before.capacity / 1024);
+            drop(v);
+            let after = mm::heap_stats();
+            out!("freed: heap used {} KiB, {} free hole(s)\n", after.used / 1024, after.holes);
+        }
+        Err(_) => out!(
+            "allocation of {} KiB refused after {} us: not enough heap ({} KiB free of {} KiB, {} hole(s)); nothing changed\n",
+            kib,
+            us,
+            (before.capacity - before.used) / 1024,
+            before.capacity / 1024,
+            before.holes
+        ),
     }
 }
 
@@ -642,7 +887,12 @@ fn run(line: &str, hist: &History) {
         }
         "mem" | "free" => cmd_mem(),
         "ps" => cmd_ps(),
-        "spawn" => cmd_spawn(),
+        "spawn" => cmd_spawn(rest),
+        "queue" => cmd_queue(),
+        "trace" => cmd_trace(rest),
+        "job" => cmd_job(rest),
+        "race" => cmd_race(rest),
+        "alloc" => cmd_alloc(rest),
         "pci" => cmd_pci(),
         "disks" => cmd_disks(),
         "dls" => cmd_dls(rest),
