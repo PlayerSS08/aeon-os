@@ -16,6 +16,7 @@ pub mod apicmath;
 pub mod banker;
 pub mod block;
 pub mod ahcifis;
+pub mod editbuf;
 pub mod elf;
 pub mod menulogic;
 pub mod palette;

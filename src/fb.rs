@@ -28,6 +28,10 @@ const _: () = assert!(HIST_ROWS > MAX_ROWS);
 
 static HIST: Global<[Cell; MAX_COLS * HIST_ROWS]> = Global::new([BLANK; MAX_COLS * HIST_ROWS]);
 
+/// What the editor last painted, one byte per character cell (0 = nothing painted yet), so a repaint only
+/// touches the cells that changed.
+static EDIT_SHADOW: Global<[u8; MAX_COLS * MAX_ROWS]> = Global::new([0; MAX_COLS * MAX_ROWS]);
+
 pub const COLOR_ERROR: u8 = 0;
 pub const COLOR_WARN: u8 = 1;
 pub const COLOR_INFO: u8 = 2;
@@ -102,6 +106,10 @@ pub struct Console {
     cont: [bool; HIST_ROWS],
     /// The boot menu was opened over the splash screen, so it can hand the splash back.
     menu_from_splash: bool,
+    /// While true the full-screen editor owns the screen and the log is not painted.
+    editor: bool,
+    /// The cell (column, row) where the editor's cursor is painted.
+    edit_cursor: Option<(usize, usize)>,
 }
 
 impl Console {
@@ -153,6 +161,8 @@ impl Console {
             logo_row: 0,
             cont: [false; HIST_ROWS],
             menu_from_splash: false,
+            editor: false,
+            edit_cursor: None,
         };
         c.logo_row = rows.saturating_sub(logo_rows) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
@@ -546,6 +556,84 @@ impl Console {
         self.draw_logo();
     }
 
+    // ---- the full-screen editor ----
+
+    /// Size of the editor's text area: (rows, columns). The header takes the top row and the help line the bottom one.
+    pub fn edit_size(&self) -> (usize, usize) {
+        (self.rows.saturating_sub(2).max(1), self.cols)
+    }
+
+    /// Paints the editor: `header` on the top bar, `lines` as the text (one entry per screen row, already cut to
+    /// the screen width), `help` on the bottom bar and the cursor at `cursor` (row, column inside the text).
+    /// The first call takes over the screen; later calls only repaint the cells that changed.
+    pub fn edit_draw(&mut self, header: &str, lines: &[&[u8]], help: &str, cursor: (usize, usize)) {
+        let first = !self.editor;
+        if first {
+            self.editor = true;
+            self.splash = false;
+            self.edit_cursor = None;
+            let bg = self.px(BG);
+            self.fill_rect(0, 0, self.width, self.height, bg);
+            // SAFETY: single-threaded; no other reference to the shadow is live.
+            unsafe { EDIT_SHADOW.get() }.fill(0);
+            // The colour of the leftover pixels at the right edge, for both bars.
+            let used = self.cols * self.cw;
+            let bar = self.px(BAR_BG);
+            for row in [0, self.rows - 1] {
+                self.fill_rect(used, row * self.chh, self.width.saturating_sub(used), self.chh, bar);
+            }
+        }
+        // SAFETY: single-threaded; the shadow is only touched in this function and `edit_end`.
+        let shadow = unsafe { EDIT_SHADOW.get() };
+        // Put back the character under the old cursor before anything else is painted.
+        if let Some((c, r)) = self.edit_cursor.take() {
+            let ch = shadow[r * MAX_COLS + c];
+            if ch != 0 {
+                let colors = if r == 0 || r == self.rows - 1 { (BAR_FG, BAR_BG) } else { (PALETTE[COLOR_INFO as usize], BG) };
+                self.draw_glyph(c, r, ch, colors.0, colors.1);
+            }
+        }
+        let text_rows = self.rows.saturating_sub(2).max(1);
+        for row in 0..self.rows {
+            let (text, fg, bg): (&[u8], _, _) = if row == 0 {
+                (header.as_bytes(), BAR_FG, BAR_BG)
+            } else if row == self.rows - 1 {
+                (help.as_bytes(), BAR_FG, BAR_BG)
+            } else if row - 1 < text_rows {
+                (lines.get(row - 1).copied().unwrap_or(&[]), PALETTE[COLOR_INFO as usize], BG)
+            } else {
+                (&[], PALETTE[COLOR_INFO as usize], BG)
+            };
+            for c in 0..self.cols {
+                let ch = match text.get(c).copied() {
+                    Some(b) if (0x20..0x7f).contains(&b) => b,
+                    _ => b' ',
+                };
+                let at = row * MAX_COLS + c;
+                if shadow[at] != ch {
+                    shadow[at] = ch;
+                    self.draw_glyph(c, row, ch, fg, bg);
+                }
+            }
+        }
+        // The cursor: the character under it with the colours swapped.
+        let (cr, cc) = (cursor.0.min(text_rows - 1) + 1, cursor.1.min(self.cols - 1));
+        let ch = shadow[cr * MAX_COLS + cc].max(b' ');
+        self.draw_glyph(cc, cr, ch, BG, CURSOR_BG);
+        self.edit_cursor = Some((cc, cr));
+    }
+
+    /// Closes the editor: the log is back, the bottom bar is blank until the status task refills it.
+    pub fn edit_end(&mut self) {
+        if !self.editor {
+            return;
+        }
+        self.editor = false;
+        self.edit_cursor = None;
+        self.status(b"");
+        self.redraw_log();
+    }
+
     /// Full-screen stop screen for an unrecoverable error. Shows only what the user needs: where it
     /// failed and what to do. No addresses or register values are printed to the screen.
     pub fn panic_screen(&mut self, lines: &[&[u8]]) {
@@ -609,7 +697,7 @@ impl Console {
 
     /// The screen cell the cursor is in, when it is visible (following the output, no splash or menu).
     fn cursor_cell(&self) -> Option<(usize, usize)> {
-        if self.splash || self.menu || self.scroll != 0 {
+        if self.splash || self.menu || self.editor || self.scroll != 0 {
             return None;
         }
         Some((self.cur_col.min(self.cols - 1), self.first_row + (self.newest - self.live_top())))
@@ -710,7 +798,7 @@ impl Console {
     }
 
     pub fn write_line(&mut self, level: Level, bytes: &[u8]) {
-        if self.splash || self.menu {
+        if self.splash || self.menu || self.editor {
             return;
         }
         let color = color_for(level);
@@ -723,6 +811,9 @@ impl Console {
 
     /// Repaints the bottom row with `text` (clipped or padded to the screen width).
     pub fn status(&self, text: &[u8]) {
+        if self.editor {
+            return; // the editor's help line is on that row
+        }
         let row = self.rows - 1;
         for c in 0..self.cols {
             let ch = text.get(c).copied().unwrap_or(b' ');

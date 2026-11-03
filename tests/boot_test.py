@@ -720,19 +720,324 @@ def t_prompt(ctx):
         vm.close()
 
 
+def t_editor(ctx):
+    """The full-screen editor: shows the existing text, moves between lines, saves, refuses to lose changes."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-editor", cfg="nomenu" + chr(10)), ctx.work, name="editor")
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+
+        def cat_is(name, expect, label):
+            before = len(vm.serial_text())
+            vm.type("cat " + name)
+            vm.keys("ret")
+            time.sleep(1.0)
+            got = vm.serial_text()[before:].replace("\r", "")
+            body = got.split("\n", 1)[1] if "\n" in got else got
+            r.check(label, body.startswith(expect), repr(body[:200]))
+
+        # 1. A new file: type three lines, save, leave.
+        before = ed_open(vm, "poem")
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "6-editor-empty.png"))
+        r.check("editor header bar is painted", px(pix, w, 4, 4) == (40, 60, 90), str(px(pix, w, 4, 4)))
+        ed_send(vm, ["one", "<ret>", "two", "<ret>", "three", "^s"])
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "6-editor-typed.png"))
+        r.check("the shell prompt is not shown while editing", "aeon> " not in vm.serial_text()[before:].replace("edit poem", ""), vm.serial_text()[before:][-200:])
+        ed_send(vm, ["^x"])
+        r.check("a saved file closes straight away", ed_closed(vm, before), vm.serial_text()[-200:])
+        cat_is("poem", "one\ntwo\nthree\n", "the typed lines are in the file")
+
+        # 2. The existing text is loaded and Up/Down move between lines.
+        before = ed_open(vm, "poem")
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "6-editor-loaded.png"))
+        lit = sum(1 for yy in range(40, h // 2, 3) for xx in range(0, w, 3) if px(pix, w, xx, yy) != (0, 0, 0))
+        r.check("the existing text is on screen", lit > 40, f"lit={lit}")
+        ed_send(vm, ["<down>", "<end>", "-x", "<up>", "<end>", "-y", "<down>", "<down>", "<home>", "z-", "^s", "^x"])
+        r.check("closed after the edit", ed_closed(vm, before))
+        cat_is("poem", "one-y\ntwo-x\nz-three\n", "Up and Down changed the right lines")
+
+        # 3. The Ctrl hotkeys do the same: Ctrl+N down, Ctrl+P up.
+        before = ed_open(vm, "poem")
+        ed_send(vm, ["^n", "<end>", "9", "^p", "<home>", "k", "^s", "^x"])
+        r.check("closed after the hotkey edit", ed_closed(vm, before))
+        cat_is("poem", "kone-y\ntwo-x9\nz-three\n", "Ctrl+N and Ctrl+P move between lines")
+
+        # 4. Enter splits a line, Backspace joins it again, Ctrl+K cuts a line, Delete joins the next one.
+        before = ed_open(vm, "poem")
+        ed_send(vm, ["<down>", "<home>", "<right>", "<right>", "<ret>", "<backspace>", "^k", "<up>", "<end>", "<delete>", "^s", "^x"])
+        r.check("closed after the line edits", ed_closed(vm, before))
+        cat_is("poem", "kone-yz-three\n", "split, join, cut and Delete behave")
+
+        # 5. Unsaved changes: the first Ctrl+X only warns, the second throws the changes away.
+        before = ed_open(vm, "poem")
+        ed_send(vm, ["zzz", "^x"])
+        time.sleep(0.5)
+        r.check("the editor stays open after the warning", not ed_closed(vm, before, timeout=2))
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "6-editor-warning.png"))
+        ed_send(vm, ["^x"])
+        r.check("the second Ctrl+X leaves", ed_closed(vm, before))
+        cat_is("poem", "kone-yz-three\n", "the discarded changes are not in the file")
+
+        # 6. Nothing changed: Ctrl+X leaves at once.
+        before = ed_open(vm, "poem")
+        ed_send(vm, ["^x"])
+        r.check("an untouched file closes at once", ed_closed(vm, before))
+
+        # 7. Files in folders, and the refusals.
+        run_cmds(vm, r, [("mkdir box", "made folder /box")])
+        before = ed_open(vm, "box/n.txt")
+        ed_send(vm, ["in a folder", "^s", "^x"])
+        r.check("a file in a folder is saved", ed_closed(vm, before))
+        cat_is("box/n.txt", "in a folder\n", "the file in the folder has its text")
+        run_cmds(vm, r, [
+            ("edit nodir/x", "no such folder for"),
+            ("edit box", "is a folder"),
+            ("edit", "usage: edit"),
+        ])
+
+        # 8. A longer file: 60 lines scroll, Page Down and Ctrl+End reach the bottom, nothing is lost.
+        before = ed_open(vm, "big")
+        for _ in range(59):
+            vm.keys("ret")
+            time.sleep(0.05)
+        ed_send(vm, ["last"])
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "6-editor-scrolled.png"))
+        ed_send(vm, ["^<home>", "<pgdn>", "<pgdn>", "^<end>", "^s", "^x"])
+        r.check("the long file closes", ed_closed(vm, before))
+        run_cmds(vm, r, [("wc big", "     60       1      64 big")])
+        run_cmds(vm, r, [("head -n 1 poem", "kone-yz-three")])
+    finally:
+        vm.close()
+
+
+# Every command in `help all`, run once with a check on what it prints. The test fails when `help all` lists a
+# command that is not in this table (or in COVERED_ELSEWHERE), so a new command cannot slip through untested.
+SWEEP = [
+    ("help", "help", "Aeon shell."),
+    ("man", "man ls", "list a folder in RAM"),
+    ("info", "info", "tsc"),
+    ("version", "version", "sbat generation"),
+    ("ver", "ver", "sbat generation"),
+    ("cpu", "cpu", "I/O APIC"),
+    ("uptime", "uptime", "up 0"),
+    ("uname", "uname", "x86_64 UEFI"),
+    ("history", "history", "  1  help"),
+    ("security", "security", "write protect"),
+    ("tpm", "tpm", "no TPM 2.0"),
+    ("lastpanic", "lastpanic", "ended normally"),
+    ("log", "log", "stage enter firmware-entry"),
+    ("whoami", "whoami", "no user accounts"),
+    ("hostname", "hostname", "aeon"),
+    ("date", "date", "no clock"),
+    ("pci", "pci", "Host bridge"),
+    ("usb", "usb", "no xHCI"),
+    ("disks", "disks", "sda  sata"),
+    ("dread", "dread 0", "00 00"),
+    ("mem", "mem", "frames"),
+    ("free", "free", "frames"),
+    ("alloc", "alloc 4", "freed: heap"),
+    ("memmap", "memmap", "usable"),
+    ("ps", "ps", "idle"),
+    ("spawn", "spawn", "started worker-a"),
+    ("queue", "queue", "ready queue"),
+    ("trace", "trace 3", "switches"),
+    ("job", "job 2", "started job-0"),
+    ("race", "race", "started two racers"),
+    ("counters", "counters", "re:^[0-9]+ [0-9]+$"),
+    ("block", "block", "started waiter"),
+    ("wake", "wake", "woke 1 task(s)"),
+    ("kill", "kill 999", "no killable task"),
+    ("ls", "ls", "(no files)"),
+    ("dir", "dir", "(no files)"),
+    ("tree", "tree", "/"),
+    ("cd", "cd", "aeon> "),
+    ("pwd", "pwd", "/"),
+    ("mkdir", "mkdir", "usage: mkdir"),
+    ("rmdir", "rmdir", "usage: rmdir"),
+    ("df", "df", "0 file(s)"),
+    ("cat", "cat", "usage: cat"),
+    ("write", "write", "usage: write"),
+    ("append", "append", "usage: append"),
+    ("edit", "edit", "usage: edit"),
+    ("rm", "rm", "usage: rm"),
+    ("cp", "cp", "usage: cp"),
+    ("mv", "mv", "usage: mv"),
+    ("touch", "touch", "usage: touch"),
+    ("find", "find", "(nothing found)"),
+    ("head", "head", "usage: head"),
+    ("tail", "tail", "usage: tail"),
+    ("wc", "wc", "usage: wc"),
+    ("grep", "grep", "usage: grep"),
+    ("hexdump", "hexdump", "usage: hexdump"),
+    ("dls", "dls", "EFI/"),
+    ("dcat", "dcat", "usage: dcat"),
+    ("run", "run hello", "hello from ring 3"),
+    ("echo", "echo hi there", "hi there"),
+    ("sort", "sort 3 1 2", "1 2 3"),
+    ("seq", "seq 3", "re:^1\n2\n3$"),
+    ("sleep", "sleep 1", "aeon> "),
+    ("clear", "clear", "aeon> "),
+    ("cls", "cls", "aeon> "),
+]
+# `panic`, `reboot` and `shutdown` end the session, so group `power` runs them.
+COVERED_ELSEWHERE = {"panic": "power", "reboot": "power", "shutdown": "power"}
+
+
+def t_sweep(ctx):
+    """Every command in `help all` runs once and prints what it should; the shell is still alive at the end."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-sweep", cfg="nomenu" + chr(10)), ctx.work, name="sweep")
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        # 1. Which commands does the shell say it has?
+        before = len(vm.serial_text())
+        vm.type("help all")
+        vm.keys("ret")
+        time.sleep(3.0)
+        text = vm.serial_text()[before:].replace(chr(13), "")
+        listed = [l.split()[0] for l in text.split(chr(10)) if l.startswith("  ") and l.strip()]
+        listed = [n for n in listed if re.fullmatch(r"[a-z]+", n)]
+        r.check("`help all` lists the commands", len(listed) >= 60, f"{len(listed)} names: {listed[:10]}")
+        tested = {name for name, _, _ in SWEEP} | set(COVERED_ELSEWHERE)
+        missing = [n for n in listed if n not in tested]
+        r.check("every listed command is in the sweep", not missing, f"not tested: {missing}")
+        extra = [n for n in tested if n not in listed]
+        r.check("the sweep names only real commands", not extra, f"not in help: {extra}")
+        # 2. Run them all (help first, so `history` can find it as line 1 below).
+        run_cmds(vm, r, [(cmd, expect) for _, cmd, expect in SWEEP])
+        run_cmds(vm, r, [
+            ("echo still-alive", "still-alive"),
+            ("bogus", "unknown command 'bogus'"),
+            ("hlep", "Did you mean `help`?"),
+        ])
+    finally:
+        vm.close()
+
+
+def t_power(ctx):
+    """`reboot` and `shutdown` end the (no-reboot) QEMU session; `panic` shows the grey stop screen."""
+    r = ctx.r
+    for name, why in (("reboot", "restarts"), ("shutdown", "powers off")):
+        vm = Vm(make_esp(ctx.work, ctx.efi, f"esp-{name}", cfg="nomenu" + chr(10)), ctx.work, name=name)
+        try:
+            r.check(f"{name}: shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+            vm.type(name)
+            vm.keys("ret")
+            end = time.time() + 40
+            while time.time() < end and vm.proc.poll() is None:
+                time.sleep(0.3)
+            r.check(f"`{name}` {why} the machine", vm.proc.poll() is not None, vm.serial_text()[-200:])
+        finally:
+            vm.close()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-cmdpanic", cfg="nomenu" + chr(10)), ctx.work, name="cmdpanic")
+    try:
+        r.check("panic: shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        vm.type("panic")
+        vm.keys("ret")
+        r.check("`panic` is reported", vm.wait_for("panic requested from the shell", 30, "serial"), vm.serial_text()[-300:])
+        time.sleep(1.5)
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "7-command-panic.png"))
+        r.check("the stop screen is grey", px(pix, w, 4, 4) == (28, 28, 30), str(px(pix, w, 4, 4)))
+        r.check("the machine stays halted (no reboot)", vm.proc.poll() is None)
+    finally:
+        vm.close()
+
+
+def t_workflow(ctx):
+    """Files and folders the way a person uses them: nested folders, files inside, copying, moving, finding,
+    editing, refusing to delete what is not empty, and the prompt following every `cd`."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-workflow", cfg="nomenu" + chr(10)), ctx.work, name="workflow")
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            # build /a/b and put a file in it
+            ("mkdir a", "made folder /a"),
+            ("cd a", "aeon:/a> "),
+            ("mkdir b", "made folder /a/b"),
+            ("cd b", "aeon:/a/b> "),
+            ("write f.txt hi", "wrote 2 byte(s) to f.txt"),
+            ("ls", "2  f.txt"),
+            ("pwd", "/a/b"),
+            ("cat f.txt", "hi"),
+            ("write f.txt again", "already exists (2 byte(s)): nothing written"),
+            ("append f.txt more", "added 5 byte(s) to f.txt"),
+            ("cd ..", "aeon:/a> "),
+            # reach the file from the folder above
+            ("cat b/f.txt", "hi"),
+            ("tree", "f.txt  (7 bytes)"),
+            ("find f", "/a/b/f.txt"),
+            ("wc b/f.txt", "      2       2       7 b/f.txt"),
+            ("grep more b/f.txt", "more"),
+            ("head -n 1 b/f.txt", "hi"),
+            ("tail -n 1 b/f.txt", "more"),
+            ("hexdump b/f.txt 4", "68 69 0a 6d"),
+            # copy and move, across folders
+            ("cp b/f.txt g.txt", "copied 7 byte(s) to /a/g.txt"),
+            ("mv g.txt b", "moved g.txt to /a/b/g.txt"),
+            ("ls b", "g.txt"),
+            ("cp b/g.txt b/g.txt", "same file"),
+            ("mv b/g.txt ../top.txt", "moved b/g.txt to /top.txt"),
+            ("ls ..", "top.txt"),
+            # things that must be refused
+            ("rmdir b", "folder 'b' is not empty"),
+            ("rm b", "'b' is a folder: use `rmdir`"),
+            ("cat b", "'b' is a folder"),
+            ("cd b/f.txt", "'b/f.txt' is not a folder"),
+            ("cd nothere", "no such folder 'nothere'"),
+            ("mkdir x/y/z", "no such folder for"),
+            ("mkdir b", "'b' already exists"),
+            ("rmdir nothere", "no such folder"),
+            ("mkdir " + "n" * 33, "bad name"),
+            ("cp nothere q", "no such file 'nothere'"),
+            ("mv b q", "works on files only"),
+            # a file made with the editor, two folders down
+            ("mkdir b/deep", "made folder /a/b/deep"),
+        ])
+        before = ed_open(vm, "b/deep/note.txt")
+        ed_send(vm, ["nested note", "<ret>", "second line", "^s", "^x"])
+        r.check("the editor saved a file two folders down", ed_closed(vm, before))
+        run_cmds(vm, r, [
+            ("cat b/deep/note.txt", "nested note"),
+            ("find note", "/a/b/deep/note.txt"),
+            ("find /a/b", "/a/b/deep/note.txt"),
+            ("grep -n second b/deep/note.txt", "2:second line"),
+            ("wc b/deep/note.txt", "      2       4      24 b/deep/note.txt"),
+            ("cd b/deep", "aeon:/a/b/deep> "),
+            ("pwd", "/a/b/deep"),
+            ("cd /", "aeon> "),
+            ("cd /a/b/deep", "aeon:/a/b/deep> "),
+            ("cd ../..", "aeon:/a> "),
+            ("cd ../../..", "aeon> "),
+            ("df", "4 file(s)"),
+        ])
+        # Tidy up from the bottom; removing the folder you stand in puts you back at the top.
+        run_cmds(vm, r, [
+            ("rm b/deep/note.txt", "removed b/deep/note.txt"),
+            ("rm b/f.txt", "removed b/f.txt"),
+            ("rmdir /a/b/deep", "removed folder /a/b/deep"),
+            ("cd /a/b", "aeon:/a/b> "),
+            ("rmdir /a/b", "removed folder /a/b"),
+            ("pwd", "/"),
+            ("rmdir a", "removed folder /a"),
+            ("rm top.txt", "removed top.txt"),
+            ("ls", "(no files)"),
+            ("df", "0 file(s)"),
+        ])
+    finally:
+        vm.close()
+
+
 def t_tools(ctx):
     """cp mv touch head tail wc grep find hexdump seq sleep whoami hostname date, on a four-line file."""
     r = ctx.r
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-tools", cfg="nomenu" + chr(10)), ctx.work, name="tools")
     try:
         r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
-        vm.type("edit poem")
-        vm.keys("ret")
-        r.check("edit starts", vm.wait_for("editing /poem", 30, "serial"))
-        for line in ("alpha one", "beta two", "gamma three", "delta four", "."):
-            vm.type(line)
-            vm.keys("ret")
-        r.check("poem saved (42 bytes)", vm.wait_for("saved 42 byte(s) to /poem", 30, "serial"), vm.serial_text()[-300:])
+        before = ed_open(vm, "poem")
+        ed_send(vm, ["alpha one", "<ret>", "beta two", "<ret>", "gamma three", "<ret>", "delta four", "^s", "^x"])
+        r.check("the editor closes after save", ed_closed(vm, before), vm.serial_text()[-300:])
+        run_cmds(vm, r, [("wc poem", "      4       8      42 poem")])
         run_cmds(vm, r, [
             ("head -n 2 poem", "beta two"),
             ("tail -n 1 poem", "delta four"),
@@ -1129,6 +1434,40 @@ def t_faults(ctx):
             vm.close()
 
 
+def ed_send(vm, actions):
+    """Drives the full-screen editor. A plain string is typed. "^s" is Ctrl+S (any letter). "<up>" is a special
+    key: up down left right home end pgup pgdn ret backspace delete tab. "^<home>" is Ctrl+Home."""
+    for a in actions:
+        if a.startswith("^<") and a.endswith(">"):
+            vm.chord("ctrl", a[2:-1])
+        elif a.startswith("^") and len(a) == 2:
+            vm.chord("ctrl", a[1])
+        elif a.startswith("<") and a.endswith(">"):
+            vm.keys(a[1:-1])
+        else:
+            vm.type(a)
+        time.sleep(0.12)
+
+
+def ed_open(vm, name):
+    """Types `edit <name>` and gives the editor a moment to paint. Returns the serial length before it."""
+    before = len(vm.serial_text())
+    vm.type("edit " + name)
+    vm.keys("ret")
+    time.sleep(1.2)
+    return before
+
+
+def ed_closed(vm, before, timeout=20):
+    """True when the shell prompt came back after `before` (the editor closed)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if "aeon> " in vm.serial_text()[before:] or "aeon:/" in vm.serial_text()[before:]:
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def run_cmds(vm, r, steps):
     """Type each command, wait for its expected output (searched after the command's echo)."""
     for cmd, expect in steps:
@@ -1138,7 +1477,9 @@ def run_cmds(vm, r, steps):
         end = time.time() + 30
         ok = False
         while time.time() < end:
-            if expect in vm.serial_text()[before:]:
+            seen = vm.serial_text()[before:]
+            # "re:<pattern>" is a regular expression over the output without carriage returns.
+            if (re.search(expect[3:], seen.replace(chr(13), ""), re.M) if expect.startswith("re:") else expect in seen):
                 ok = True
                 break
             time.sleep(0.2)
@@ -1162,11 +1503,9 @@ def t_fs(ctx):
             ("rm note", "removed note"),
             ("cat note", "no such file 'note'"),
             ("df", "0 file(s), used 0 of"),
-            # Many lines: `edit` collects lines until a lone ".", `append` adds one more.
-            ("edit poem", "Ctrl+C cancels"),
-            ("line one", "   | "),
-            ("line two", "   | "),
-            (".", "saved 18 byte(s) to /poem"),
+            # Many lines: `append` adds one line at a time.
+            ("append poem line one", "added 9 byte(s) to poem"),
+            ("append poem line two", "added 9 byte(s) to poem"),
             ("append poem line three", "added 11 byte(s) to poem"),
             ("cat poem", "line three"),
             ("df", "1 file(s), used 29 of"),
@@ -1512,7 +1851,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

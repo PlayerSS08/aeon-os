@@ -9,6 +9,7 @@ use crate::acpi;
 use crate::arch;
 use crate::boot;
 use crate::cmdhelp;
+use crate::editbuf::{Doc, Refused};
 use crate::fb::Console;
 use crate::global::Global;
 use crate::keymap::{Key, Keyboard};
@@ -1173,6 +1174,13 @@ fn cmd_sleep(arg: &str) {
 fn run(line: &str, hist: &History) {
     let line = line.trim();
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
+    // A file command typed with nothing after it says how it is used, instead of complaining about an empty name.
+    if rest.is_empty() && matches!(cmd, "cat" | "rm" | "mkdir" | "rmdir" | "write" | "append" | "touch") {
+        if let Some(c) = cmdhelp::COMMANDS.iter().find(|c| c.name == cmd) {
+            out!("usage: {}\n", c.usage);
+            return;
+        }
+    }
     match cmd {
         "" => {}
         "help" | "?" | "man" => cmd_help(rest),
@@ -1312,7 +1320,105 @@ fn prompt() -> String {
         alloc::format!("aeon:{}> ", cwd())
     }
 }
-const EDIT_PROMPT: &str = "   | ";
+// ---- the full-screen editor behind `edit <file>` ----
+
+/// An open editing session: the file's path, its text in the buffer and a one-line message for the help bar.
+struct EditSession {
+    path: String,
+    doc: Doc,
+    note: String,
+    /// The first Ctrl+X with unsaved changes only warns; this remembers that it did.
+    leave_armed: bool,
+}
+
+const EDIT_HELP: &str = " Ctrl+S save   Ctrl+X leave   Ctrl+K cut line   Up/Down or Ctrl+P/Ctrl+N move   PgUp/PgDn page";
+
+/// Opens `name` for editing: the existing text is loaded, a missing file starts empty. Prints why not and
+/// returns `None` for a folder, a bad name or a missing parent folder.
+fn open_editor(name: &str) -> Option<EditSession> {
+    let p = path_arg(name)?;
+    if let Err(e) = fs().check_writable(&p) {
+        fs_error(e, name);
+        return None;
+    }
+    let old = fs().read(&p).map(<[u8]>::to_vec).unwrap_or_default();
+    // What the saved file may take: the free space plus what this file already uses.
+    let room = fs().max_bytes().saturating_sub(fs().used_bytes()).saturating_add(old.len());
+    let note = if Doc::truncated(&old) { String::from(" this file has lines over the limits: saving cuts them") } else { String::new() };
+    Some(EditSession { path: p, doc: Doc::new(&old, room), note, leave_armed: false })
+}
+
+/// Repaints the editor: header, the visible lines, the help bar and the cursor.
+fn edit_paint(s: &mut EditSession) {
+    let (rows, cols) = log::with_console(|c| c.edit_size()).unwrap_or((20, 80));
+    s.doc.fit(rows, cols);
+    let lines: Vec<Vec<u8>> = (0..rows).map(|r| s.doc.window_row(r, cols)).collect();
+    let refs: Vec<&[u8]> = lines.iter().map(Vec::as_slice).collect();
+    let (row, col) = s.doc.cursor();
+    let header = alloc::format!(" edit {}{}   line {}/{}  column {}", s.path, if s.doc.is_dirty() { " (changed)" } else { "" }, row + 1, s.doc.line_count(), col + 1);
+    let help = if s.note.is_empty() { String::from(EDIT_HELP) } else { s.note.clone() };
+    let cursor = s.doc.window_cursor();
+    log::with_console(|c| c.edit_draw(&header, &refs, &help, cursor));
+}
+
+/// Runs a cursor move or other edit that cannot be refused.
+fn moved(doc: &mut Doc, f: impl FnOnce(&mut Doc)) -> Result<(), Refused> {
+    f(doc);
+    Ok(())
+}
+
+/// Handles one key in the editor. Returns true when the editor should close.
+fn edit_key(s: &mut EditSession, key: Key) -> bool {
+    let rows = log::with_console(|c| c.edit_size().0).unwrap_or(20);
+    let was_armed = core::mem::take(&mut s.leave_armed);
+    s.note.clear();
+    let result = match key {
+        Key::Char(c) => s.doc.insert(c),
+        Key::Tab => s.doc.tab(),
+        Key::Enter => s.doc.enter(),
+        Key::Backspace => s.doc.backspace(),
+        Key::Delete | Key::Ctrl(b'd') => s.doc.delete(),
+        Key::Up | Key::Ctrl(b'p') => moved(&mut s.doc, Doc::up),
+        Key::Down | Key::Ctrl(b'n') => moved(&mut s.doc, Doc::down),
+        Key::Left | Key::Ctrl(b'b') => moved(&mut s.doc, Doc::left),
+        Key::Right | Key::Ctrl(b'f') => moved(&mut s.doc, Doc::right),
+        Key::Home | Key::Ctrl(b'a') => moved(&mut s.doc, Doc::home),
+        Key::End | Key::Ctrl(b'e') => moved(&mut s.doc, Doc::end),
+        Key::PageUp => moved(&mut s.doc, |d| d.page_up(rows)),
+        Key::PageDown => moved(&mut s.doc, |d| d.page_down(rows)),
+        Key::ScrollTop => moved(&mut s.doc, Doc::top_of_file),
+        Key::ScrollBottom => moved(&mut s.doc, Doc::bottom_of_file),
+        Key::Ctrl(b'k') => moved(&mut s.doc, Doc::cut_line),
+        Key::Ctrl(b's') => {
+            let text = s.doc.text();
+            s.note = match fs().write(&s.path, &text) {
+                Ok(()) => {
+                    s.doc.mark_saved();
+                    alloc::format!(" saved {} byte(s) to {}", text.len(), s.path)
+                }
+                Err(FsError::TooBig) => String::from(" not saved: no room on the RAM disk"),
+                Err(FsError::Full) => String::from(" not saved: too many files"),
+                Err(FsError::NoParent) => String::from(" not saved: the folder is gone"),
+                Err(FsError::IsDir) => String::from(" not saved: a folder has this name now"),
+                Err(_) => String::from(" not saved: this name is not allowed"),
+            };
+            Ok(())
+        }
+        Key::Ctrl(b'x') | Key::Interrupt => {
+            if !s.doc.is_dirty() || was_armed {
+                return true;
+            }
+            s.leave_armed = true;
+            s.note = String::from(" Unsaved changes: Ctrl+S saves, Ctrl+X again leaves without saving");
+            Ok(())
+        }
+        _ => Ok(()),
+    };
+    if let Err(why) = result {
+        s.note = alloc::format!(" {}", why.message());
+    }
+    false
+}
 
 fn put(b: &[u8]) {
     log::print_raw(b);
@@ -1368,8 +1474,8 @@ pub extern "C" fn shell_task(_: usize) {
     let mut kbd = Keyboard::new();
     let mut ed = LineEditor::new();
     let mut hist = History::new();
-    // Set while `edit <file>` is collecting lines: (file name, text so far).
-    let mut editing: Option<(String, Vec<u8>)> = None;
+    // Set while the full-screen editor (`edit <file>`) is open: every key goes to it instead of the command line.
+    let mut session: Option<EditSession> = None;
     // The wordmark is for the splash and the menu; from here the log gets the whole screen.
     log::with_console(Console::fullscreen_log);
     // A line may be longer than the screen is wide: the console wraps it onto the next rows.
@@ -1389,6 +1495,16 @@ pub extern "C" fn shell_task(_: usize) {
             } else {
                 break;
             };
+            if let Some(s) = session.as_mut() {
+                if edit_key(s, key) {
+                    session = None;
+                    log::with_console(Console::edit_end);
+                    out!("{}", prompt());
+                } else {
+                    edit_paint(s);
+                }
+                continue;
+            }
             match key {
                 Key::Up => {
                     log::with_console(|c| c.scroll_up(1));
@@ -1451,40 +1567,13 @@ pub extern "C" fn shell_task(_: usize) {
                     text[..n].copy_from_slice(ed.text());
                     ed.reset();
                     let line = core::str::from_utf8(&text[..n]).unwrap_or("");
-                    if let Some(doc) = editing.as_mut() {
-                        // Inside `edit`: a lone "." saves, anything else is one more line.
-                        if line == "." {
-                            let (name, buf) = editing.take().unwrap_or_default();
-                            match fs().write(&name, &buf) {
-                                Ok(()) => out!("saved {} byte(s) to {}\n", buf.len(), name),
-                                Err(e) => fs_error(e, &name),
-                            }
-                            out!("{}", prompt());
-                        } else if doc.1.len() + n + 1 > fs().max_bytes() {
-                            editing = None;
-                            out!("too much text for the RAM disk: edit cancelled, nothing saved\n{}", prompt());
-                        } else {
-                            doc.1.extend_from_slice(&text[..n]);
-                            doc.1.push(b'\n');
-                            out!("{}", EDIT_PROMPT);
-                        }
-                        continue;
-                    }
                     hist.push(&text[..n]);
                     let edit_name = line.trim().strip_prefix("edit ").map(str::trim).filter(|s| !s.is_empty());
                     if let Some(name) = edit_name {
-                        let target = path_arg(name).filter(|p| match fs().check_writable(p) {
-                            Ok(()) => true,
-                            Err(e) => {
-                                fs_error(e, name);
-                                false
-                            }
-                        });
-                        if let Some(p) = target {
-                            out!("editing {}: type lines, a line with only . saves, Ctrl+C cancels\n{}", p, EDIT_PROMPT);
-                            editing = Some((p, Vec::new()));
-                        } else {
-                            out!("{}", prompt());
+                        session = open_editor(name);
+                        match session.as_mut() {
+                            Some(s) => edit_paint(s),
+                            None => out!("{}", prompt()),
                         }
                     } else {
                         run(line, &hist);
@@ -1494,11 +1583,7 @@ pub extern "C" fn shell_task(_: usize) {
                 Key::Interrupt => {
                     ed.reset();
                     hist.shown = 0;
-                    if editing.take().is_some() {
-                        out!("^C edit cancelled, nothing saved\n{}", prompt());
-                    } else {
-                        out!("^C\n{}", prompt());
-                    }
+                    out!("^C\n{}", prompt());
                 }
                 Key::ClearScreen => {
                     log::with_console(Console::clear_log);
