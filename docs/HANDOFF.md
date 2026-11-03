@@ -10,11 +10,11 @@ A pure-Rust, `no_std`, zero-dependency UEFI x86_64 micro-OS. Kernel is called Ne
 
 | Task | Command (from `G:\Aeon\OS`, Git Bash) |
 |---|---|
-| Host unit tests (237) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
+| Host unit tests (375) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
 | Clippy | `cargo clippy --release -- -D warnings` and `cargo clippy --target x86_64-pc-windows-gnu --lib -- -D warnings` |
 | Release build | `cargo build --release` (output `target\x86_64-unknown-uefi\release\aeon.efi`) |
 | Full test run (about 10 min, lint + host tests + QEMU boot tests in WSL Ubuntu) | `bash tests/run.sh` (run it detached and wait; it exceeds a 10 min tool limit). One test: `bash tests/run.sh -k console` |
-| Latest result | 359 passed, 0 failed (full suite, 2026-11-02, 0.9.1); CA-6 evidence run 111 passed |
+| Latest result | 2026-11-03, 0.9.2: 375 host tests; QEMU groups editor 25, workflow 61, sweep 72, power 8, user 17, release 5, all passed; CA-6 evidence run 111 passed, 0 failed. The last run of the whole suite was 359 on 0.9.1 |
 | See Aeon in a QEMU window | `powershell -ExecutionPolicy Bypass -File tools\run-qemu.ps1 -Build -Disk` |
 | Signed release for the pendrive | `bash tools/release.sh` (builds with reproducible flags, signs in WSL with the key in `~/.aeon-keys`, rewrites `usb/`) |
 | Tester's checklist | `G:\AEON-TEST-GUIDE.md` |
@@ -29,7 +29,7 @@ Boot-test screenshots land in `target\test-shots\` (the console test saves `cons
 
 ## State of the pendrive
 
-`usb/` in the repo holds the signed 0.9.1 image (built from commit `e9a6794`, 260,648 bytes, SHA-256 `7f30212a...7de6`; reproducible build checked; the older 0.9.0 image was `5984d8b`). The signing certificate is unchanged, so nothing needs re-enrolling. The pendrive `D:` (label AEON, FAT32) still holds the OLD 0.8.1 files from commit `274fab4` until someone copies `usb\EFI\BOOT\BOOTX64.EFI`, `aeon-secureboot.cer` and `SHA256.txt` onto it. The copy at `S:\Works\Projects\Aeon` is old (from `ad5d657`).
+`usb/` in the repo holds the signed **0.9.2** image (built from commit `4086455`, 314,408 bytes, SHA-256 `6ccfd970...bdc1`; signature verified, release test group 5 of 5, reproducible build checked; the older 0.9.1 image was `e9a6794`). The signing certificate is unchanged, so nothing needs re-enrolling. The pendrive `D:` (label AEON, FAT32) still holds OLD files (0.8.1) from commit `274fab4` until someone copies `usb\EFI\BOOT\BOOTX64.EFI`, `aeon-secureboot.cer` and `SHA256.txt` onto it. The copy at `S:\Works\Projects\Aeon` is old (from `ad5d657`).
 
 ## What is built (all tested in QEMU, none on real hardware yet)
 
@@ -171,6 +171,16 @@ The assignment was re-read layer by layer. My earlier "all met" claim was too ge
 Results: 237 host tests, 359 QEMU checks, 111 evidence checks, all passing; signed 0.9.1 release built, release tests 16 of 16, reproducible. The image is now 260,648 bytes signed, 1.5 KB under the 256 KiB test limit, so decision 9 (size budget) is the next constraint.
 
 Still for the student: write `docs/ca6/contribution-statement.md`, check and sign `ai-disclosure.md`, answer viva Q17 (CA-5) and Q18 (CA-4), verify the references. The pendrive is not updated (it was not plugged in).
+
+## Wrap-up 2026-11-03 (late): what the last pass did
+
+| Item | Result |
+|---|---|
+| QEMU groups `editor workflow sweep power` | all pass (25, 61, 72, 8). Two test expectations were wrong (`append` joins to the last line without a newline; relative paths after `cd /`) and were fixed in the tests, not in Aeon |
+| Syscall allow-list (security item S7) | `syscall::allow_mask`, checked in `aeon_syscall_dispatch`; new program `run denied` tries a call it may not make and must be refused; 3 new unit tests; `user` group 17 of 17 |
+| Evidence run on 0.9.2 | 111 passed, 0 failed; docs/ca6 numbers and version strings refreshed. One earlier run failed a timer-rate check (81 Hz in one repeat: host jitter), the repeat passed |
+| Signed 0.9.2 | `bash tools/release.sh`; `usb/` rewritten; the key was never read |
+| Still open | Pendrive `D:` needs the new files copied by hand; Windows QEMU 11.1.3 installer; `sudo apt upgrade` in WSL; FAT32 write + USB mass storage (plan: `docs/superpowers/plans/2026-11-03-pendrive-storage.md`); per-process memory; the rest of security S3 to S11; real-PC measurements |
 
 ## Decisions made on 2026-11-03 (owner said "do all")
 

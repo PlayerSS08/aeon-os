@@ -5,14 +5,14 @@ Aeon has **no third-party Rust crates**: `Cargo.lock` lists only `aeon` itself, 
 
 | Part | Was | Now | Newest found | State |
 |---|---|---|---|---|
-| Aeon | 0.9.1 (signed `usb/`) | 0.9.2 (unsigned) | 0.9.2 | release not signed yet |
+| Aeon | 0.9.1 (signed `usb/`) | **0.9.2 (signed `usb/`)** | 0.9.2 | released; evidence run repeated |
 | Rust compiler and cargo | 1.99.0 | **1.99.1** | 1.99.1 | upgraded |
 | Rust nightly (Miri) | 1.101.0-nightly, 2026-10-29 | **2026-11-02** | 2026-11-02 | upgraded |
 | Rust edition | 2021 | **2024** | 2024 | upgraded (`cargo fix --edition`, 15 lines) |
 | Minimum Rust (`rust-version`) | 1.85 | 1.85 | 1.85 is the first with edition 2024 | fine |
 | `Cargo.lock` format | 4 | 4 | 4 | current |
 | rustup | 1.29.2 | 1.29.2 | 1.29.2 | current |
-| CI: `actions/checkout` | v4.2.2 | **v7.0.1** (pinned by commit `3d3c42e5...`) | v7.0.1 | upgraded; CI has never run (no push) |
+| CI: `actions/checkout` | v4.2.2 | **v7.0.1** (pinned by commit `3d3c42e5...`) | v7.0.1 | upgraded; CI passed on GitHub (run on `e43c99a`, 44 s) |
 | CI runner image | ubuntu-24.04 | ubuntu-24.04 | not checked | left as is |
 | Font: Inter | 4.001 | 4.001 | 4.1 (= 4.001) | current |
 | Font: JetBrains Mono | 2.211 | **2.304** | 2.304 | upgraded, `src/fontdata.rs` regenerated, cell sizes unchanged |
@@ -27,5 +27,5 @@ Aeon has **no third-party Rust crates**: `Cargo.lock` lists only `aeon` itself, 
 
 ## Not upgraded on purpose
 
-- The version numbers in `docs/ca6/*.md` say 0.9.1 because their numbers come from the 0.9.1 evidence run. They change to 0.9.2 only after the evidence run is repeated.
-- `usb/` still holds a signed image from a signing run on 2026-11-03 16:46 that I did not start; a signed 0.9.2 needs your go-ahead.
+- Windows QEMU 11.1.0 stays until you run the 11.1.3 installer; WSL packages stay until you run `sudo apt upgrade` (both need your hand).
+- No third-party crates exist, so there is nothing to bump in `Cargo.lock`.

@@ -154,7 +154,7 @@ Upgrade: **yes**. Highest value for the owner: persistent files on the pendrive 
 | S4 | KASLR (random kernel position) | missing |
 | S5 | Shadow stacks (Intel CET) | CPU support detected, not enabled |
 | S6 | Spectre-class mitigations (IBRS, retpoline-style barriers) | missing |
-| S7 | Syscall filter or capability table per task | missing |
+| S7 | Syscall filter or capability table per task | done 2026-11-03 (a per-program allow-list of the five calls, `run denied` proves a refusal; a full capability table comes with real processes) |
 | S8 | IOMMU / DMA protection | missing |
 | S9 | Boot chain split, anti-rollback, TPM-sealed secret demo | missing, section 2 |
 | S10 | Fuzzing of every parser (cargo-fuzz) and Miri | Miri done, fuzzing random tests only |
