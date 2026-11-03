@@ -440,7 +440,7 @@ const SBAT_TEXT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     ",-\n\0"
 );
-#[link_section = ".sbat"]
+#[unsafe(link_section = ".sbat")]
 #[used]
 static SBAT: [u8; SBAT_TEXT.len()] = {
     let mut a = [0u8; SBAT_TEXT.len()];
@@ -836,7 +836,7 @@ fn leave_menu(boot_on: bool) {
 
 // The firmware entry point cannot be `unsafe`; the firmware guarantees the system-table pointer.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Status {
     if st_ptr.is_null() {
         return uefi::INVALID_PARAMETER;

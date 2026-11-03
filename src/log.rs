@@ -271,22 +271,22 @@ pub fn raw_panic_line(s: &str) {
 
 #[macro_export]
 macro_rules! error {
-    ($t:expr, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Error, $t, format_args!($($a)*)) };
+    ($t:expr_2021, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Error, $t, format_args!($($a)*)) };
 }
 #[macro_export]
 macro_rules! warn {
-    ($t:expr, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Warn, $t, format_args!($($a)*)) };
+    ($t:expr_2021, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Warn, $t, format_args!($($a)*)) };
 }
 #[macro_export]
 macro_rules! info {
-    ($t:expr, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Info, $t, format_args!($($a)*)) };
+    ($t:expr_2021, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Info, $t, format_args!($($a)*)) };
 }
 #[macro_export]
 macro_rules! debug {
-    ($t:expr, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Debug, $t, format_args!($($a)*)) };
+    ($t:expr_2021, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Debug, $t, format_args!($($a)*)) };
 }
 #[allow(unused_macros)]
 #[macro_export]
 macro_rules! trace {
-    ($t:expr, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Trace, $t, format_args!($($a)*)) };
+    ($t:expr_2021, $($a:tt)*) => { $crate::log::log($crate::logfmt::Level::Trace, $t, format_args!($($a)*)) };
 }

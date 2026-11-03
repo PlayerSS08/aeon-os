@@ -435,7 +435,7 @@ impl Gate {
 
 static IDT: Global<[Gate; 256]> = Global::new([Gate::MISSING; 256]);
 
-extern "C" {
+unsafe extern "C" {
     static aeon_isr_table: [usize; 32];
     fn aeon_irq_timer_stub();
     fn aeon_irq_yield_stub();
@@ -782,7 +782,7 @@ const EXC_NAMES: [&str; 32] = [
 static IN_EXCEPTION: AtomicBool = AtomicBool::new(false);
 
 /// Called from `aeon_isr_common`. Reports the fault on every log sink and halts.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
     // SAFETY: `aeon_isr_common` passes the address of the frame it just built on the stack.
     let f = unsafe { &*frame };

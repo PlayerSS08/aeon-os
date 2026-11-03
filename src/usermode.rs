@@ -27,10 +27,10 @@ const EFER_SCE: u64 = 1;
 const SFMASK: u64 = 0x100 | 0x200 | 0x400 | 0x4000 | 0x4_0000;
 
 /// Kernel stack the `syscall` entry switches to; kept equal to TSS.rsp0 for the running task.
-#[no_mangle]
+#[unsafe(no_mangle)]
 static AEON_SYSCALL_KSTACK: AtomicU64 = AtomicU64::new(0);
 /// Holds the user stack pointer for the few instructions between `syscall` and the stack switch.
-#[no_mangle]
+#[unsafe(no_mangle)]
 static AEON_SYSCALL_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
 static WINDOW: AtomicU64 = AtomicU64::new(0);
@@ -141,7 +141,7 @@ global_asm!(
     "#
 );
 
-extern "C" {
+unsafe extern "C" {
     fn aeon_syscall_entry();
     static aeon_user_hello_start: u8;
     static aeon_user_hello_end: u8;
@@ -261,7 +261,7 @@ fn copy_from_user(ptr: u64, buf: &mut [u8]) -> bool {
 }
 
 /// Rust side of the `syscall` entry. Runs with interrupts off on the task's kernel stack.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn aeon_syscall_dispatch(n: u64, a0: u64, a1: u64) -> u64 {
     match syscall::decode(n) {
         Some(Number::Write) => {

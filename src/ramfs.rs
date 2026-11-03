@@ -269,7 +269,7 @@ impl RamFs {
     }
 
     /// What is directly inside folder `dir`: name and size (`None` for a folder), sorted by name.
-    pub fn list<'a>(&'a self, dir: &str) -> impl Iterator<Item = (&'a str, Option<usize>)> + 'a {
+    pub fn list<'a>(&'a self, dir: &str) -> impl Iterator<Item = (&'a str, Option<usize>)> + 'a + use<'a> {
         let prefix = if dir == "/" { String::from("/") } else { format!("{dir}/") };
         self.nodes.iter().filter_map(move |n| {
             let rest = n.path.strip_prefix(prefix.as_str())?;

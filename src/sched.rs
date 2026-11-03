@@ -201,7 +201,7 @@ fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usi
 
 /// Called by the interrupt stubs with the interrupted context's stack pointer; returns the stack
 /// pointer to resume. Runs with interrupts disabled.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     if timer != 0 {
         arch::timer_tick();
