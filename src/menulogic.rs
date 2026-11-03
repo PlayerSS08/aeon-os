@@ -5,9 +5,10 @@
 //! Rules (the owner's wishes, checked by the tests below):
 //! - the menu opens with "Boot Aeon" highlighted and a countdown of `timeout` seconds;
 //! - arrow keys move the highlight and restart the countdown (a full `timeout` after your last key);
-//! - when the countdown ends, the highlighted entry runs; but only entries that are safe to start by
-//!   themselves (`Boot`, `Recovery`) can be started this way: moving onto any other entry stops the countdown,
-//!   so nothing ever restarts, powers off or changes settings without a key press;
+//! - the countdown keeps running whichever entry is highlighted, so the menu never looks frozen;
+//! - when it ends, the highlighted entry runs if it is safe to start by itself (`Boot`, `Recovery`); on any
+//!   other entry (firmware shell, debug, firmware setup, restart, power off) Aeon boots normally instead, so
+//!   nothing ever restarts, powers off or changes settings without an Enter;
 //! - Enter runs the highlighted entry at once; any other key (Escape, a letter) stops the countdown.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,13 +113,19 @@ impl Menu {
     fn move_to(&mut self, sel: usize) -> Outcome {
         self.sel = sel;
         if self.counting {
-            if ENTRIES[sel].starts_by_itself() {
-                self.elapsed_ms = 0; // a full countdown after your last key
-            } else {
-                self.counting = false; // never count down onto Restart, Power off, ...
-            }
+            self.elapsed_ms = 0; // a full countdown after your last key
         }
         Outcome::List
+    }
+
+    /// What the countdown starts when it ends: the highlighted entry when it is safe to start by itself,
+    /// otherwise Aeon itself (never a restart, a power off or a settings change).
+    pub fn timeout_target(&self) -> Entry {
+        if ENTRIES[self.sel].starts_by_itself() {
+            ENTRIES[self.sel]
+        } else {
+            Entry::Boot
+        }
     }
 
     pub fn key(&mut self, key: Key) -> Outcome {
@@ -140,7 +147,7 @@ impl Menu {
         }
     }
 
-    /// Time passed. Returns `Run` when the countdown ends on an entry that may start by itself.
+    /// Time passed. Returns `Run(timeout_target)` when the countdown ends.
     pub fn tick(&mut self, ms: u32) -> Outcome {
         if !self.counting {
             return Outcome::Idle;
@@ -149,7 +156,7 @@ impl Menu {
         self.elapsed_ms = self.elapsed_ms.saturating_add(ms);
         if self.elapsed_ms >= self.timeout_ms {
             self.counting = false;
-            return if ENTRIES[self.sel].starts_by_itself() { Outcome::Run(ENTRIES[self.sel]) } else { Outcome::Footer };
+            return Outcome::Run(self.timeout_target());
         }
         if self.countdown() != before {
             Outcome::Footer
@@ -162,10 +169,15 @@ impl Menu {
     pub fn footer(&self, out: &mut FooterBuf) {
         out.clear();
         use core::fmt::Write;
-        let _ = match self.countdown() {
-            Some(1) => write!(out, "{} in 1 second", self.selected_entry().label(false)),
-            Some(n) => write!(out, "{} in {} seconds", self.selected_entry().label(false), n),
-            None => write!(out, "Use the arrow keys, then press Enter"),
+        let target = self.timeout_target().label(false);
+        // When the highlighted entry cannot start by itself, say what the countdown will do instead.
+        let pick = self.selected_entry();
+        let _ = match (self.countdown(), pick == self.timeout_target()) {
+            (Some(1), true) => write!(out, "{target} in 1 second"),
+            (Some(n), true) => write!(out, "{target} in {n} seconds"),
+            (Some(1), false) => write!(out, "{target} in 1 second, or press Enter for {}", pick.label(false)),
+            (Some(n), false) => write!(out, "{target} in {n} seconds, or press Enter for {}", pick.label(false)),
+            (None, _) => write!(out, "Use the arrow keys, then press Enter"),
         };
     }
 }
@@ -254,19 +266,26 @@ mod tests {
     }
 
     #[test]
-    fn moving_onto_an_entry_that_must_not_start_by_itself_stops_the_countdown() {
+    fn the_countdown_keeps_running_on_every_entry_and_falls_back_to_boot() {
         let mut m = Menu::new(15);
         m.key(Key::Down);
         m.key(Key::Down);
         assert_eq!(m.selected_entry(), Entry::FirmwareShell);
-        assert_eq!(m.countdown(), None);
-        assert_eq!(footer(&m), "Use the arrow keys, then press Enter");
-        // going back does not wake it up again: you are in charge now
-        m.key(Key::Up);
-        m.key(Key::Up);
-        assert_eq!(m.selected_entry(), Entry::Boot);
-        assert_eq!(m.countdown(), None);
-        assert_eq!(m.tick(1_000_000), Outcome::Idle);
+        assert_eq!(m.countdown(), Some(15), "not frozen: a full countdown after the last key");
+        assert_eq!(footer(&m), "Boot Aeon in 15 seconds, or press Enter for Firmware shell");
+        assert_eq!(m.tick(1000), Outcome::Footer);
+        assert_eq!(footer(&m), "Boot Aeon in 14 seconds, or press Enter for Firmware shell");
+        assert_eq!(m.tick(13_000), Outcome::Footer);
+        assert_eq!(footer(&m), "Boot Aeon in 1 second, or press Enter for Firmware shell");
+        assert_eq!(m.tick(1000), Outcome::Run(Entry::Boot), "the shell is not started; Aeon boots");
+        // moving on every entry keeps restarting the full countdown
+        let mut m = Menu::new(15);
+        for _ in 0..6 {
+            m.tick(5000);
+            m.key(Key::Down);
+            assert_eq!(m.countdown(), Some(15));
+        }
+        assert_eq!(m.selected_entry(), Entry::PowerOff);
     }
 
     #[test]
@@ -278,7 +297,7 @@ mod tests {
             if e.starts_by_itself() {
                 assert_eq!(out, Outcome::Run(*e));
             } else {
-                assert_ne!(out, Outcome::Run(*e), "{e:?} must never start by itself");
+                assert_eq!(out, Outcome::Run(Entry::Boot), "{e:?} must never start by itself: Aeon boots instead");
             }
         }
         assert!(!Entry::Restart.starts_by_itself());
@@ -371,10 +390,8 @@ mod tests {
                 };
                 assert!(m.selected() < ENTRIES.len());
                 if let Outcome::Run(e) = out {
-                    assert_eq!(e, m.selected_entry());
-                }
-                if m.countdown().is_some() {
-                    assert!(m.selected_entry().starts_by_itself());
+                    // Enter runs the highlighted entry; the countdown only ever runs a safe one.
+                    assert!(e == m.selected_entry() || e == Entry::Boot);
                 }
             }
         }

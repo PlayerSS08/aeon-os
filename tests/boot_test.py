@@ -319,8 +319,8 @@ def t_menu(ctx):
 
 
 def t_dawn(ctx):
-    """Dawn's countdown rules: 15 s by default, the highlighted entry runs when it ends, nothing dangerous
-    ever starts by itself, and there are no letter shortcuts."""
+    """Dawn's countdown rules: 15 s by default, the highlighted entry runs when it ends (a dangerous one falls
+    back to booting Aeon), the countdown never freezes, and there are no letter shortcuts."""
     r = ctx.r
     # 1. No config file: the image's own default is 15 seconds.
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-default", cfg=False), ctx.work, name="dawn-default")
@@ -347,20 +347,20 @@ def t_dawn(ctx):
         r.check("recovery boot completes", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text())
     finally:
         vm.close()
-    # 4. Moving onto "Debug logging" stops the countdown: it must never run by itself.
-    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-t2d", cfg="timeout=2\n"), ctx.work, name="dawn-debug")
-    try:
-        r.check("menu opens (debug case)", vm.wait_for("menu open: boot starts in 2 s", 150))
-        for _ in range(3):
-            vm.keys("down")
-        time.sleep(6)
-        t = vm.text()
-        r.check("no entry started by itself", "boot complete" not in t and "recovery mode selected" not in t and "debug logging" not in t, t[-400:])
-        vm.keys("home")
-        vm.keys("ret")
-        r.check("Home then Enter boots", vm.wait_for("boot complete", 150))
-    finally:
-        vm.close()
+    # 4. The countdown never freezes. Moving onto an entry that must not start by itself (Debug logging, then
+    #    Power off) keeps it running, and at zero Aeon boots instead of toggling, restarting or powering off.
+    for name, keys, label in (("dawn-debug", ["down", "down", "down"], "Debug logging"), ("dawn-poweroff", ["end"], "Power off")):
+        vm = Vm(make_esp(ctx.work, ctx.efi, "esp-" + name, cfg="timeout=3" + chr(10)), ctx.work, name=name)
+        try:
+            r.check(f"menu opens ({label} case)", vm.wait_for("menu open: boot starts in 3 s", 150))
+            for k in keys:
+                vm.keys(k)
+            r.check(f"{label} highlighted: Aeon still boots when the countdown ends", vm.wait_for("boot complete", 150), vm.text()[-400:])
+            t = vm.text()
+            r.check(f"{label} was not run", "debug logging " not in t and "recovery mode selected" not in t and vm.proc.poll() is None, t[-300:])
+            r.check("a normal boot", "recovery=false" in t)
+        finally:
+            vm.close()
     # 5. Letter keys are not shortcuts any more (C used to select recovery mode, R used to restart).
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-t10l", cfg="timeout=10\n"), ctx.work, name="dawn-letters")
     try:
