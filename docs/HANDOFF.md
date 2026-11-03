@@ -1,6 +1,6 @@
 # Aeon handoff: read this first in a new session
 
-Last updated 2026-11-03 (latest state: `docs/SESSION-2026-11-03.md`, read it first). Branch `aeon-boot-upgrade` in `G:AeonOS`, pushed to `origin` up to `f7144c8`.
+Last updated 2026-11-03 (latest state: `docs/SESSION-2026-11-03.md`, read it first). Branch `aeon-boot-upgrade` in `G:\Aeon\OS`, pushed to `origin` up to `f7144c8`.
 
 ## What Aeon is
 
