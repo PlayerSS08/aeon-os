@@ -67,8 +67,13 @@ impl Segment {
     /// First page address and page count the segment occupies.
     pub fn pages(&self) -> (u64, u64) {
         let first = self.vaddr & !(PAGE - 1);
-        let end = self.vaddr + self.mem_size;
+        let end = self.vaddr.saturating_add(self.mem_size);
         (first, (end - first).div_ceil(PAGE))
+    }
+
+    /// Page numbers `[first, end)` the segment occupies. Cannot wrap, unlike byte addresses near `u64::MAX`.
+    fn page_numbers(&self) -> (u64, u64) {
+        (self.vaddr / PAGE, self.vaddr.saturating_add(self.mem_size).div_ceil(PAGE))
     }
     pub fn writable(&self) -> bool {
         self.flags & PF_W != 0
@@ -103,6 +108,10 @@ fn u64_at(b: &[u8], o: usize) -> Option<u64> {
 /// Parses and checks `file`. Every segment must lie in `[lo, hi)`, `max_total` bounds the sum of the
 /// segments' memory sizes (so a tiny file cannot ask for gigabytes).
 pub fn parse(file: &[u8], lo: u64, hi: u64, max_total: u64) -> Result<Image, ElfError> {
+    // A page-aligned range means "end <= hi" also holds for the segment's last page, and nothing can wrap.
+    if lo % PAGE != 0 || hi % PAGE != 0 || lo >= hi {
+        return Err(ElfError::OutOfRange);
+    }
     if file.len() < EHDR_LEN {
         return Err(ElfError::TooShort);
     }
@@ -189,10 +198,10 @@ pub fn parse(file: &[u8], lo: u64, hi: u64, max_total: u64) -> Result<Image, Elf
         }
         let seg = Segment { vaddr, mem_size: memsz, file_off: off as usize, file_size: filesz as usize, flags: flags & (PF_R | PF_W | PF_X) };
         // Page-granular overlap: two segments cannot share a page, they would need two permissions on it.
-        let (p0, n0) = seg.pages();
+        let (p0, p1) = seg.page_numbers();
         for other in img.segments.iter().flatten() {
-            let (q0, m0) = other.pages();
-            if p0 < q0 + m0 * PAGE && q0 < p0 + n0 * PAGE {
+            let (q0, q1) = other.page_numbers();
+            if p0 < q1 && q0 < p1 {
                 return Err(ElfError::Overlap);
             }
         }
@@ -351,11 +360,32 @@ mod tests {
         // below the allowed range, above it, wrapping
         assert_eq!(parse(&rx(0x1000, 0x1000, 0x10, 0x10), LO, HI, MAX), Err(ElfError::OutOfRange));
         assert_eq!(parse(&rx(0x1000, 0x2000_0000, 0x10, 0x10), LO, HI, MAX), Err(ElfError::OutOfRange));
-        assert_eq!(parse(&rx(0x1000, 0xffff_ffff_ffff_f000, 0x10, 0x2000), 0, u64::MAX, MAX), Err(ElfError::OutOfRange));
+        assert_eq!(parse(&rx(0x1000, 0xffff_ffff_ffff_f000, 0x10, 0x2000), 0, 0xffff_ffff_ffff_f000, MAX), Err(ElfError::OutOfRange));
         // kernel half of the address space
         assert_eq!(parse(&rx(0x1000, 0xffff_8000_0000_0000, 0x10, 0x10), LO, HI, MAX), Err(ElfError::OutOfRange));
         // asks for far more memory than the budget
         assert_eq!(parse(&rx(0x1000, 0x40_1000, 0x10, 0x800_0000), LO, HI, MAX), Err(ElfError::OutOfRange));
+    }
+
+    #[test]
+    fn the_allowed_range_must_be_page_aligned() {
+        assert_eq!(parse(&good(), LO + 1, HI, MAX), Err(ElfError::OutOfRange));
+        assert_eq!(parse(&good(), LO, HI - 1, MAX), Err(ElfError::OutOfRange));
+        assert_eq!(parse(&good(), HI, LO, MAX), Err(ElfError::OutOfRange));
+    }
+
+    #[test]
+    fn segments_at_the_very_top_cannot_wrap_the_overlap_check() {
+        let top = u64::MAX & !(PAGE - 1); // last page boundary; the range is [0, top)
+        // ends exactly on the limit: fine on its own
+        let one = build(top - PAGE, &[seg(PF_R | PF_X, 0x1000, top - PAGE, 0x10, PAGE)], 0x2000);
+        assert!(parse(&one, 0, top, MAX).is_ok());
+        // a second segment in the same top page must still be seen as overlapping
+        let two = build(top - PAGE, &[seg(PF_R | PF_X, 0x1000, top - PAGE, 0x10, 0x10), seg(PF_R | PF_W, 0x1800, top - PAGE + 0x800, 0x10, 0x10)], 0x2000);
+        assert_eq!(parse(&two, 0, top, MAX), Err(ElfError::Overlap));
+        // one byte past the limit is out of range
+        let past = build(top - PAGE, &[seg(PF_R | PF_X, 0x1000, top - PAGE, 0x10, PAGE + 1)], 0x2000);
+        assert_eq!(parse(&past, 0, top, MAX), Err(ElfError::OutOfRange));
     }
 
     #[test]
