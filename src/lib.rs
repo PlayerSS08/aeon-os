@@ -49,6 +49,7 @@ pub mod usbdesc;
 pub mod usercopy;
 pub mod virtio;
 pub mod waitq;
+pub mod xhcitrb;
 
 // `log` defines the logging macros, so it must come before the modules that use them.
 #[cfg(target_os = "uefi")]

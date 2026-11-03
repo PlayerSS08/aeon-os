@@ -7,4 +7,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo +nightly-x86_64-pc-windows-gnu miri test --lib --target x86_64-pc-windows-gnu -- \
     readyq:: schedtrace:: ramfs:: lineedit:: gopmode:: waitq:: frames:: heapalloc:: usercopy:: \
-    bootopts:: memmap:: logfmt:: keymap:: --skip fixture --skip fuzz --skip random
+    bootopts:: memmap:: logfmt:: keymap:: xhcitrb:: hidkbd:: usbdesc:: --skip fixture --skip fuzz --skip random
