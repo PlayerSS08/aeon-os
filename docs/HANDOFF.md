@@ -187,4 +187,6 @@ Report: `reports/Hobby Rust OS build checklist.md`, section 6.
 | 8 | SAFETY-comment lint | DONE: `clippy::undocumented_unsafe_blocks` is on in `lib.rs` and `main.rs`; 0 findings, and both clippy gates keep it clean |
 | 8 | cargo-fuzz | NOT DONE: needs nightly in WSL and `cargo install cargo-fuzz` (pin the version). The existing random-garbage tests (FAT, boot options, line editor, ramfs) stay as the cheap fuzzing. |
 | 1 | CI run | Blocked: needs a push to GitHub (never done without your word) |
-| 6, 3, 4, 5, 7 | ACPI/IOAPIC, xHCI keyboard, AHCI, per-process page tables and ELF loader, FAT32 write | Not started |
+| 6a | MADT routing tables | DONE (pure, 6 new tests, 253 host tests): `acpi::Madt` now keeps the first I/O APIC's GSI base and the interrupt source overrides; `Madt::isa_route(irq)` gives GSI, polarity and trigger (QEMU-style IRQ0 to GSI2 is covered). Not used by the kernel yet, so the image size is unchanged. |
+| 6b | IOAPIC driver, IRQ1 keyboard | NEXT: map the IOAPIC registers, mask the PIC, route IRQ1, add an interrupt handler. Hardware risk: only QEMU can test it here. |
+| 3, 4, 5, 7 | xHCI keyboard, AHCI, per-process page tables and ELF loader, FAT32 write | Not started |

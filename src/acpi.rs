@@ -144,6 +144,33 @@ pub struct Madt {
     pub cpus: u8,
     /// Address of the first I/O APIC, if any.
     pub ioapic_base: Option<u32>,
+    /// First global system interrupt (GSI) number that the first I/O APIC handles.
+    pub ioapic_gsi_base: u32,
+    /// Interrupt source overrides for the 16 legacy ISA IRQs (index = ISA IRQ).
+    overrides: [Option<IsaRoute>; 16],
+}
+
+/// Where a legacy ISA interrupt arrives on the I/O APIC, and how its line is wired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IsaRoute {
+    /// Global system interrupt: the I/O APIC input to program.
+    pub gsi: u32,
+    pub active_low: bool,
+    pub level: bool,
+}
+
+impl Madt {
+    /// The route for ISA IRQ `irq`: the firmware's override when the MADT has one, otherwise the same
+    /// number as the IRQ, active high and edge triggered (how the ISA bus is wired).
+    pub fn isa_route(&self, irq: u8) -> IsaRoute {
+        self.overrides.get(usize::from(irq)).copied().flatten().unwrap_or(IsaRoute { gsi: u32::from(irq), active_low: false, level: false })
+    }
+}
+
+/// MPS INTI flags of an interrupt source override: bits 0-1 polarity, bits 2-3 trigger mode. The value
+/// 0 means "follow the bus" (ISA: active high, edge); the reserved value 2 is treated the same way.
+fn inti_flags(flags: u16) -> (bool, bool) {
+    (flags & 0b11 == 0b11, (flags >> 2) & 0b11 == 0b11)
 }
 
 /// Parses a MADT ("APIC"). Returns `None` for a wrong signature, no usable CPU, or any entry that
@@ -153,7 +180,8 @@ pub fn parse_madt(t: &[u8]) -> Option<Madt> {
         return None;
     }
     let mut lapic_base = u32::from_le_bytes(t.get(36..40)?.try_into().ok()?);
-    let (mut cpus, mut ioapic_base) = (0u8, None);
+    let (mut cpus, mut ioapic_base, mut ioapic_gsi_base) = (0u8, None, 0u32);
+    let mut overrides = [None; 16];
     let mut i = 44;
     while i < t.len() {
         let (kind, len) = (*t.get(i)?, *t.get(i + 1)? as usize);
@@ -168,7 +196,15 @@ pub fn parse_madt(t: &[u8]) -> Option<Madt> {
                     cpus = cpus.saturating_add(1);
                 }
             }
-            1 if len >= 12 && ioapic_base.is_none() => ioapic_base = Some(u32::from_le_bytes(e[4..8].try_into().ok()?)),
+            1 if len >= 12 && ioapic_base.is_none() => {
+                ioapic_base = Some(u32::from_le_bytes(e[4..8].try_into().ok()?));
+                ioapic_gsi_base = u32::from_le_bytes(e[8..12].try_into().ok()?);
+            }
+            // Interrupt source override: only the ISA bus (0) and the 16 legacy IRQs matter here.
+            2 if len >= 10 && e[2] == 0 && e[3] < 16 => {
+                let (active_low, level) = inti_flags(u16::from_le_bytes(e[8..10].try_into().ok()?));
+                overrides[usize::from(e[3])] = Some(IsaRoute { gsi: u32::from_le_bytes(e[4..8].try_into().ok()?), active_low, level });
+            }
             5 if len >= 12 => {
                 if let Ok(a) = u32::try_from(u64::from_le_bytes(e[4..12].try_into().ok()?)) {
                     lapic_base = a;
@@ -178,7 +214,7 @@ pub fn parse_madt(t: &[u8]) -> Option<Madt> {
         }
         i += len;
     }
-    (cpus > 0).then_some(Madt { lapic_base, cpus, ioapic_base })
+    (cpus > 0).then_some(Madt { lapic_base, cpus, ioapic_base, ioapic_gsi_base, overrides })
 }
 
 #[cfg(test)]
@@ -234,7 +270,75 @@ mod tests {
     #[test]
     fn madt_two_cpus_one_ioapic() {
         let t = madt(0xFEE0_0000, &[&cpu(0, 1), &cpu(1, 1), &ioapic(0xFEC0_0000)]);
-        assert_eq!(parse_madt(&t), Some(Madt { lapic_base: 0xFEE0_0000, cpus: 2, ioapic_base: Some(0xFEC0_0000) }));
+        let m = parse_madt(&t).unwrap();
+        assert_eq!((m.lapic_base, m.cpus, m.ioapic_base), (0xFEE0_0000, 2, Some(0xFEC0_0000)));
+    }
+
+    fn ioapic_at(addr: u32, gsi_base: u32) -> [u8; 12] {
+        let mut e = ioapic(addr);
+        e[8..12].copy_from_slice(&gsi_base.to_le_bytes());
+        e
+    }
+
+    /// An interrupt source override: ISA bus, `source` IRQ delivered as `gsi`, with MPS INTI `flags`.
+    fn iso(bus: u8, source: u8, gsi: u32, flags: u16) -> [u8; 10] {
+        let mut e = [0u8; 10];
+        e[0] = 2;
+        e[1] = 10;
+        e[2] = bus;
+        e[3] = source;
+        e[4..8].copy_from_slice(&gsi.to_le_bytes());
+        e[8..10].copy_from_slice(&flags.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn madt_ioapic_gsi_base_is_kept() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &ioapic_at(0xFEC0_0000, 24)]);
+        assert_eq!(parse_madt(&t).unwrap().ioapic_gsi_base, 24);
+    }
+
+    #[test]
+    fn isa_irqs_map_to_the_same_gsi_when_nothing_overrides_them() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &ioapic(0xFEC0_0000)]);
+        let m = parse_madt(&t).unwrap();
+        for irq in 0..16u8 {
+            assert_eq!(m.isa_route(irq), IsaRoute { gsi: u32::from(irq), active_low: false, level: false });
+        }
+    }
+
+    #[test]
+    fn the_usual_timer_override_moves_irq0_to_gsi2() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &ioapic(0xFEC0_0000), &iso(0, 0, 2, 0)]);
+        let m = parse_madt(&t).unwrap();
+        assert_eq!(m.isa_route(0), IsaRoute { gsi: 2, active_low: false, level: false });
+        assert_eq!(m.isa_route(1).gsi, 1, "the keyboard IRQ stays where it is");
+    }
+
+    #[test]
+    fn override_flags_give_polarity_and_trigger() {
+        // 0b1111 = active low, level triggered (the usual PCI-style wiring on an ISA IRQ).
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &iso(0, 9, 9, 0b1111), &iso(0, 5, 5, 0b0101), &iso(0, 6, 6, 0b1010)]);
+        let m = parse_madt(&t).unwrap();
+        assert_eq!(m.isa_route(9), IsaRoute { gsi: 9, active_low: true, level: true });
+        assert_eq!(m.isa_route(5), IsaRoute { gsi: 5, active_low: false, level: false }, "1 = active high, 1 = edge");
+        assert_eq!(m.isa_route(6), IsaRoute { gsi: 6, active_low: false, level: false }, "reserved value 2 means: follow the bus");
+    }
+
+    #[test]
+    fn bad_overrides_are_ignored_not_fatal() {
+        let short = [2u8, 8, 0, 1, 7, 0, 0, 0]; // type 2 but only 8 bytes long
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &iso(1, 1, 99, 0), &iso(0, 16, 99, 0), &short]);
+        let m = parse_madt(&t).unwrap();
+        assert_eq!(m.isa_route(1).gsi, 1, "a non-ISA bus override is not for the ISA keyboard");
+        assert_eq!(m.isa_route(15).gsi, 15);
+        assert_eq!(m.isa_route(200), IsaRoute { gsi: 200, active_low: false, level: false }, "out of range: identity");
+    }
+
+    #[test]
+    fn the_last_override_for_an_irq_wins() {
+        let t = madt(0xFEE0_0000, &[&cpu(0, 1), &iso(0, 3, 10, 0), &iso(0, 3, 11, 0)]);
+        assert_eq!(parse_madt(&t).unwrap().isa_route(3).gsi, 11);
     }
 
     #[test]
