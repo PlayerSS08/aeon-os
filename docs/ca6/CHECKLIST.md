@@ -37,7 +37,7 @@
 - [ ] Synchronization wait time: not measured (a spinlock never waits on one CPU; say so in the viva)
 - [ ] I/O latency: not measured (the disk driver is read-only)
 
-## E. The submission package (assignment section 25)
+## E. The submission package (assignment section 42)
 
 - [x] 1 Source repository (`G:\Aeon\OS`)  - [x] 2 Architecture  - [x] 3 Design  - [x] 4 Test plan  - [x] 5 Test results
 - [x] 6 Performance data and charts  - [x] 7 Python analysis scripts  - [x] 8 Debugging log
@@ -65,3 +65,15 @@
 - [ ] Pendrive `D:` was not plugged in: the 0.9.x files are not copied yet
 - [ ] Real hardware boot
 - [ ] Push to GitHub (never done without your word)
+
+## I. After 0.9.1: what changed and what is re-proved (2026-11-03)
+
+The numbers in sections A to D come from the 0.9.1 evidence run. Build 0.9.2 adds work that is **not** part of that run and is not needed for the assignment's core requirements:
+
+- [x] Dawn boot menu: 15 s countdown, arrow keys and Enter only, the countdown never freezes, unsafe entries fall back to booting Aeon (12 unit tests, QEMU group `dawn` 19 of 19)
+- [x] Apple-like menu and stop screen, colours checked for contrast (`src/palette.rs`)
+- [x] Full-screen `edit`, folder prompt, 1024-character lines, `write` refuses to replace without `-f`, 14 new commands (373 unit tests in all)
+- [x] xHCI USB keyboard, AHCI SATA disk (read only), ELF parser (not used by the kernel yet): QEMU only
+- [ ] Re-run the evidence run (`tests/ca6_evidence.py`) on 0.9.2 so the numbers in `test-results.md` and `performance.md` match the shipped build (needs free memory; not started)
+- [ ] Re-run the whole QEMU suite after the editor work; the groups `editor`, `workflow`, `sweep` and `power` are written but not yet run
+- [ ] Change "0.9.1" to "0.9.2" in the package once the evidence is refreshed

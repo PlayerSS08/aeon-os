@@ -2,7 +2,7 @@
 
 Assignment: *CA6 Rust Micro-OS Engineering Project* (Operating System Concepts, 15 marks). Specialization: Security and Isolation (Track F). Build: Aeon 0.9.1.
 
-## The submission package (assignment section 25)
+## The submission package (assignment section 42)
 
 | # | Required item | File |
 |---|---|---|
