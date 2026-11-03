@@ -176,3 +176,15 @@ Still for the student: write `docs/ca6/contribution-statement.md`, check and sig
 | Third-party crates | **Allowed**, but each one is pinned to an exact version (`=x.y.z`), has its source read before use, passes `cargo audit` and `cargo deny` once those are set up, and is listed here | Aeon's own rule: treat third-party code as code that runs as you. Prefer own code for small things. |
 
 Crates in use: none yet.
+
+## Gap list progress (loop, 2026-11-03)
+
+Report: `reports/Hobby Rust OS build checklist.md`, section 6.
+
+| # | Item | State |
+|---|---|---|
+| 8 | Miri | DONE: `bash tools/miri.sh` runs 96 tests of the unsafe-using pure modules, 0 undefined behaviour (event-log fixtures and random-input tests skipped, over 20 min under Miri) |
+| 8 | SAFETY-comment lint | DONE: `clippy::undocumented_unsafe_blocks` is on in `lib.rs` and `main.rs`; 0 findings, and both clippy gates keep it clean |
+| 8 | cargo-fuzz | NOT DONE: needs nightly in WSL and `cargo install cargo-fuzz` (pin the version). The existing random-garbage tests (FAT, boot options, line editor, ramfs) stay as the cheap fuzzing. |
+| 1 | CI run | Blocked: needs a push to GitHub (never done without your word) |
+| 6, 3, 4, 5, 7 | ACPI/IOAPIC, xHCI keyboard, AHCI, per-process page tables and ELF loader, FAT32 write | Not started |

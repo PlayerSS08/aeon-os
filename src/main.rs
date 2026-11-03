@@ -6,6 +6,7 @@
 #![no_std]
 #![no_main]
 #![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 use core::ffi::c_void;
 use core::fmt::Write;
