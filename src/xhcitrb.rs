@@ -14,6 +14,7 @@ pub const TRB_LINK: u8 = 6;
 pub const TRB_ENABLE_SLOT: u8 = 9;
 pub const TRB_ADDRESS_DEVICE: u8 = 11;
 pub const TRB_CONFIGURE_ENDPOINT: u8 = 12;
+pub const TRB_EVALUATE_CONTEXT: u8 = 13;
 pub const TRB_TRANSFER_EVENT: u8 = 32;
 pub const TRB_COMMAND_COMPLETION: u8 = 33;
 pub const TRB_PORT_STATUS_CHANGE: u8 = 34;
@@ -74,6 +75,13 @@ impl Trb {
 
     pub fn configure_endpoint(input_context: u64, slot: u8) -> Self {
         let mut t = Self::of_type(TRB_CONFIGURE_ENDPOINT);
+        t.parameter = input_context;
+        t.control |= u32::from(slot) << 24;
+        t
+    }
+
+    pub fn evaluate_context(input_context: u64, slot: u8) -> Self {
+        let mut t = Self::of_type(TRB_EVALUATE_CONTEXT);
         t.parameter = input_context;
         t.control |= u32::from(slot) << 24;
         t
@@ -294,6 +302,8 @@ mod tests {
         assert_eq!(Trb::address_device(0x1000, 1, true).control & (1 << 9), 1 << 9, "BSR is bit 9");
         let t = Trb::configure_endpoint(0x2000, 7);
         assert_eq!((t.kind(), t.parameter, t.slot_id()), (12, 0x2000, 7));
+        let t = Trb::evaluate_context(0x3000, 2);
+        assert_eq!((t.kind(), t.parameter, t.slot_id()), (13, 0x3000, 2));
     }
 
     #[test]

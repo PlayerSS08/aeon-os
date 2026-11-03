@@ -49,6 +49,7 @@ pub mod usbdesc;
 pub mod usercopy;
 pub mod virtio;
 pub mod waitq;
+pub mod xhcictx;
 pub mod xhcireg;
 pub mod xhcitrb;
 
