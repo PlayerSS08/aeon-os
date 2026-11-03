@@ -46,13 +46,10 @@ const BAR_BG: (u8, u8, u8) = (40, 60, 90);
 const BAR_FG: (u8, u8, u8) = (235, 240, 250);
 const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
 const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
-const PANIC_BG: (u8, u8, u8) = (28, 8, 10);
-const PANIC_LOGO: (u8, u8, u8) = (255, 110, 110);
+// Neutral greys in the spirit of Apple's dark-mode system greys (no colour, no red): calm, high contrast.
+// (The menu and stop-screen colours live in `palette.rs`, where a test checks their contrast.)
+use crate::palette::{MENU_KEY, MENU_SELECT, MENU_TEXT, PANIC_BG, PANIC_HINT, PANIC_MARK, PANIC_TEXT, PANIC_TITLE};
 const CURSOR_BG: (u8, u8, u8) = (200, 208, 224);
-const MENU_SELECT: (u8, u8, u8) = (52, 66, 104);
-const MENU_TEXT: (u8, u8, u8) = (176, 184, 198);
-const MENU_KEY: (u8, u8, u8) = (104, 116, 134);
-const MENU_KEY_SELECTED: (u8, u8, u8) = (196, 206, 224);
 
 
 /// Letter spacing added between the wordmark's letters, in pixels at scale 1.
@@ -476,20 +473,29 @@ impl Console {
         let list_top = self.height / 14 + gfont::WORDMARK.height as usize * self.ws + 36 * sc;
         let panel_w = (self.width / 3).clamp(300 * sc, 700 * sc).min(self.width);
         let panel_x = (self.width - panel_w) / 2;
-        self.fill_rect(panel_x, list_top, panel_w, entries.len() * item_h, self.px(BG));
+        let list_h = entries.len() * item_h;
+        self.fill_rect(panel_x, list_top, panel_w, list_h, self.px(BG));
         let selected = selected.min(entries.len().saturating_sub(1));
-        for (i, (label, key)) in entries.iter().enumerate() {
+        for (i, (label, _)) in entries.iter().enumerate() {
             let y = list_top + i * item_h;
             let on = i == selected;
             let bg = if on { MENU_SELECT } else { BG };
             if on {
                 self.draw_pill(panel_x, y, panel_w, item_h - 4 * sc, self.px(MENU_SELECT));
             }
+            // Labels are centred, no key hints: arrows and Enter are the only keys.
             let ty = y + (item_h - 4 * sc).saturating_sub(face.height as usize * sc) / 2;
-            let pad = 18 * sc;
-            self.draw_text(face, panel_x + pad, ty, if on { LOGO_RGB } else { MENU_TEXT }, bg, label, sc, 0);
-            let kw = gfont::text_width(face, key) * sc;
-            self.draw_text(face, (panel_x + panel_w).saturating_sub(pad + kw), ty, if on { MENU_KEY_SELECTED } else { MENU_KEY }, bg, key, sc, 0);
+            let lw = gfont::text_width(face, label) * sc;
+            self.draw_text(face, panel_x + panel_w.saturating_sub(lw) / 2, ty, if on { LOGO_RGB } else { MENU_TEXT }, bg, label, sc, 0);
+        }
+        // One plain line about the highlighted entry, under the list.
+        if let Some((_, desc)) = entries.get(selected) {
+            let dsc = if self.width >= 3000 { 2 } else { 1 };
+            let f = &gfont::SANS_16;
+            let dy = list_top + list_h + 20 * dsc;
+            self.fill_rect(0, dy, self.width, f.height as usize * dsc, self.px(BG));
+            let dw = gfont::text_width(f, desc) * dsc;
+            self.draw_text(f, self.width.saturating_sub(dw) / 2, dy, MENU_KEY, BG, desc, dsc, 0);
         }
         if first {
             self.menu_footer(footer);
@@ -544,28 +550,31 @@ impl Console {
     /// failed and what to do. No addresses or register values are printed to the screen.
     pub fn panic_screen(&mut self, lines: &[&[u8]]) {
         self.splash = false;
+        self.menu = false;
         let bg = self.px(PANIC_BG);
         self.fill_rect(0, 0, self.width, self.height, bg);
-        self.logo_row = self.rows.saturating_sub(self.logo_rows + 10) / 3;
-        self.draw_logo_rgb(PANIC_LOGO, PANIC_BG);
-        let mut row = self.logo_row + self.logo_rows + 2;
-        let put = |this: &Self, row: usize, text: &[u8], fg: (u8, u8, u8)| {
-            if row >= this.rows {
-                return;
-            }
-            let n = text.len().min(this.cols);
-            let col = (this.cols - n) / 2;
-            for (i, &b) in text[..n].iter().enumerate() {
-                this.draw_glyph(col + i, row, b, fg, PANIC_BG);
-            }
+        // One calm, centred column in neutral greys: wordmark, a plain title, a few plain lines and one hint.
+        let (big, sc) = if self.width >= 1600 { (&gfont::SANS_24, if self.width >= 3000 { 2 } else { 1 }) } else { (&gfont::SANS_16, 1) };
+        let small = &gfont::SANS_16;
+        let line_h = (small.height as usize + 8) * sc;
+        let lines = &lines[..lines.len().min(6)];
+        let mark_h = gfont::WORDMARK.height as usize * self.ws;
+        let total = mark_h + 56 * sc + big.height as usize * sc + 24 * sc + lines.len() * line_h + 40 * sc + line_h;
+        let mut y = self.height.saturating_sub(total) / 2;
+        let center = |this: &Self, face: &Face, y: usize, text: &str, fg: (u8, u8, u8), scale: usize, tracking: usize| {
+            let w = gfont::text_width(face, text) * scale + text.chars().count().saturating_sub(1) * tracking;
+            this.draw_text(face, this.width.saturating_sub(w) / 2, y, fg, PANIC_BG, text, scale, tracking);
         };
-        put(self, row, b"AEON STOPPED", (255, 200, 200));
-        row += 2;
+        center(self, &gfont::WORDMARK, y, "AEON", PANIC_MARK, self.ws, WORDMARK_TRACKING * self.ws);
+        y += mark_h + 56 * sc;
+        center(self, big, y, "Aeon has stopped.", PANIC_TITLE, sc, 0);
+        y += big.height as usize * sc + 24 * sc;
         for l in lines {
-            put(self, row, l, (230, 190, 190));
-            row += 1;
+            center(self, small, y, core::str::from_utf8(l).unwrap_or(""), PANIC_TEXT, sc, 0);
+            y += line_h;
         }
-        put(self, row + 1, b"The system is halted. Power off or press reset to restart.", (160, 120, 120));
+        y += 40 * sc;
+        center(self, small, y, "Restart the computer to continue.", PANIC_HINT, sc, 0);
     }
 
     /// Draws one character cell: the smooth glyph blended over the solid cell background.

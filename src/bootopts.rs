@@ -21,7 +21,8 @@ pub struct BootOpts {
     pub mode: Option<(u32, u32)>,
 }
 
-pub const DEFAULT_TIMEOUT: u8 = 1;
+/// Seconds the menu waits before it starts the highlighted entry. Long enough to read and decide.
+pub const DEFAULT_TIMEOUT: u8 = 15;
 pub const MAX_TIMEOUT: u8 = 30;
 
 impl Default for BootOpts {

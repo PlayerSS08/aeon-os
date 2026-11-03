@@ -715,152 +715,103 @@ fn firmware_shell(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices) {
     }
 }
 
-/// Boot menu in the spirit of GRUB, systemd-boot and the Windows Boot Manager: Dawn opens at once with
-/// "Boot Aeon" selected and counts down; when the count reaches 0 Aeon boots normally. Any key (read
-/// through the firmware, so USB keyboards work) stops the countdown and is used as a menu key. Returns
-/// the possibly updated options.
+/// Dawn, the boot menu. It opens at once with "Boot Aeon" highlighted and a countdown (15 s by default).
+/// Arrow keys move the highlight and restart the countdown; when it ends the highlighted entry runs, but only
+/// "Boot Aeon" and "Recovery mode" may start by themselves (see `aeon::menulogic`). Enter runs the highlighted
+/// entry at once; any other key stops the countdown. Keys are read through the firmware, so USB keyboards work.
+/// Returns the possibly updated options.
 fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts: BootOpts) -> BootOpts {
+    use aeon::menulogic::{Entry, Key, Menu, Outcome};
     if opts.menu_timeout == 0 || st.con_in.is_null() {
         return opts;
     }
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
-    info!("menu", "menu open: boot starts in {} s, any key stops the countdown", opts.menu_timeout);
-    // Dawn, the arrow-key menu. It owns the screen; log lines are held back and replayed when it closes.
-    info!("menu", "Enter boot | C recovery mode | S firmware shell | D toggle debug | F firmware setup | R reboot | O power off");
-    let mut sel = 0usize;
-    let t0 = aeon::arch::rdtsc();
-    let hz = log::tsc_hz().max(1);
-    let budget = hz.saturating_mul(u64::from(opts.menu_timeout));
-    let mut counting = true;
-    let mut left = opts.menu_timeout;
-    draw_menu(sel, opts.debug);
-    show_countdown(Some(left));
+    info!("menu", "menu open: boot starts in {} s (arrow keys choose another entry, Enter selects, any other key stops the countdown)", opts.menu_timeout);
+    // Dawn owns the screen; log lines are held back and replayed when it closes.
+    info!("menu", "options: Boot Aeon | Recovery mode | Firmware shell | Debug logging | Firmware setup | Restart | Power off");
+    let hz = u128::from(log::tsc_hz().max(1));
+    let mut menu = Menu::new(opts.menu_timeout);
+    let mut last = aeon::arch::rdtsc();
+    draw_menu(&menu, opts.debug);
     loop {
-        let (scan, ch) = loop {
-            let _ = (bs.stall)(20_000);
-            if let Some(k) = read_key(st) {
-                break k;
+        let _ = (bs.stall)(20_000);
+        // Time first, so a key press never hides time that has already passed.
+        let now = aeon::arch::rdtsc();
+        let ms = (u128::from(now.wrapping_sub(last)) * 1000 / hz).min(u128::from(u32::MAX)) as u32;
+        last = now;
+        let mut outcome = menu.tick(ms);
+        if matches!(outcome, Outcome::Idle | Outcome::Footer) {
+            if outcome == Outcome::Footer {
+                show_footer(&menu);
             }
-            if counting {
-                let spent = aeon::arch::rdtsc().wrapping_sub(t0);
-                if spent >= budget {
-                    // Nobody pressed a key: boot normally.
-                    leave_menu(true);
-                    return opts;
-                }
-                let now_left = ((budget - spent) / hz) as u8 + 1;
-                if now_left != left {
-                    left = now_left;
-                    show_countdown(Some(left));
-                }
-            }
-        };
-        if counting {
-            counting = false;
-            show_countdown(None);
+            let Some((scan, ch)) = read_key(st) else { continue };
+            // UEFI scan codes: 0x01 up, 0x02 down, 0x05 home, 0x06 end.
+            let key = match (scan, ch as u8 as char) {
+                (0x01, _) => Key::Up,
+                (0x02, _) => Key::Down,
+                (0x05, _) => Key::Home,
+                (0x06, _) => Key::End,
+                (_, '\r') => Key::Enter,
+                _ => Key::Other,
+            };
+            outcome = menu.key(key);
         }
-        // UEFI scan codes: 0x01 up, 0x02 down, 0x05 home, 0x06 end. Letters stay as shortcuts.
-        let pick = match (scan, ch as u8 as char) {
-            (0x01, _) => {
-                sel = (sel + MENU_LEN - 1) % MENU_LEN;
-                None
+        let entry = match outcome {
+            Outcome::Idle => continue,
+            Outcome::Footer => {
+                show_footer(&menu);
+                continue;
             }
-            (0x02, _) => {
-                sel = (sel + 1) % MENU_LEN;
-                None
+            Outcome::List => {
+                draw_menu(&menu, opts.debug);
+                continue;
             }
-            (0x05, _) => {
-                sel = 0;
-                None
-            }
-            (0x06, _) => {
-                sel = MENU_LEN - 1;
-                None
-            }
-            (_, '\r') => Some(sel),
-            (_, ' ') => Some(0),
-            (_, 'c' | 'C') => Some(1),
-            (_, 's' | 'S') => Some(2),
-            (_, 'd' | 'D') => Some(3),
-            (_, 'f' | 'F') => Some(4),
-            (_, 'r' | 'R') => Some(5),
-            (_, 'o' | 'O') => Some(6),
-            _ => None,
+            Outcome::Run(e) => e,
         };
-        let Some(action) = pick else {
-            draw_menu(sel, opts.debug);
-            continue;
-        };
-        sel = action;
-        match action {
-            0 => {
+        match entry {
+            Entry::Boot => {
                 leave_menu(true);
                 return opts;
             }
-            1 => {
+            Entry::Recovery => {
                 boot_info().recovery = true;
                 info!("menu", "recovery mode selected: no timer, no scheduler");
                 leave_menu(false);
                 return opts;
             }
-            2 => {
+            Entry::FirmwareShell => {
                 leave_menu(false);
                 firmware_shell(st, bs, rt);
                 return opts;
             }
-            3 => {
+            Entry::Debug => {
                 opts.debug = !opts.debug;
                 opts.quiet = false;
                 log::set_max_level(if opts.debug { Level::Trace } else { Level::Debug });
                 info!("menu", "debug logging {}", if opts.debug { "on" } else { "off" });
-                draw_menu(sel, opts.debug);
+                draw_menu(&menu, opts.debug);
             }
-            4 => reboot_to_firmware_setup(rt),
-            5 => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
-            _ => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
+            Entry::FirmwareSetup => reboot_to_firmware_setup(rt),
+            Entry::Restart => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
+            Entry::PowerOff => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
         }
     }
 }
 
-const MENU_LEN: usize = 7;
-
-fn draw_menu(sel: usize, debug: bool) {
-    let entries: [(&str, &str); MENU_LEN] = [
-        ("Boot Aeon", "Enter"),
-        ("Recovery mode", "C"),
-        ("Firmware shell", "S"),
-        (if debug { "Debug logging: on" } else { "Debug logging: off" }, "D"),
-        ("Firmware setup", "F"),
-        ("Restart", "R"),
-        ("Power off", "O"),
-    ];
-    let _ = log::with_console(|c| c.menu_draw(&entries, sel, "Up and Down to move, Enter to select"));
+/// Paints the whole menu: the list, the line about the highlighted entry and the countdown line.
+fn draw_menu(menu: &aeon::menulogic::Menu, debug: bool) {
+    let entries = aeon::menulogic::ENTRIES.map(|e| (e.label(debug), e.description()));
+    let mut footer = aeon::menulogic::FooterBuf::new();
+    menu.footer(&mut footer);
+    let _ = log::with_console(|c| c.menu_draw(&entries, menu.selected(), footer.as_str()));
 }
 
-/// Writes the line under the menu: the countdown, or the key help once the countdown is stopped.
-fn show_countdown(left: Option<u8>) {
-    let mut buf = [0u8; 64];
-    let text: &[u8] = match left {
-        Some(n) => {
-            let head = b"Boot Aeon in ";
-            let tail = b" s. Any key stops the countdown";
-            let mut len = head.len();
-            buf[..len].copy_from_slice(head);
-            if n >= 10 {
-                buf[len] = b'0' + n / 10;
-                len += 1;
-            }
-            buf[len] = b'0' + n % 10;
-            len += 1;
-            buf[len..len + tail.len()].copy_from_slice(tail);
-            len += tail.len();
-            &buf[..len]
-        }
-        None => b"Up and Down to move, Enter to select",
-    };
-    let s = core::str::from_utf8(text).unwrap_or("");
-    let _ = log::with_console(|c| c.menu_footer(s));
+/// Repaints only the line under the menu: the countdown, or the key help once it has stopped.
+fn show_footer(menu: &aeon::menulogic::Menu) {
+    let mut footer = aeon::menulogic::FooterBuf::new();
+    menu.footer(&mut footer);
+    let _ = log::with_console(|c| c.menu_footer(footer.as_str()));
 }
 
 /// Closes the menu. With `boot_on` the splash comes back (the normal boot carries on); otherwise

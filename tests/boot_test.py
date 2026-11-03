@@ -169,11 +169,19 @@ class Vm:
 
 
 def make_esp(work, efi, name="esp", cfg=None):
+    """cfg=None gives a 1 s menu countdown (the real default is 15 s, which would slow every test);
+    cfg=False writes no config file at all, so the image's own default applies."""
     d = os.path.join(work, name)
     os.makedirs(os.path.join(d, "EFI", "BOOT"), exist_ok=True)
     shutil.copy(efi, os.path.join(d, "EFI", "BOOT", "BOOTX64.EFI"))
-    if cfg is not None:
-        with open(os.path.join(d, "EFI", "BOOT", "aeon.cfg"), "w") as f:
+    if cfg is None:
+        cfg = "timeout=1\n"
+    path = os.path.join(d, "EFI", "BOOT", "aeon.cfg")
+    if cfg is False:
+        if os.path.exists(path):
+            os.remove(path)  # a folder shared with an earlier test may still hold its config
+    else:
+        with open(path, "w") as f:
             f.write(cfg)
     return d
 
@@ -280,8 +288,8 @@ def t_menu(ctx):
     try:
         r = ctx.r
         r.check("menu wait reached", vm.wait_for("menu open: boot starts in"))
-        vm.keys("home")
-        r.check("menu is open and stopped by a key", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-500:])
+        vm.keys("esc")  # any key other than the arrows and Enter stops the countdown
+        r.check("menu lists the options", vm.wait_for("options: Boot Aeon | Recovery mode | Firmware shell"), vm.text()[-500:])
         time.sleep(0.5)
         w, h, pix = vm.shot(os.path.join(ctx.shots, "4-menu.png"))
         r.check("menu leaves the splash (log visible)", find_bar(pix, w, h) is None)
@@ -295,8 +303,8 @@ def t_menu(ctx):
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-arrows", cfg="timeout=10\n"), ctx.work, name="menu-arrows")
     try:
         r.check("arrows: menu wait reached", vm.wait_for("menu open: boot starts in"))
-        vm.keys("home")
-        r.check("arrows: menu opens", vm.wait_for("Enter boot | C recovery mode"), vm.text()[-400:])
+        vm.keys("esc")
+        r.check("arrows: menu opens", vm.wait_for("options: Boot Aeon | Recovery mode"), vm.text()[-400:])
         time.sleep(0.4)
         w, h, pix_a = vm.shot(os.path.join(ctx.shots, "4-menu-a.png"))
         vm.keys("down")
@@ -310,8 +318,87 @@ def t_menu(ctx):
         vm.close()
 
 
+def t_dawn(ctx):
+    """Dawn's countdown rules: 15 s by default, the highlighted entry runs when it ends, nothing dangerous
+    ever starts by itself, and there are no letter shortcuts."""
+    r = ctx.r
+    # 1. No config file: the image's own default is 15 seconds.
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-default", cfg=False), ctx.work, name="dawn-default")
+    try:
+        r.check("default countdown is 15 s", vm.wait_for("menu open: boot starts in 15 s", 150), vm.text()[-400:])
+        time.sleep(3)
+        r.check("still waiting after 3 s (no instant boot)", "boot complete" not in vm.text())
+    finally:
+        vm.close()
+    # 2. Nobody touches the keyboard: Boot Aeon starts when the countdown ends.
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-t3", cfg="timeout=3\n"), ctx.work, name="dawn-t3")
+    try:
+        r.check("menu opens", vm.wait_for("menu open: boot starts in 3 s", 150))
+        r.check("countdown ends and Aeon boots", vm.wait_for("boot complete", 150), vm.text()[-400:])
+        r.check("normal boot (not recovery)", "recovery=false" in vm.text())
+    finally:
+        vm.close()
+    # 3. Down once highlights Recovery mode; the countdown restarts and then starts that entry.
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-t3r", cfg="timeout=3\n"), ctx.work, name="dawn-recovery")
+    try:
+        r.check("menu opens (recovery case)", vm.wait_for("menu open: boot starts in 3 s", 150))
+        vm.keys("down")
+        r.check("the highlighted entry runs when the countdown ends", vm.wait_for("recovery mode selected", 60), vm.text()[-400:])
+        r.check("recovery boot completes", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text())
+    finally:
+        vm.close()
+    # 4. Moving onto "Debug logging" stops the countdown: it must never run by itself.
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-t2d", cfg="timeout=2\n"), ctx.work, name="dawn-debug")
+    try:
+        r.check("menu opens (debug case)", vm.wait_for("menu open: boot starts in 2 s", 150))
+        for _ in range(3):
+            vm.keys("down")
+        time.sleep(6)
+        t = vm.text()
+        r.check("no entry started by itself", "boot complete" not in t and "recovery mode selected" not in t and "debug logging" not in t, t[-400:])
+        vm.keys("home")
+        vm.keys("ret")
+        r.check("Home then Enter boots", vm.wait_for("boot complete", 150))
+    finally:
+        vm.close()
+    # 5. Letter keys are not shortcuts any more (C used to select recovery mode, R used to restart).
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-t10l", cfg="timeout=10\n"), ctx.work, name="dawn-letters")
+    try:
+        r.check("menu opens (letters case)", vm.wait_for("menu open: boot starts in 10 s", 150))
+        vm.keys("c")
+        vm.keys("r")
+        vm.keys("o")
+        time.sleep(3)
+        t = vm.text()
+        r.check("letters only stop the countdown", "recovery mode selected" not in t and "boot complete" not in t and vm.serial_text().count("menu open:") == 1,
+                f"recovery={'recovery mode selected' in t} complete={'boot complete' in t} opens={vm.serial_text().count('menu open:')}")
+        vm.keys("ret")
+        r.check("Enter still boots", vm.wait_for("boot complete", 150))
+    finally:
+        vm.close()
+
+
+def t_panicscreen(ctx):
+    """The stop screen is a calm neutral grey page with text, not a red block."""
+    r = ctx.r
+    bad = os.path.join(ctx.faults, "fault-panic", "aeon.efi")
+    vm = Vm(make_esp(ctx.work, bad, "esp-panicshot"), ctx.work, name="panicshot")
+    try:
+        r.check("panic reached", vm.wait_for("deliberate panic", 150), vm.text()[-300:])
+        time.sleep(1.5)
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "5-panic.png"))
+        r.check("background is neutral grey (28,28,30)", px(pix, w, 4, 4) == (28, 28, 30), str(px(pix, w, 4, 4)))
+        step = max(1, w // 400)
+        reddish = sum(1 for yy in range(0, h, step) for xx in range(0, w, step) if px(pix, w, xx, yy)[0] > px(pix, w, xx, yy)[1] + 30)
+        r.check("no red anywhere on the screen", reddish == 0, f"reddish={reddish}")
+        lit = sum(1 for yy in range(0, h, step) for xx in range(0, w, step) if sum(px(pix, w, xx, yy)) > 300)
+        r.check("title and text are drawn", lit > 100, f"lit={lit}")
+    finally:
+        vm.close()
+
+
 def t_tpm(ctx):
-    vm = Vm(make_esp(ctx.work, ctx.efi), ctx.work, name="tpm", tpm=True)
+    vm = Vm(make_esp(ctx.work, ctx.efi, cfg=False), ctx.work, name="tpm", tpm=True)
     try:
         r = ctx.r
         r.check("boot complete with TPM", vm.wait_for("boot complete", 120), vm.text()[-800:])
@@ -733,9 +820,11 @@ def t_fwshell(ctx):
     vm = Vm(make_esp(ctx.work, ctx.efi, cfg="timeout=10\n"), ctx.work, name="fwsh", tpm=True)
     try:
         r.check("menu wait reached", vm.wait_for("menu open: boot starts in"))
-        vm.keys("home")
-        r.check("menu offers the firmware shell", vm.wait_for("S firmware shell"), vm.text()[-500:])
-        vm.keys("s")
+        vm.keys("esc")
+        r.check("menu offers the firmware shell", vm.wait_for("Firmware shell"), vm.text()[-500:])
+        vm.keys("down")
+        vm.keys("down")  # Boot Aeon, Recovery mode, Firmware shell
+        vm.keys("ret")
         r.check("firmware shell prompt", vm.wait_for("fw> ", 30, "serial"), vm.serial_text()[-300:])
         for cmd, expect in (("version", "sbat generation 1"), ("tpm", "pcr12 (command line)"), ("security", "secure boot keys")):
             vm.type(cmd)
@@ -753,10 +842,11 @@ def t_fwshell(ctx):
     vm = Vm(make_esp(ctx.work, ctx.efi, "esp-c", cfg="timeout=10\n"), ctx.work, name="menu-c")
     try:
         vm.wait_for("menu open: boot starts in")
-        vm.keys("home")
-        vm.wait_for("C recovery mode")
-        vm.keys("c")
-        r.check("menu key C boots recovery mode", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text(), vm.text()[-400:])
+        vm.keys("esc")
+        vm.wait_for("options: Boot Aeon | Recovery mode")
+        vm.keys("down")
+        vm.keys("ret")
+        r.check("Down then Enter boots recovery mode", vm.wait_for("boot complete", 150) and "timer and scheduler are off" in vm.text(), vm.text()[-400:])
         r.check("recovery shell prompt", vm.wait_for("aeon> ", 60, "serial"))
         run_cmds(vm, r, [("run hello", "user programs are not available"), ("run hello", "user programs are not available")])
     finally:
@@ -937,7 +1027,7 @@ def t_faults(ctx):
             if ok:
                 time.sleep(1.0)
                 w, h, pix = vm.shot(os.path.join(ctx.shots, f"5-{name}.png"))
-                red = sum(1 for yy in range(0, h, 4) for xx in range(0, w, 4) if px(pix, w, xx, yy) == (28, 8, 10))
+                red = sum(1 for yy in range(0, h, 4) for xx in range(0, w, 4) if px(pix, w, xx, yy) == (28, 28, 30))
                 r.check(f"{name} shows the stop screen", red > (w * h) // 32, f"bg px={red}")
                 scr = vm.text()
                 r.check(f"{name}: halted, no further boot", "boot complete" not in scr.split(needle)[-1])
@@ -1329,7 +1419,7 @@ def t_user(ctx):
 
 TESTS = {
     "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
-    "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
+    "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
 

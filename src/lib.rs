@@ -17,6 +17,8 @@ pub mod banker;
 pub mod block;
 pub mod ahcifis;
 pub mod elf;
+pub mod menulogic;
+pub mod palette;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;

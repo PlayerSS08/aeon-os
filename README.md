@@ -22,7 +22,7 @@ The image is **signed** with the Aeon release key. Two ways to run it:
 Check the copy with `SHA256.txt` (`sha256sum -c SHA256.txt` or `Get-FileHash`).
 
 While booting you see the logo fade in and a thin bar fill as the real boot stages complete. The boot menu
-(Dawn) opens first with "Boot Aeon" highlighted and counts down 1 second; with no key Aeon boots normally. Any key stops the countdown. Move with Up and Down, Enter selects; the letter keys still work. Booting from the menu goes back to the splash; leaving it for recovery or the firmware shell shows the full boot log. `nomenu` skips Dawn.
+(Dawn) opens first with "Boot Aeon" highlighted and counts down 15 seconds (`timeout=N` in `aeon.cfg` changes it, up to 30; `nomenu` skips Dawn). The seven entries are Boot Aeon, Recovery mode, Firmware shell, Debug logging, Firmware setup, Restart and Power off; a short line under the list says what the highlighted one does. Only the arrow keys and Enter are used (no letter shortcuts). Each arrow press restarts the countdown, and when it ends the highlighted entry starts, but only Boot Aeon and Recovery mode can start by themselves: moving onto any other entry stops the countdown, so nothing restarts, powers off or changes settings without Enter. Any other key stops the countdown. Booting from the menu goes back to the splash; leaving it for recovery or the firmware shell shows the full boot log.
 
 Menu keys: `Enter` boot, `C` recovery mode, `S` firmware shell (a shell that runs before the kernel through the
 firmware's own input, so USB keyboards work; `boot` continues), `D` debug logging, `F` reboot into firmware
