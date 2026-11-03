@@ -45,7 +45,7 @@ def ppm_to_png(ppm, png):
 
 
 class Vm:
-    def __init__(self, esp_dir, work, code=CODE, vars_file=VARS, tpm=False, name="vm", mem=256, disk=None):
+    def __init__(self, esp_dir, work, code=CODE, vars_file=VARS, tpm=False, name="vm", mem=256, disk=None, extra=None):
         self.work = work
         self.serial = os.path.join(work, f"{name}.serial")
         self.dcon = os.path.join(work, f"{name}.debugcon")
@@ -64,6 +64,8 @@ class Vm:
         ]
         if disk:
             args += ["-drive", f"file={disk},if=none,id=d0,format=raw,readonly=on", "-device", "virtio-blk-pci,drive=d0,disable-legacy=on"]
+        if extra:
+            args += extra
         if code == CODE_SB:
             # The SMM-enabled firmware build keeps its variable flash writable only from SMM.
             args += ["-global", "driver=cfi.pflash01,property=secure,value=on"]
@@ -597,6 +599,32 @@ def t_long_line(ctx):
         vm.type("echo wrap-ok")
         vm.keys("ret")
         r.check("shell still answers", vm.wait_for("wrap-ok", 30, "serial"))
+    finally:
+        vm.close()
+
+
+def t_usb(ctx):
+    """The xHCI USB controller: started when present, reported cleanly when absent."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-nousb", cfg="nomenu"+chr(10)), ctx.work, name="nousb")
+    try:
+        r.check("shell prompt without a USB controller", vm.wait_for("aeon> ", 150, "serial"))
+        r.check("boot log says there is no xHCI controller", "no xHCI controller on the PCI bus" in vm.text())
+        vm.type("usb")
+        vm.keys("ret")
+        r.check("`usb` explains that no controller is in use", vm.wait_for("no xHCI USB controller in use", 30, "serial"))
+    finally:
+        vm.close()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-usb", cfg="nomenu"+chr(10)), ctx.work, name="usb",
+            extra=["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0"])
+    try:
+        r.check("shell prompt with a USB controller", vm.wait_for("aeon> ", 150, "serial"))
+        t = vm.text()
+        r.check("boot log reports the controller", "controller 1b36:000d version" in t, t[-800:])
+        r.check("the controller was not rejected", "not used:" not in t, t[-800:])
+        r.check("the boot log lists the keyboard on a port", "device connected, speed" in t, t[-800:])
+        # With a USB keyboard attached QEMU sends typed keys to it and not to the PS/2 keyboard, so the
+        # shell cannot be typed into until the driver reads USB keyboards (next step of the plan).
     finally:
         vm.close()
 
@@ -1258,7 +1286,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "usb": t_usb, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

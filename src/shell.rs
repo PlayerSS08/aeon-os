@@ -391,6 +391,41 @@ fn cmd_pci() {
     }
 }
 
+/// `usb`: the xHCI controller and what is plugged into its ports.
+fn cmd_usb() {
+    let Some(s) = crate::xhci::summary() else {
+        out!("no xHCI USB controller in use (a PS/2 keyboard works without one; `pci` lists the hardware)\n");
+        return;
+    };
+    out!(
+        "xHCI {:04x}:{:04x} version {:x}.{:02x}, {}: {} ports, {} slots, {} scratchpad pages\n",
+        s.vendor,
+        s.device,
+        s.version >> 8,
+        s.version & 0xFF,
+        if s.running { "running" } else { "stopped" },
+        s.ports,
+        s.slots,
+        s.scratchpads
+    );
+    out!("firmware handoff: {}\n", s.handoff);
+    let mut connected = 0;
+    crate::xhci::for_each_port(|n, portsc| {
+        if portsc & crate::xhcireg::PORT_CONNECTED != 0 {
+            connected += 1;
+            out!(
+                "port {:>2}: device connected, {}, speed {}\n",
+                n,
+                if portsc & crate::xhcireg::PORT_ENABLED != 0 { "enabled" } else { "not enabled yet" },
+                crate::xhcireg::speed_name(crate::xhcireg::port_speed(portsc))
+            );
+        }
+    });
+    if connected == 0 {
+        out!("no device connected to any port\n");
+    }
+}
+
 static DEMO_QUEUE: sched::WaitQueue = sched::WaitQueue::new();
 
 extern "C" fn waiter(_: usize) {
@@ -894,6 +929,7 @@ fn run(line: &str, hist: &History) {
         "race" => cmd_race(rest),
         "alloc" => cmd_alloc(rest),
         "pci" => cmd_pci(),
+        "usb" => cmd_usb(),
         "disks" => cmd_disks(),
         "dls" => cmd_dls(rest),
         "dcat" => cmd_dcat(rest),

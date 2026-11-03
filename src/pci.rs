@@ -168,6 +168,24 @@ mod hw {
         }
     }
 
+    /// Address of a memory BAR (32 or 64 bit). `None` for I/O BARs or an unusable one.
+    pub fn memory_bar(d: &Device, bar: u8) -> Option<u64> {
+        if bar > 5 {
+            return None;
+        }
+        let off = 0x10 + 4 * bar;
+        let lo = config_read(d.bus, d.dev, d.func, off);
+        if lo & 1 != 0 {
+            return None; // I/O space
+        }
+        let base = match (lo >> 1) & 3 {
+            0 => u64::from(lo & !0xF),
+            2 if bar < 5 => u64::from(lo & !0xF) | u64::from(config_read(d.bus, d.dev, d.func, off + 4)) << 32,
+            _ => return None,
+        };
+        (base != 0).then_some(base)
+    }
+
     /// Calls `f` for every function the scan found, in bus order.
     pub fn for_each(mut f: impl FnMut(&Device)) {
         let list = DEVICES.lock();
@@ -184,7 +202,7 @@ mod hw {
 }
 
 #[cfg(target_os = "uefi")]
-pub use hw::{config_read, config_write, find, for_each, scan};
+pub use hw::{config_read, config_write, find, for_each, memory_bar, scan};
 
 #[cfg(test)]
 mod tests {

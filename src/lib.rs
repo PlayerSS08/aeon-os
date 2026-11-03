@@ -49,6 +49,7 @@ pub mod usbdesc;
 pub mod usercopy;
 pub mod virtio;
 pub mod waitq;
+pub mod xhcireg;
 pub mod xhcitrb;
 
 // `log` defines the logging macros, so it must come before the modules that use them.
@@ -83,6 +84,8 @@ pub mod uefi;
 pub mod usermode;
 #[cfg(target_os = "uefi")]
 pub mod vblk;
+#[cfg(target_os = "uefi")]
+pub mod xhci;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Set `AEON_GIT_HASH` in the build environment to embed a revision in the boot banner.

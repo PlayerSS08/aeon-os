@@ -31,6 +31,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("system", "history", "history", "your latest commands (Ctrl+Up/Down recall them)"),
     c("status", "log", "log", "replay the boot log"),
     c("hardware", "pci", "pci", "devices on the PCI bus"),
+    c("hardware", "usb", "usb", "USB controller and its ports"),
     c("hardware", "disks", "disks", "the disk, if there is one"),
     c("hardware", "dread", "dread <n> [off]", "32 bytes of sector n as hex"),
     c("memory", "mem", "mem", "frames, heap and RAM totals"),

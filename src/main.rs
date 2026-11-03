@@ -1365,6 +1365,7 @@ extern "C" fn kernel_main() -> ! {
     let heap = unsafe { mm::init_heap() };
     aeon::pci::scan();
     aeon::vblk::probe();
+    aeon::xhci::init();
     if heap == 0 {
         error!("mm", "could not allocate a kernel heap");
     } else {
