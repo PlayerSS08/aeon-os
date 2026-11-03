@@ -10,6 +10,8 @@
 
 **Spec:** `reports/Hobby Rust OS build checklist.md`, gap 3; notes in `research_notes/Hobby Rust OS build checklist/drivers_storage_net.md` (size estimate 2000 to 3000 lines is unsourced).
 
+**Status (2026-11-03): tasks 1 to 5 are done and pass in QEMU; real hardware is untested. Added during the work: `xhcireg.rs` (register decoding) and `xhcictx.rs` (context builders), both pure and tested.**
+
 ## Global Constraints
 
 - Both clippy gates clean with `-D warnings`; `undocumented_unsafe_blocks` is on, so every `unsafe` block needs a `SAFETY:` comment.

@@ -409,6 +409,10 @@ fn cmd_usb() {
         s.scratchpads
     );
     out!("firmware handoff: {}\n", s.handoff);
+    match s.keyboard_port {
+        Some(p) => out!("USB keyboard: in use on port {}\n", p),
+        None => out!("USB keyboard: none set up\n"),
+    }
     let mut connected = 0;
     crate::xhci::for_each_port(|n, portsc| {
         if portsc & crate::xhcireg::PORT_CONNECTED != 0 {
@@ -1091,9 +1095,18 @@ pub extern "C" fn shell_task(_: usize) {
     out!("\nAeon shell. Type `help`.\n{}", PROMPT);
     loop {
         let mut idle = true;
-        while let Some(code) = ps2_byte() {
-            idle = false;
-            let Some(key) = kbd.feed(code) else { continue };
+        // Keys come from the PS/2 controller and from a USB keyboard (xHCI driver), whichever has one.
+        loop {
+            let key = if let Some(code) = ps2_byte() {
+                idle = false;
+                let Some(key) = kbd.feed(code) else { continue };
+                key
+            } else if let Some(key) = crate::xhci::poll_key() {
+                idle = false;
+                key
+            } else {
+                break;
+            };
             match key {
                 Key::Up => {
                     log::with_console(|c| c.scroll_up(1));

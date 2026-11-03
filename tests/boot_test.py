@@ -623,8 +623,22 @@ def t_usb(ctx):
         r.check("boot log reports the controller", "controller 1b36:000d version" in t, t[-800:])
         r.check("the controller was not rejected", "not used:" not in t, t[-800:])
         r.check("the boot log lists the keyboard on a port", "device connected, speed" in t, t[-800:])
-        # With a USB keyboard attached QEMU sends typed keys to it and not to the PS/2 keyboard, so the
-        # shell cannot be typed into until the driver reads USB keyboards (next step of the plan).
+        r.check("the boot log says the USB keyboard is ready", "USB keyboard ready" in t, t[-800:])
+        # With a USB keyboard attached QEMU sends every typed key to it and none to the PS/2 keyboard, so
+        # anything typed from here on reaches the shell only through the xHCI driver.
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        vm.type("usb")
+        vm.keys("ret")
+        r.check("`usb` shows the controller running", vm.wait_for("running", 30, "serial"), vm.serial_text()[-500:])
+        r.check("`usb` shows the keyboard in use", vm.wait_for("USB keyboard: in use on port", 30, "serial"), vm.serial_text()[-500:])
+        vm.type("echo typed-on-usb")
+        vm.keys("ret")
+        r.check("a line typed on the USB keyboard runs", vm.wait_for("typed-on-usb", 30, "serial"), vm.serial_text()[-400:])
+        # Shift, Backspace and editing keys come through the same path.
+        vm.type("echo wxyz1")
+        vm.keys("backspace", "backspace", "9")
+        vm.keys("ret")
+        r.check("Backspace works on the USB keyboard", vm.wait_for("wxy9", 30, "serial"), vm.serial_text()[-400:])
     finally:
         vm.close()
 
@@ -1154,7 +1168,7 @@ def t_console(ctx):
         r = ctx.r
         r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
         run_cmds(vm, r, [
-            ("help", "hardware  pci disks dread"),
+            ("help", "hardware  pci usb disks dread"),
             ("help", "Up/Down scroll the screen"),
             ("help ls", "list a folder in RAM"),
             ("help dread", "dread <n> [off]"),
