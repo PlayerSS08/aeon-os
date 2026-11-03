@@ -60,17 +60,29 @@ pub fn copy_slot_from_output(output: &[u8], input: &mut [u8], csz: usize) -> boo
     }
 }
 
-/// Endpoint context for device context index `dci` (index `dci + 1` in an input context).
-/// `dequeue` is the physical address of the transfer ring, whose first cycle state is 1.
-pub fn endpoint(buf: &mut [u8], csz: usize, dci: u8, ep_type: u8, max_packet: u16, interval: u8, dequeue: u64, avg_trb_len: u16) -> bool {
-    let at = csz * (usize::from(dci) + 1);
-    let ring = dequeue | 1;
-    put32(buf, at, u32::from(interval) << 16)
+/// What an endpoint context says about one endpoint.
+#[derive(Clone, Copy, Debug)]
+pub struct Endpoint {
+    /// Device context index (the context sits at index `dci + 1` in an input context).
+    pub dci: u8,
+    pub ep_type: u8,
+    pub max_packet: u16,
+    pub interval: u8,
+    /// Physical address of the transfer ring, whose first cycle state is 1.
+    pub dequeue: u64,
+    pub avg_trb_len: u16,
+}
+
+pub fn endpoint(buf: &mut [u8], csz: usize, e: &Endpoint) -> bool {
+    let (ep_type, max_packet) = (e.ep_type, e.max_packet);
+    let at = csz * (usize::from(e.dci) + 1);
+    let ring = e.dequeue | 1;
+    put32(buf, at, u32::from(e.interval) << 16)
         && put32(buf, at + 4, 3 << 1 | u32::from(ep_type) << 3 | u32::from(max_packet) << 16)
         && put32(buf, at + 8, ring as u32)
         && put32(buf, at + 12, (ring >> 32) as u32)
         // Average TRB length, and for an interrupt endpoint the whole payload per service interval.
-        && put32(buf, at + 16, u32::from(avg_trb_len) | u32::from(if ep_type == EP_INTERRUPT_IN { max_packet } else { 0 }) << 16)
+        && put32(buf, at + 16, u32::from(e.avg_trb_len) | u32::from(if ep_type == EP_INTERRUPT_IN { max_packet } else { 0 }) << 16)
 }
 
 /// Changes only the maximum packet size of an endpoint context in an input context (Evaluate Context).
@@ -122,7 +134,7 @@ mod tests {
     fn endpoint_context_for_the_default_control_endpoint() {
         let csz = 32;
         let mut b = [0u8; 4 * 64];
-        assert!(endpoint(&mut b, csz, DCI_EP0, EP_CONTROL, 64, 0, 0x1234_5000, 8));
+        assert!(endpoint(&mut b, csz, &Endpoint { dci: DCI_EP0, ep_type: EP_CONTROL, max_packet: 64, interval: 0, dequeue: 0x1234_5000, avg_trb_len: 8 }));
         let at = csz * 2; // DCI 1 is the third context of an input context
         assert_eq!(word(&b, at), 0, "interval 0");
         assert_eq!(word(&b, at + 4), 3 << 1 | 4 << 3 | 64 << 16, "error count 3, type 4, packet size 64");
@@ -136,7 +148,7 @@ mod tests {
         let csz = 64;
         let dci = dci_in(1);
         let mut b = [0u8; 8 * 64];
-        assert!(endpoint(&mut b, csz, dci, EP_INTERRUPT_IN, 8, 6, 0x0000_0001_2345_6000, 8));
+        assert!(endpoint(&mut b, csz, &Endpoint { dci, ep_type: EP_INTERRUPT_IN, max_packet: 8, interval: 6, dequeue: 0x0000_0001_2345_6000, avg_trb_len: 8 }));
         let at = csz * (usize::from(dci) + 1);
         assert_eq!(word(&b, at), 6 << 16, "interval field in 23:16");
         assert_eq!(word(&b, at + 4), 3 << 1 | 7 << 3 | 8 << 16);
@@ -148,7 +160,7 @@ mod tests {
     fn evaluate_context_changes_only_the_packet_size() {
         let csz = 32;
         let mut b = [0u8; 4 * 64];
-        endpoint(&mut b, csz, DCI_EP0, EP_CONTROL, 64, 0, 0x2000, 8);
+        endpoint(&mut b, csz, &Endpoint { dci: DCI_EP0, ep_type: EP_CONTROL, max_packet: 64, interval: 0, dequeue: 0x2000, avg_trb_len: 8 });
         assert!(set_max_packet(&mut b, csz, DCI_EP0, 8));
         assert_eq!(word(&b, csz * 2 + 4), 3 << 1 | 4 << 3 | 8 << 16);
     }
@@ -169,7 +181,7 @@ mod tests {
     #[test]
     fn buffers_that_are_too_small_are_refused_not_overrun() {
         let mut tiny = [0u8; 40];
-        assert!(!endpoint(&mut tiny, 32, 3, EP_INTERRUPT_IN, 8, 6, 0x1000, 8));
+        assert!(!endpoint(&mut tiny, 32, &Endpoint { dci: 3, ep_type: EP_INTERRUPT_IN, max_packet: 8, interval: 6, dequeue: 0x1000, avg_trb_len: 8 }));
         assert!(!slot(&mut tiny[..20], 32, 1, 1, 1));
         assert!(!set_slot_entries(&mut tiny[..20], 32, 3));
         assert!(!set_max_packet(&mut tiny, 32, 1, 8));
