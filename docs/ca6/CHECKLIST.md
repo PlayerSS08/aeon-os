@@ -42,13 +42,13 @@
 - [x] 1 Source repository (`G:\Aeon\OS`)  - [x] 2 Architecture  - [x] 3 Design  - [x] 4 Test plan  - [x] 5 Test results
 - [x] 6 Performance data and charts  - [x] 7 Python analysis scripts  - [x] 8 Debugging log
 - [x] 9 Final technical report (20 sections)  - [x] 10 Demonstration script
-- [ ] 11 **Individual contribution statement**: you write `contribution-statement.md`
-- [ ] 12 **AI usage disclosure**: you check and sign `ai-disclosure.md`
+- [-] 11 Individual contribution statement: not needed for now (owner decision 2026-11-03)
+- [-] 12 AI usage disclosure signature: not needed for now (owner decision 2026-11-03)
 
 ## F. Viva
 
 - [x] 18 of 20 questions answered in `viva-prep.md`
-- [ ] Q17 (what you learned from CA-5) and Q18 (what you changed from CA-4): only you know
+- [-] Q17 and Q18 of the viva: not needed for now (owner decision 2026-11-03)
 - [ ] Read the answers aloud once; change any sentence you would not say yourself
 - [ ] Check the reference list in the final report
 
