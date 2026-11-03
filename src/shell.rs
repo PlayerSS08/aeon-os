@@ -286,9 +286,9 @@ fn cmd_sort(args: &str) {
 }
 
 fn cmd_disks() {
-    match crate::vblk::with_disk(|d| crate::block::BlockDev::sectors(d)) {
-        Some(n) => out!("vda  virtio-blk  {} sectors  {} KiB\n", n, n / 2),
-        None => out!("no disk\n"),
+    let n = crate::disk::describe(|a| out!("{}\n", a));
+    if n == 0 {
+        out!("no disk\n");
     }
 }
 
@@ -304,7 +304,7 @@ fn cmd_dread(args: &str) {
         return;
     };
     let mut sector = [0u8; crate::block::SECTOR_SIZE];
-    match crate::vblk::with_disk(|d| crate::block::BlockDev::read(d, lba, &mut sector)) {
+    match crate::disk::with_disk(|d| crate::block::BlockDev::read(d, lba, &mut sector)) {
         None => out!("no disk\n"),
         Some(Err(e)) => out!("read failed: {:?}\n", e),
         Some(Ok(())) => {
@@ -317,8 +317,8 @@ fn cmd_dread(args: &str) {
 }
 
 /// Runs `f` with the first FAT volume on the disk, or says why not.
-fn with_volume<R>(f: impl FnOnce(&crate::fat::Volume, &mut crate::vblk::VirtioBlk) -> R) -> Option<R> {
-    let r = crate::vblk::with_disk(|d| match crate::fat::Volume::open_any(d) {
+fn with_volume<R>(f: impl FnOnce(&crate::fat::Volume, &mut dyn crate::block::BlockDev) -> R) -> Option<R> {
+    let r = crate::disk::with_disk(|d| match crate::fat::Volume::open_any(d) {
         Ok(v) => Ok(f(&v, d)),
         Err(e) => Err(e),
     });

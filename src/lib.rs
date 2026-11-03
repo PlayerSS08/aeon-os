@@ -63,6 +63,8 @@ pub mod log;
 #[cfg(target_os = "uefi")]
 pub mod ahci;
 #[cfg(target_os = "uefi")]
+pub mod disk;
+#[cfg(target_os = "uefi")]
 pub mod apic;
 #[cfg(target_os = "uefi")]
 pub mod arch;

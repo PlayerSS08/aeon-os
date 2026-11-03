@@ -653,6 +653,18 @@ def t_ahci(ctx):
         r.check("boot log reports the SATA disk with its model", "ahci disk on port 0: QEMU HARDDISK" in t, t[-800:])
         r.check("the size is the boot disk's (a whole number of MiB)", "sectors (" in t and " MiB)" in t, t[-800:])
         r.check("no AHCI warnings", "WARN  ahci" not in t, t[-800:])
+        vm.type("disks")
+        vm.keys("ret")
+        r.check("disks lists the SATA disk", vm.wait_for("sda  sata port 0", 20, "serial"), vm.serial_text()[-400:])
+        vm.type("dread 0 510")
+        vm.keys("ret")
+        r.check("sector 0 ends with the boot signature 55 aa", vm.wait_for("55 aa", 20, "serial"), vm.serial_text()[-400:])
+        vm.type("dls")
+        vm.keys("ret")
+        r.check("dls reads the FAT volume through AHCI", vm.wait_for("EFI/", 20, "serial"), vm.serial_text()[-600:])
+        vm.type("dread 99999999")
+        vm.keys("ret")
+        r.check("a sector past the end is refused", vm.wait_for("read failed", 20, "serial"), vm.serial_text()[-400:])
     finally:
         vm.close()
 
@@ -1141,7 +1153,9 @@ def t_disk(ctx):
     try:
         r.check("no-disk: shell prompt", vm.wait_for("aeon> ", 150, "serial"))
         r.check("no-disk: logged", "no virtio-blk device" in vm.text())
-        run_cmds(vm, r, [("disks", "no disk"), ("dread 0", "no disk"), ("dls", "no disk"), ("dcat x", "no disk")])
+        # q35's own boot disk sits on the emulated SATA controller, so with no virtio disk the shell falls
+        # back to it: the same commands work through AHCI (the real "no disk" message needs no disk at all).
+        run_cmds(vm, r, [("disks", "sda  sata"), ("dread 0", "00 00 00 00"), ("dls", "EFI/"), ("dcat x", "NotFound")])
     finally:
         vm.close()
 
