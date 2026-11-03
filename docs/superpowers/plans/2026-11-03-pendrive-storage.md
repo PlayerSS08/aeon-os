@@ -20,7 +20,7 @@
 
 ## Tasks
 
-1. [ ] `fatw.rs`: tests first (allocate and free clusters, grow and shrink chains, write and overwrite files across cluster boundaries, directory growth, 8.3 names and long names, delete, rename, mkdir and rmdir, volume full, random operation storms compared with a model, `fsck.vfat` clean after each scenario).
+1. [x] `fatw.rs` + `fatname.rs` (done 2026-11-04): 36 writer tests + 15 name tests, all written first and watched failing. Covers allocate/free, files across cluster boundaries, folder growth, 8.3 and long names with `~N` aliases, replace, delete, mkdir/rmdir, volume full (byte-identical after a refusal), the `EFI` and label rules, damaged chains, random garbage, a 700-step random storm against a model, and a disk failure injected at every single write (volume must stay sound). `bash tools/fatw-check.sh` runs the same operations on `mkfs.fat` images and `fsck.vfat -n` calls them clean (checked: the script does fail when one FAT copy is not written). Not done: `rename` (the shell can use copy + remove for now). Nothing touches a real disk yet; the writer is not linked into the kernel.
 2. [ ] `usbmsd.rs`: tests first (command and status wrappers, sense data decoding, capacity, hostile device answers).
 3. [ ] xHCI bulk endpoints: configure endpoint for bulk IN and OUT, transfer ring, polled completion with timeout; QEMU test: Aeon lists the stick, reads sector 0.
 4. [ ] Block cache and `sync`; QEMU test: write a file, `sync`, restart the VM on the same image, the file is there; `fsck.vfat` on the image is clean.

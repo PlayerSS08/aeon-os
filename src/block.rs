@@ -50,6 +50,36 @@ impl BlockDev for MemDisk<'_> {
     }
 }
 
+/// A disk that can also be written. Kept apart from [`BlockDev`] so that read-only code (and read-only
+/// drivers such as AHCI today) can never be handed something that writes.
+pub trait BlockWrite: BlockDev {
+    /// Writes `buf.len() / 512` sectors starting at `lba`. `buf.len()` must be a non-zero multiple of 512.
+    /// A refused request (out of range, odd length) must change nothing.
+    fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), BlockError>;
+}
+
+/// A writable disk in memory, for the host tests of the FAT writer.
+pub struct MemDiskMut<'a>(pub &'a mut [u8]);
+
+impl BlockDev for MemDiskMut<'_> {
+    fn sectors(&self) -> u64 {
+        (self.0.len() / SECTOR_SIZE) as u64
+    }
+
+    fn read(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+        MemDisk(&*self.0).read(lba, buf)
+    }
+}
+
+impl BlockWrite for MemDiskMut<'_> {
+    fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), BlockError> {
+        check_request(self.sectors(), lba, buf.len())?;
+        let start = lba as usize * SECTOR_SIZE;
+        self.0[start..start + buf.len()].copy_from_slice(buf);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +119,25 @@ mod tests {
         assert_eq!(d.sectors(), 0);
         let mut one = [0u8; 512];
         assert_eq!(d.read(0, &mut one), Err(BlockError::BadRequest));
+    }
+
+    #[test]
+    fn mem_disk_mut_writes_and_rejects() {
+        let mut data = vec![0u8; 2048];
+        let mut d = MemDiskMut(&mut data);
+        assert_eq!(d.sectors(), 4);
+        d.write(1, &[7u8; 1024]).unwrap();
+        let mut back = [0u8; 512];
+        d.read(2, &mut back).unwrap();
+        assert!(back.iter().all(|&b| b == 7));
+        d.read(0, &mut back).unwrap();
+        assert!(back.iter().all(|&b| b == 0), "sector 0 must be untouched");
+        // Bad requests change nothing.
+        assert_eq!(d.write(3, &[9u8; 1024]), Err(BlockError::BadRequest));
+        assert_eq!(d.write(0, &[9u8; 100]), Err(BlockError::BadRequest));
+        assert_eq!(d.write(u64::MAX, &[9u8; 512]), Err(BlockError::BadRequest));
+        assert_eq!(d.write(0, &[]), Err(BlockError::BadRequest));
+        d.read(3, &mut back).unwrap();
+        assert!(back.iter().all(|&b| b == 0), "a refused write must not change the disk");
     }
 }

@@ -172,6 +172,17 @@ Results: 237 host tests, 359 QEMU checks, 111 evidence checks, all passing; sign
 
 Still for the student: write `docs/ca6/contribution-statement.md`, check and sign `ai-disclosure.md`, answer viva Q17 (CA-5) and Q18 (CA-4), verify the references. The pendrive is not updated (it was not plugged in).
 
+## 2026-11-04: FAT32 writer started (pendrive plan, task 1 done)
+
+| Item | Result |
+|---|---|
+| `src/block.rs` | new trait `BlockWrite` (kept apart from the read-only `BlockDev`) and `MemDiskMut` for tests |
+| `src/fatname.rs` | file-name rules, 8.3 aliases with `~N`, long-name slots, checksum; 15 tests |
+| `src/fatw.rs` | FAT32 writer: `write_file` (new or replace), `mkdir`, `remove_file`, `remove_dir`, `free_clusters`. Only a FAT32 volume labelled exactly `AEON` opens; nothing under `EFI/` can be written; order is data, entry, then free the old data; clean flag cleared while writing; a refused operation writes nothing. 37 tests in `src/fatw_tests.rs` |
+| Real-world check | `bash tools/fatw-check.sh` (needs WSL + dosfstools): mkfs.fat images, same operations, `fsck.vfat -n` clean, file list equal. Works on image files only |
+| Not linked into the kernel yet | the shell cannot use it until USB mass storage exists (plan tasks 2 and 3). No real pendrive was touched. `rust-version` is now 1.86 |
+| Next | task 2 `usbmsd.rs` (SCSI commands over the bulk-only transport, tests first), task 3 xHCI bulk endpoints |
+
 ## Wrap-up 2026-11-03 (late): what the last pass did
 
 | Item | Result |

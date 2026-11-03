@@ -28,6 +28,8 @@ pub mod cmdhelp;
 pub mod cpuid;
 pub mod entropy;
 pub mod fat;
+pub mod fatname;
+pub mod fatw;
 pub mod eventlog;
 pub mod font;
 pub mod fontdata;

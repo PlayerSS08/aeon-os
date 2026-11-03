@@ -9,7 +9,7 @@ Aeon has **no third-party Rust crates**: `Cargo.lock` lists only `aeon` itself, 
 | Rust compiler and cargo | 1.99.0 | **1.99.1** | 1.99.1 | upgraded |
 | Rust nightly (Miri) | 1.101.0-nightly, 2026-10-29 | **2026-11-02** | 2026-11-02 | upgraded |
 | Rust edition | 2021 | **2024** | 2024 | upgraded (`cargo fix --edition`, 15 lines) |
-| Minimum Rust (`rust-version`) | 1.85 | 1.85 | 1.85 is the first with edition 2024 | fine |
+| Minimum Rust (`rust-version`) | 1.85 | **1.86** | 1.86 is the first with trait upcasting (`&mut dyn BlockWrite` as `&mut dyn BlockDev`, used by `fatw.rs`) | raised 2026-11-04 |
 | `Cargo.lock` format | 4 | 4 | 4 | current |
 | rustup | 1.29.2 | 1.29.2 | 1.29.2 | current |
 | CI: `actions/checkout` | v4.2.2 | **v7.0.1** (pinned by commit `3d3c42e5...`) | v7.0.1 | upgraded; CI passed on GitHub (run on `e43c99a`, 44 s) |
