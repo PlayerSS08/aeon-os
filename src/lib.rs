@@ -45,6 +45,7 @@ pub mod splash;
 pub mod spin;
 pub mod syscall;
 pub mod tcg2;
+pub mod usbdesc;
 pub mod usercopy;
 pub mod virtio;
 pub mod waitq;
