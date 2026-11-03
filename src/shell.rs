@@ -21,6 +21,7 @@ use crate::power;
 use crate::ramfs::{resolve, unescape, FsError, RamFs, MAX_NAME, MAX_PATH};
 use crate::sched;
 use crate::spin::SpinLock;
+use crate::textcmd;
 use crate::usermode;
 
 struct Out;
@@ -842,11 +843,25 @@ fn cmd_cat(arg: &str) {
 }
 
 fn cmd_write(args: &str) {
+    // `write -f <file> <text>` replaces a file that already exists; without -f it is refused, so a second
+    // `write hello ...` cannot silently wipe the first.
+    let (force, args) = match args.strip_prefix("-f ") {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, args),
+    };
     let (name, text) = args.split_once(' ').map_or((args, ""), |(n, t)| (n, t.trim_start()));
     let Some(p) = path_arg(name) else { return };
     let data = unescape(text);
+    let old = fs().read(&p).map(<[u8]>::len);
+    if let (Some(n), false) = (old, force) {
+        out!("'{}' already exists ({} byte(s)): nothing written. `write -f {} <text>` replaces it, `append {} <text>` adds a line\n", name, n, name, name);
+        return;
+    }
     match fs().write(&p, &data) {
-        Ok(()) => out!("wrote {} byte(s) to {}\n", data.len(), name),
+        Ok(()) => match old {
+            Some(n) => out!("wrote {} byte(s) to {}, replacing the old {} byte(s)\n", data.len(), name, n),
+            None => out!("wrote {} byte(s) to {}\n", data.len(), name),
+        },
         Err(e) => fs_error(e, name),
     }
 }
@@ -899,6 +914,259 @@ fn cmd_run(name: &str) {
         Err(usermode::RunError::NotReady) => out!("user programs are not available (needs the scheduler and a CPU with SMAP)\n"),
         Err(usermode::RunError::NoMemory) => out!("cannot start {}: out of memory or task slots
 ", name),
+    }
+}
+
+// ---- more file tools: cp mv touch head tail wc grep find hexdump seq sleep ----
+// Aeon has no pipes, so these take file names. The text work is in `textcmd` (host-tested).
+
+/// A copy of a file's content, or `None` after printing why not.
+fn read_file_arg(arg: &str) -> Option<Vec<u8>> {
+    let p = path_arg(arg)?;
+    match fs().read(&p) {
+        Some(d) => Some(d.to_vec()),
+        None if fs().is_dir(&p) => {
+            fs_error(FsError::IsDir, arg);
+            None
+        }
+        None => {
+            out!("no such file '{}'\n", arg);
+            None
+        }
+    }
+}
+
+/// Where `cp` and `mv` put the file: at `dst`, or inside it when `dst` is a folder.
+fn target_path(src_path: &str, dst: &str) -> Option<String> {
+    let d = path_arg(dst)?;
+    if !fs().is_dir(&d) {
+        return Some(d);
+    }
+    let name = src_path.rsplit('/').next().unwrap_or(src_path);
+    Some(if d == "/" { alloc::format!("/{name}") } else { alloc::format!("{d}/{name}") })
+}
+
+/// Shared by `cp` and `mv`: both copy a file; `mv` then removes the original.
+fn copy_or_move(args: &str, name: &str, remove_source: bool) {
+    let all = textcmd::split_args(args);
+    let (force, words) = match all.first().map(String::as_str) {
+        Some("-f") => (true, &all[1..]),
+        _ => (false, &all[..]),
+    };
+    let [src, dst] = words else {
+        out!("usage: {} [-f] <file> <file-or-folder>   (-f replaces a file that already exists)\n", name);
+        return;
+    };
+    let Some(sp) = path_arg(src) else { return };
+    let Some(data) = fs().read(&sp).map(<[u8]>::to_vec) else {
+        if fs().is_dir(&sp) {
+            out!("'{}' is a folder: {} works on files only\n", src, name);
+        } else {
+            out!("no such file '{}'\n", src);
+        }
+        return;
+    };
+    let Some(tp) = target_path(&sp, dst) else { return };
+    if tp == sp {
+        out!("'{}' and '{}' are the same file\n", src, dst);
+        return;
+    }
+    if fs().is_dir(&tp) {
+        fs_error(FsError::IsDir, dst);
+        return;
+    }
+    if fs().read(&tp).is_some() && !force {
+        out!("'{}' already exists (use `{} -f` to replace it)\n", dst, name);
+        return;
+    }
+    match fs().write(&tp, &data) {
+        Ok(()) if remove_source => {
+            fs().remove(&sp);
+            out!("moved {} to {}\n", src, tp);
+        }
+        Ok(()) => out!("copied {} byte(s) to {}\n", data.len(), tp),
+        Err(e) => fs_error(e, dst),
+    }
+}
+
+fn cmd_touch(arg: &str) {
+    let Some(p) = path_arg(arg) else { return };
+    if fs().read(&p).is_some() {
+        out!("'{}' exists; Aeon has no clock, so there is nothing to update\n", arg);
+    } else if fs().is_dir(&p) {
+        fs_error(FsError::IsDir, arg);
+    } else {
+        match fs().write(&p, b"") {
+            Ok(()) => out!("created {}\n", p),
+            Err(e) => fs_error(e, arg),
+        }
+    }
+}
+
+/// `head [-n N] <file>` and `tail [-n N] <file>`: the first or last lines (10 by default).
+fn cmd_head_tail(args: &str, last: bool) {
+    let all = textcmd::split_args(args);
+    let (n, files) = match textcmd::count_option(&all) {
+        Ok(x) => x,
+        Err(why) => {
+            out!("{}\n", why);
+            return;
+        }
+    };
+    let [file] = files else {
+        out!("usage: {} [-n N] <file>\n", if last { "tail" } else { "head" });
+        return;
+    };
+    let Some(data) = read_file_arg(file) else { return };
+    let part = if last { textcmd::tail(&data, n) } else { textcmd::head(&data, n) };
+    log::print_raw(part);
+    if !part.ends_with(b"\n") {
+        out!("\n");
+    }
+}
+
+fn cmd_wc(args: &str) {
+    let files = textcmd::split_args(args);
+    if files.is_empty() {
+        out!("usage: wc <file> ...   (lines, words, bytes)\n");
+        return;
+    }
+    let (mut lines, mut words, mut bytes) = (0, 0, 0);
+    for f in &files {
+        let Some(data) = read_file_arg(f) else { continue };
+        let c = textcmd::wc(&data);
+        out!("{:>7} {:>7} {:>7} {}\n", c.lines, c.words, c.bytes, f);
+        (lines, words, bytes) = (lines + c.lines, words + c.words, bytes + c.bytes);
+    }
+    if files.len() > 1 {
+        out!("{:>7} {:>7} {:>7} total\n", lines, words, bytes);
+    }
+}
+
+/// `grep [-i] [-n] <text> <file>`: the lines that contain the text (plain text, not a pattern).
+fn cmd_grep(args: &str) {
+    let all = textcmd::split_args(args);
+    let (mut ignore, mut numbers, mut i) = (false, false, 0);
+    while i < all.len() && all[i].len() > 1 && all[i].starts_with('-') {
+        match all[i].as_str() {
+            "-i" => ignore = true,
+            "-n" => numbers = true,
+            "-in" | "-ni" => (ignore, numbers) = (true, true),
+            other => {
+                out!("grep: unknown option {} (there are -i and -n)\n", other);
+                return;
+            }
+        }
+        i += 1;
+    }
+    let [text, file] = &all[i..] else {
+        out!("usage: grep [-i] [-n] <text> <file>   (plain text, not a pattern; \"in quotes\" for spaces)\n");
+        return;
+    };
+    let Some(data) = read_file_arg(file) else { return };
+    let mut found = 0;
+    for (k, line) in textcmd::lines(&data).enumerate() {
+        if textcmd::contains(line, text.as_bytes(), ignore) {
+            if numbers {
+                out!("{}:", k + 1);
+            }
+            log::print_raw(line);
+            out!("\n");
+            found += 1;
+        }
+    }
+    if found == 0 {
+        out!("(no matching lines)\n");
+    }
+}
+
+/// Prints every path below `dir` whose name contains `text` (any case), or all of them when `text` is empty.
+fn find_walk(dir: &str, text: &str, depth: usize, found: &mut usize) {
+    let entries: Vec<(String, Option<usize>)> = fs().list(dir).map(|(n, s)| (String::from(n), s)).collect();
+    for (name, size) in entries {
+        let child = if dir == "/" { alloc::format!("/{name}") } else { alloc::format!("{dir}/{name}") };
+        if textcmd::contains(name.as_bytes(), text.as_bytes(), true) {
+            out!("{}{}\n", child, if size.is_none() { "/" } else { "" });
+            *found += 1;
+        }
+        if size.is_none() && depth < 16 {
+            find_walk(&child, text, depth + 1, found);
+        }
+    }
+}
+
+/// `find [folder] [text]`: names below a folder (default: the current one) that contain the text.
+fn cmd_find(args: &str) {
+    let all = textcmd::split_args(args);
+    let (start, text) = match all.as_slice() {
+        [] => ("", ""),
+        [one] => match folder_arg(one) {
+            Some(p) if fs().is_dir(&p) => (one.as_str(), ""),
+            _ => ("", one.as_str()),
+        },
+        [dir, text] => (dir.as_str(), text.as_str()),
+        _ => {
+            out!("usage: find [folder] [text]\n");
+            return;
+        }
+    };
+    let Some(p) = folder_arg(start) else { return };
+    if !fs().is_dir(&p) {
+        out!("no such folder '{}'\n", start);
+        return;
+    }
+    let mut found = 0;
+    find_walk(&p, text, 0, &mut found);
+    if found == 0 {
+        out!("(nothing found)\n");
+    }
+}
+
+/// `hexdump <file> [bytes]`: the start of a file as hex and text (256 bytes by default, at most 4096).
+fn cmd_hexdump(args: &str) {
+    let all = textcmd::split_args(args);
+    let (file, limit) = match all.as_slice() {
+        [f] => (f, Some(256)),
+        [f, n] => (f, n.parse::<usize>().ok().filter(|n| (1..=4096).contains(n))),
+        _ => {
+            out!("usage: hexdump <file> [bytes]\n");
+            return;
+        }
+    };
+    let Some(limit) = limit else {
+        out!("bytes must be a number from 1 to 4096\n");
+        return;
+    };
+    let Some(data) = read_file_arg(file) else { return };
+    if data.is_empty() {
+        out!("(empty file)\n");
+        return;
+    }
+    let part = &data[..data.len().min(limit)];
+    for (i, chunk) in part.chunks(16).enumerate() {
+        out!("{}\n", textcmd::hexdump_line(i * 16, chunk));
+    }
+    if data.len() > part.len() {
+        out!("... {} more byte(s); `hexdump {} <bytes>` shows more\n", data.len() - part.len(), file);
+    }
+}
+
+fn cmd_seq(args: &str) {
+    match textcmd::seq_range(&textcmd::split_args(args), 10_000) {
+        Ok((first, last)) => {
+            for n in first..=last {
+                out!("{}\n", n);
+            }
+        }
+        Err(why) => out!("{}\n", why),
+    }
+}
+
+/// `sleep <seconds>`: waits (the clock and the other tasks keep running). At most 60 s.
+fn cmd_sleep(arg: &str) {
+    match arg.parse::<u64>() {
+        Ok(s) if (1..=60).contains(&s) => sched::sleep_ms(s * 1000),
+        _ => out!("usage: sleep <seconds>   (1 to 60)\n"),
     }
 }
 
@@ -964,6 +1232,20 @@ fn run(line: &str, hist: &History) {
         // `edit <file>` is handled in the shell loop (it needs to keep state between lines).
         "edit" => out!("usage: edit <file>\n"),
         "rm" => cmd_rm(rest),
+        "cp" => copy_or_move(rest, "cp", false),
+        "mv" => copy_or_move(rest, "mv", true),
+        "touch" => cmd_touch(rest),
+        "head" => cmd_head_tail(rest, false),
+        "tail" => cmd_head_tail(rest, true),
+        "wc" => cmd_wc(rest),
+        "grep" => cmd_grep(rest),
+        "find" => cmd_find(rest),
+        "hexdump" => cmd_hexdump(rest),
+        "seq" => cmd_seq(rest),
+        "sleep" => cmd_sleep(rest),
+        "whoami" => out!("aeon (Aeon has no user accounts: everything runs with full rights)\n"),
+        "hostname" => out!("aeon\n"),
+        "date" => out!("no clock: Aeon has no real-time clock yet; `uptime` shows the time since boot\n"),
         "clear" | "cls" => {
             log::with_console(Console::clear_log);
         }
@@ -981,55 +1263,55 @@ fn run(line: &str, hist: &History) {
 const HISTORY: usize = 8;
 const LINE_MAX: usize = MAX_LINE;
 
-/// The last few command lines, newest last.
+/// The last few command lines, newest last. On the heap, so long lines do not weigh on the task's stack.
 struct History {
-    lines: [[u8; LINE_MAX]; HISTORY],
-    lens: [usize; HISTORY],
-    count: usize,
+    lines: Vec<Vec<u8>>,
     /// 0 while typing a fresh line; k = showing the k-th newest remembered line.
     shown: usize,
 }
 
 impl History {
     const fn new() -> Self {
-        Self { lines: [[0; LINE_MAX]; HISTORY], lens: [0; HISTORY], count: 0, shown: 0 }
+        Self { lines: Vec::new(), shown: 0 }
     }
 
     fn push(&mut self, line: &[u8]) {
         self.shown = 0;
-        if line.is_empty() || (self.count > 0 && &self.lines[self.count - 1][..self.lens[self.count - 1]] == line) {
+        if line.is_empty() || self.lines.last().is_some_and(|l| l.as_slice() == line) {
             return;
         }
-        if self.count == HISTORY {
-            self.lines.copy_within(1.., 0);
-            self.lens.copy_within(1.., 0);
-            self.count -= 1;
+        if self.lines.len() == HISTORY {
+            self.lines.remove(0);
         }
-        self.lines[self.count][..line.len()].copy_from_slice(line);
-        self.lens[self.count] = line.len();
-        self.count += 1;
+        self.lines.push(line.to_vec());
     }
 
     fn iter(&self) -> impl Iterator<Item = &[u8]> {
-        (0..self.count).map(|i| &self.lines[i][..self.lens[i]])
+        self.lines.iter().map(|l| l.as_slice())
     }
 
     /// Moves toward older (`older`) or newer lines; returns the line to show, or None at the ends.
     fn step(&mut self, older: bool) -> Option<&[u8]> {
         let next = if older { self.shown + 1 } else { self.shown.checked_sub(1)? };
-        if next > self.count {
+        if next > self.lines.len() {
             return None;
         }
         self.shown = next;
         if next == 0 {
             return Some(&[]);
         }
-        let i = self.count - next;
-        Some(&self.lines[i][..self.lens[i]])
+        Some(self.lines[self.lines.len() - next].as_slice())
     }
 }
 
-const PROMPT: &str = "aeon> ";
+/// The prompt: `aeon> ` at the top, `aeon:/sd> ` inside a folder, so you can see where you are.
+fn prompt() -> String {
+    if cwd().is_empty() {
+        String::from("aeon> ")
+    } else {
+        alloc::format!("aeon:{}> ", cwd())
+    }
+}
 const EDIT_PROMPT: &str = "   | ";
 
 fn put(b: &[u8]) {
@@ -1070,7 +1352,7 @@ fn tab_complete(ed: &mut LineEditor) {
                 for c in cmdhelp::matching(prefix) {
                     out!("{}  ", c.name);
                 }
-                out!("\n{}", PROMPT);
+                out!("\n{}", prompt());
                 let (text, back) = (ed.text(), ed.text().len() - pos);
                 put(text);
                 for _ in 0..back {
@@ -1092,7 +1374,7 @@ pub extern "C" fn shell_task(_: usize) {
     log::with_console(Console::fullscreen_log);
     // A line may be longer than the screen is wide: the console wraps it onto the next rows.
     ed.set_max(MAX_LINE);
-    out!("\nAeon shell. Type `help`.\n{}", PROMPT);
+    out!("\nAeon shell. Type `help`.\n{}", prompt());
     loop {
         let mut idle = true;
         // Keys come from the PS/2 controller and from a USB keyboard (xHCI driver), whichever has one.
@@ -1177,10 +1459,10 @@ pub extern "C" fn shell_task(_: usize) {
                                 Ok(()) => out!("saved {} byte(s) to {}\n", buf.len(), name),
                                 Err(e) => fs_error(e, &name),
                             }
-                            out!("{}", PROMPT);
+                            out!("{}", prompt());
                         } else if doc.1.len() + n + 1 > fs().max_bytes() {
                             editing = None;
-                            out!("too much text for the RAM disk: edit cancelled, nothing saved\n{}", PROMPT);
+                            out!("too much text for the RAM disk: edit cancelled, nothing saved\n{}", prompt());
                         } else {
                             doc.1.extend_from_slice(&text[..n]);
                             doc.1.push(b'\n');
@@ -1202,25 +1484,25 @@ pub extern "C" fn shell_task(_: usize) {
                             out!("editing {}: type lines, a line with only . saves, Ctrl+C cancels\n{}", p, EDIT_PROMPT);
                             editing = Some((p, Vec::new()));
                         } else {
-                            out!("{}", PROMPT);
+                            out!("{}", prompt());
                         }
                     } else {
                         run(line, &hist);
-                        out!("{}", PROMPT);
+                        out!("{}", prompt());
                     }
                 }
                 Key::Interrupt => {
                     ed.reset();
                     hist.shown = 0;
                     if editing.take().is_some() {
-                        out!("^C edit cancelled, nothing saved\n{}", PROMPT);
+                        out!("^C edit cancelled, nothing saved\n{}", prompt());
                     } else {
-                        out!("^C\n{}", PROMPT);
+                        out!("^C\n{}", prompt());
                     }
                 }
                 Key::ClearScreen => {
                     log::with_console(Console::clear_log);
-                    out!("{}", PROMPT);
+                    out!("{}", prompt());
                     put(ed.text());
                     for _ in ed.pos()..ed.text().len() {
                         put(b"\x08");

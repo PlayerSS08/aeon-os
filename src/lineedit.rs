@@ -4,7 +4,8 @@
 //! may be longer than the screen is wide: the console wraps it onto the next row, and Backspace at the
 //! start of a wrapped row steps back up. Pure, host-tested against simulated terminals.
 
-pub const MAX_LINE: usize = 240;
+/// Longest command line, in characters. It wraps onto as many screen rows as it needs.
+pub const MAX_LINE: usize = 1024;
 
 pub struct LineEditor {
     buf: [u8; MAX_LINE],
@@ -216,6 +217,22 @@ impl LineEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_can_be_a_thousand_characters_and_no_more_than_the_limit() {
+        assert!(MAX_LINE >= 1000);
+        let mut e = LineEditor::new();
+        let mut sink = |_: &[u8]| {};
+        for i in 0..MAX_LINE {
+            assert!(e.insert(b'a' + (i % 26) as u8, &mut sink), "character {i} was refused");
+        }
+        assert!(!e.insert(b'x', &mut sink), "one past the limit is refused, not a panic");
+        assert_eq!(e.text().len(), MAX_LINE);
+        // editing in the middle of a full line still works
+        e.backspace(&mut sink);
+        assert!(e.insert(b'z', &mut sink));
+        assert_eq!(e.text().len(), MAX_LINE);
+    }
 
     /// A one-row terminal: printable bytes overwrite and advance, 0x08 steps left.
     struct Term {

@@ -686,6 +686,100 @@ def t_long_line(ctx):
         vm.type("echo wrap-ok")
         vm.keys("ret")
         r.check("shell still answers", vm.wait_for("wrap-ok", 30, "serial"))
+        # The old limit was 240 characters; a 455-character line (7 rows at 71 columns) must run whole too.
+        big = "echo " + word * 45
+        vm.type(big)
+        vm.keys("ret")
+        end = time.time() + 40
+        while time.time() < end and vm.serial_text().count(word * 45) < 2:
+            time.sleep(0.3)
+        r.check("a 455-character line is accepted and run whole", vm.serial_text().count(word * 45) >= 2, vm.serial_text()[-300:])
+    finally:
+        vm.close()
+
+
+def t_prompt(ctx):
+    """The prompt shows the folder you are in, and `write` says when it replaces a file."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-prompt", cfg="nomenu" + chr(10)), ctx.work, name="prompt")
+    try:
+        r.check("shell prompt at the top", vm.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm, r, [
+            ("mkdir sd", "made folder /sd"),
+            ("cd sd", "aeon:/sd> "),
+            ("mkdir deep", "made folder /sd/deep"),
+            ("cd deep", "aeon:/sd/deep> "),
+            ("cd ..", "aeon:/sd> "),
+            ("write f one", "wrote 3 byte(s) to f"),
+            ("write f two!", "already exists (3 byte(s)): nothing written"),
+            ("write -f f two!", "replacing the old 3 byte(s)"),
+            ("cd", "aeon> "),
+        ])
+        run_cmds(vm, r, [("cd nowhere", "no such folder"), ("pwd", "/")])
+    finally:
+        vm.close()
+
+
+def t_tools(ctx):
+    """cp mv touch head tail wc grep find hexdump seq sleep whoami hostname date, on a four-line file."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-tools", cfg="nomenu" + chr(10)), ctx.work, name="tools")
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        vm.type("edit poem")
+        vm.keys("ret")
+        r.check("edit starts", vm.wait_for("editing /poem", 30, "serial"))
+        for line in ("alpha one", "beta two", "gamma three", "delta four", "."):
+            vm.type(line)
+            vm.keys("ret")
+        r.check("poem saved (42 bytes)", vm.wait_for("saved 42 byte(s) to /poem", 30, "serial"), vm.serial_text()[-300:])
+        run_cmds(vm, r, [
+            ("head -n 2 poem", "beta two"),
+            ("tail -n 1 poem", "delta four"),
+            ("wc poem", "      4       8      42 poem"),
+            ("grep beta poem", "beta two"),
+            ("grep -n gamma poem", "3:gamma three"),
+            ("grep zzz poem", "(no matching lines)"),
+            ("grep", "usage: grep"),
+            ("cp poem copy", "copied 42 byte(s) to /copy"),
+            ("cp poem copy", "already exists (use `cp -f` to replace it)"),
+            ("cp -f poem copy", "copied 42 byte(s) to /copy"),
+            ("cp nothere x", "no such file"),
+            ("mkdir box", "made folder /box"),
+            ("cp box x", "is a folder: cp works on files only"),
+            ("mv copy moved", "moved copy to /moved"),
+            ("mv moved box", "moved moved to /box/moved"),
+            ("find moved", "/box/moved"),
+            ("find box", "/box/moved"),
+            ("find zzz", "(nothing found)"),
+            ("touch empty", "created /empty"),
+            ("touch empty", "Aeon has no clock"),
+            ("hexdump poem 16", "61 6c 70 68 61 20 6f 6e"),
+            ("hexdump empty", "(empty file)"),
+            ("seq 3", "3"),
+            ("seq 2 4", "4"),
+            ("seq x", "numbers only"),
+            ("sleep 1", "aeon> "),
+            ("sleep 99", "usage: sleep"),
+            ("whoami", "no user accounts"),
+            ("hostname", "aeon"),
+            ("date", "no clock"),
+            ("head", "usage: head"),
+        ])
+        # head must stop after the requested lines.
+        before = len(vm.serial_text())
+        vm.type("head -n 1 poem")
+        vm.keys("ret")
+        vm.wait_for("alpha one", 20, "serial")
+        time.sleep(0.5)
+        new = vm.serial_text()[before:]
+        r.check("head -n 1 prints only the first line", "alpha one" in new and "beta two" not in new, new[-300:])
+        before = len(vm.serial_text())
+        vm.type("tail -n 1 poem")
+        vm.keys("ret")
+        time.sleep(1.0)
+        new = vm.serial_text()[before:]
+        r.check("tail -n 1 prints only the last line", "delta four" in new and "gamma three" not in new, new[-300:])
     finally:
         vm.close()
 
@@ -1418,7 +1512,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

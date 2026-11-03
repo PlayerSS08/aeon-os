@@ -19,6 +19,7 @@ pub mod ahcifis;
 pub mod elf;
 pub mod menulogic;
 pub mod palette;
+pub mod textcmd;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;

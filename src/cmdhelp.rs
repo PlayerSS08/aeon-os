@@ -14,7 +14,7 @@ const fn c(group: &'static str, name: &'static str, usage: &'static str, about: 
 
 /// Groups in the order `help` shows them.
 // Aliases people bring from other systems: Windows (cls, dir, ver), Linux (man, free, uname, history).
-pub const GROUPS: &[&str] = &["system", "status", "hardware", "memory", "tasks", "files", "disk", "programs", "tools", "power"];
+pub const GROUPS: &[&str] = &["system", "status", "hardware", "memory", "tasks", "files", "manage", "text", "disk", "programs", "tools", "power"];
 
 pub const COMMANDS: &[Cmd] = &[
     c("system", "help", "help [command|all]", "this list; `help <command>` explains one command"),
@@ -57,15 +57,29 @@ pub const COMMANDS: &[Cmd] = &[
     c("files", "rmdir", "rmdir <folder>", "delete an empty folder"),
     c("files", "df", "df", "space used by the RAM files"),
     c("files", "cat", "cat <file>", "print a file"),
-    c("files", "write", "write <file> <text>", "create or replace a file (\\n in text = new line)"),
+    c("files", "write", "write [-f] <f> <t>", "create a file (-f replaces; \\n = new line)"),
     c("files", "append", "append <file> <text>", "add a line to the end of a file"),
     c("files", "edit", "edit <file>", "type many lines, end with a line holding only ."),
     c("files", "rm", "rm <file>", "delete a file"),
+    c("manage", "cp", "cp [-f] <file> <to>", "copy a file (-f replaces an existing one)"),
+    c("manage", "mv", "mv [-f] <file> <to>", "move or rename a file (-f replaces)"),
+    c("manage", "touch", "touch <file>", "create an empty file (there is no clock)"),
+    c("text", "head", "head [-n N] <file>", "the first N lines (default 10)"),
+    c("text", "tail", "tail [-n N] <file>", "the last N lines (default 10)"),
+    c("text", "wc", "wc <file> ...", "count lines, words and bytes"),
+    c("text", "grep", "grep [-in] <t> <f>", "lines with the text (-i any case, -n numbers)"),
+    c("manage", "find", "find [folder] [text]", "names below a folder that contain the text"),
+    c("text", "hexdump", "hexdump <file> [n]", "a file as hex and text (first 256 bytes)"),
     c("disk", "dls", "dls [path]", "list a directory on the disk (FAT16/FAT32)"),
     c("disk", "dcat", "dcat <path>", "print a file from the disk (first 64 KiB)"),
     c("programs", "run", "run <program>", "ring 3 demo: hello fault gp spin badcall"),
     c("tools", "echo", "echo <text>", "print text"),
     c("tools", "sort", "sort <n> <n> ...", "sort numbers (uses the heap)"),
+    c("tools", "seq", "seq [first] <last>", "print numbers from first (default 1) to last"),
+    c("tools", "sleep", "sleep <seconds>", "wait 1 to 60 seconds"),
+    c("status", "whoami", "whoami", "who you are (Aeon has no user accounts)"),
+    c("status", "hostname", "hostname", "the machine's name"),
+    c("status", "date", "date", "says honestly that there is no clock yet"),
     c("tools", "clear", "clear", "clear the screen (or press Ctrl+L)"),
     c("tools", "cls", "cls", "same as `clear`"),
     c("power", "panic", "panic", "trigger a kernel panic, to see the stop screen"),
@@ -172,10 +186,11 @@ mod tests {
 
     #[test]
     fn prefix_matching_and_completion() {
-        assert_eq!(matching("d").count(), 6); // dir dread dls dcat df disks
+        assert_eq!(matching("d").count(), 7); // dir dread dls dcat df disks date
         assert_eq!(common_prefix("d"), "d");
         assert_eq!(common_prefix("dc"), "dcat");
-        assert_eq!(common_prefix("he"), "help");
+        assert_eq!(common_prefix("hel"), "help");
+        assert_eq!(common_prefix("he"), "he"); // help head hexdump
         assert_eq!(common_prefix("sh"), "shutdown");
         assert_eq!(common_prefix("mem"), "mem"); // mem and memmap
         assert_eq!(common_prefix("zz"), "");
