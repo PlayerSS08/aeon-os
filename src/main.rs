@@ -1366,6 +1366,7 @@ extern "C" fn kernel_main() -> ! {
     aeon::pci::scan();
     aeon::vblk::probe();
     aeon::xhci::init();
+    aeon::ahci::probe();
     if heap == 0 {
         error!("mm", "could not allocate a kernel heap");
     } else {

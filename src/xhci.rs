@@ -14,7 +14,7 @@
 //! Global state: `XHCI` follows rule A in `docs/design/globals.md`: only boot code (`init`) and the shell
 //! task touch it, never an interrupt handler.
 
-use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::ptr::read_volatile;
 
 use crate::global::Global;
 use crate::hidkbd::HidKeyboard;
@@ -23,61 +23,17 @@ use crate::usbdesc;
 use crate::xhcictx::{self, Endpoint};
 use crate::xhcireg::{self as reg, Caps};
 use crate::xhcitrb::{EventRing, ProducerRing, Trb, CC_SHORT_PACKET, CC_SUCCESS, TRB_COMMAND_COMPLETION, TRB_TRANSFER_EVENT};
-use crate::{arch, log, mm, paging, pci};
+use crate::mmio::{dma_page, rd32, wait_until, wr32, wr64, PAGE_BYTES};
+use crate::{arch, log, paging, pci};
 
 /// TRBs per ring: one 4 KiB frame holds 256 of 16 bytes.
 const RING_TRBS: usize = 256;
-const PAGE_BYTES: usize = 4096;
 /// Most device slots this driver asks the controller for.
 const MAX_SLOTS: u8 = 32;
 /// Longest configuration descriptor that is read (it must fit the one-page buffer).
 const MAX_CONFIG_DESC: u16 = 1024;
 
-// ---- register and memory access ----
-
-fn rd32(addr: u64) -> u32 {
-    // SAFETY: `addr` is inside the controller's register window, which `bring_up` mapped uncached, or
-    // DMA memory from the frame allocator; both are plain memory-mapped and 4-byte aligned here.
-    unsafe { read_volatile(addr as *const u32) }
-}
-
-fn wr32(addr: u64, value: u32) {
-    // SAFETY: as in `rd32`.
-    unsafe { write_volatile(addr as *mut u32, value) }
-}
-
-/// 64-bit registers are written as two 32-bit halves, low first, which every controller accepts.
-fn wr64(addr: u64, value: u64) {
-    wr32(addr, value as u32);
-    wr32(addr + 4, (value >> 32) as u32);
-}
-
-/// Polls `cond` until it is true or `ms` milliseconds have passed. Returns whether it became true.
-fn wait_until(ms: u64, mut cond: impl FnMut() -> bool) -> bool {
-    let t0 = arch::rdtsc();
-    let ticks = log::tsc_hz() / 1000 * ms;
-    loop {
-        if cond() {
-            return true;
-        }
-        if arch::rdtsc().wrapping_sub(t0) >= ticks {
-            return false;
-        }
-        arch::pause();
-    }
-}
-
-/// One zeroed 4 KiB frame the controller may DMA to. Without 64-bit addressing it must be below 4 GiB.
-fn dma_page(ac64: bool) -> Result<u64, &'static str> {
-    let addr = mm::alloc_frames(1).ok_or("out of memory")?;
-    if !ac64 && addr >> 32 != 0 {
-        mm::free_frames(addr, 1);
-        return Err("the controller needs memory below 4 GiB");
-    }
-    // SAFETY: a frame just taken from the allocator: page aligned, 4 KiB, identity mapped, used by nobody else.
-    unsafe { write_bytes(addr as *mut u8, 0, PAGE_BYTES) };
-    Ok(addr)
-}
+// ---- register and memory access (shared helpers are in `mmio.rs`) ----
 
 /// The bytes of a DMA page.
 ///

@@ -61,6 +61,8 @@ pub mod global;
 #[macro_use]
 pub mod log;
 #[cfg(target_os = "uefi")]
+pub mod ahci;
+#[cfg(target_os = "uefi")]
 pub mod apic;
 #[cfg(target_os = "uefi")]
 pub mod arch;
@@ -70,6 +72,8 @@ pub mod fb;
 pub mod boot;
 #[cfg(target_os = "uefi")]
 pub mod mm;
+#[cfg(target_os = "uefi")]
+pub mod mmio;
 #[cfg(target_os = "uefi")]
 pub mod panicrec;
 #[cfg(target_os = "uefi")]

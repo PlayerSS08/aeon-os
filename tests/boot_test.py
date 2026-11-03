@@ -643,6 +643,20 @@ def t_usb(ctx):
         vm.close()
 
 
+def t_ahci(ctx):
+    """AHCI (SATA): the emulated SATA controller of the q35 machine carries the boot disk; Aeon identifies it."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-ahci", cfg="nomenu"+chr(10)), ctx.work, name="ahci")
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        t = vm.text()
+        r.check("boot log reports the SATA disk with its model", "ahci disk on port 0: QEMU HARDDISK" in t, t[-800:])
+        r.check("the size is the boot disk's (a whole number of MiB)", "sectors (" in t and " MiB)" in t, t[-800:])
+        r.check("no AHCI warnings", "WARN  ahci" not in t, t[-800:])
+    finally:
+        vm.close()
+
+
 def t_bootcount(ctx):
     """Three failed boots in a row switch the next boot to recovery mode; a good boot clears the counter."""
     r = ctx.r
@@ -1300,7 +1314,7 @@ def t_user(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "usb": t_usb, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

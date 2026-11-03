@@ -21,6 +21,7 @@ of `src/global.rs`. This page lists each static, which of the three rules protec
 | `FRAMES`, `TOTAL_FRAMES`, `HEAP` | `mm.rs` | B, checked | Allocation and free run inside `without_interrupts`. Exceptions: `init_frames` and `init_heap` run once during boot (rule A). |
 | `BITMAP` | `mm.rs` | A | Filled once in `init_frames`, then only reached through `FRAMES`. |
 | `DISK` | `vblk.rs` | C | A task that finds the disk busy sleeps 10 ms and tries again. Never call from an interrupt handler. |
+| `DISK` (AHCI) | `ahci.rs` | A | Filled once by `probe()` at boot, then used by the shell task only; reads are polled, one command at a time. |
 | `XHCI` | `xhci.rs` | A | Filled once by `init()` at boot, then read by the shell task (`usb` command). No interrupt handler touches it; the driver polls. |
 | `FS`, `CWD` | `shell.rs` | A | Only the shell task. If a second task ever needs the file system, move it to rule B and use `get_irqs_off()`. |
 | `HIST` | `fb.rs` | A | Reached only through `Console`, which is used under the logger lock or by boot code. No interrupt handler writes to the screen. |
