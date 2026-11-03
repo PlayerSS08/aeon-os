@@ -50,7 +50,7 @@ Shell keys use a PS/2 keyboard (laptop keyboards and most USB keyboards in firmw
 | kernel-memory, kernel-tasks | frame allocator, 32 MB heap, tick source (local APIC timer, or the PIT if there is no xAPIC or with `nolapic`), scheduler with `status` and `shell` tasks; the boot thread idles on `hlt` |
 
 Shell commands: type `help` for the grouped list (`help all` for every command with a description). Files: `ls tree cd pwd mkdir rmdir cat write append edit rm df`.
-The RAM filesystem has folders (up to 64 files and folders, 1 MiB, names up to 32 characters, paths up to 128; `write` takes the two characters backslash and n for a new line, `edit <file>` takes many lines). `dls dcat disks dread pci` read a FAT16/FAT32 disk on a virtio-blk device (read-only). `run <hello|fault|gp|spin|badcall>` starts a built-in program in ring 3. `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
+The RAM filesystem has folders (up to 64 files and folders, 1 MiB, names up to 32 characters, paths up to 128; `write` takes the two characters backslash and n for a new line, `edit <file>` takes many lines). `dls dcat disks dread pci` read a FAT16/FAT32 disk on a virtio-blk device (read-only). `run <hello|fault|gp|spin|badcall|denied>` starts a built-in program in ring 3 (each program has a syscall allow-list: `denied` tries a call it may not make and must be refused). `spawn` starts two busy workers that never yield; `counters` shows both advancing, i.e. the
 timer interrupt preempting them. `log` prints the boot log, which the splash held back. Shutdown uses ACPI
 S5, then firmware `ResetSystem`.
 

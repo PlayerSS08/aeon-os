@@ -72,7 +72,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("text", "hexdump", "hexdump <file> [n]", "a file as hex and text (first 256 bytes)"),
     c("disk", "dls", "dls [path]", "list a directory on the disk (FAT16/FAT32)"),
     c("disk", "dcat", "dcat <path>", "print a file from the disk (first 64 KiB)"),
-    c("programs", "run", "run <program>", "ring 3 demo: hello fault gp spin badcall"),
+    c("programs", "run", "run <program>", "ring 3 demo: hello fault gp spin badcall denied"),
     c("tools", "echo", "echo <text>", "print text"),
     c("tools", "sort", "sort <n> <n> ...", "sort numbers (uses the heap)"),
     c("tools", "seq", "seq [first] <last>", "print numbers from first (default 1) to last"),

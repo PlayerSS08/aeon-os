@@ -29,6 +29,32 @@ pub fn sanitize_output(buf: &mut [u8]) {
     }
 }
 
+impl Number {
+    /// This call's bit in an allow-mask.
+    pub const fn bit(self) -> u32 {
+        1 << (self as u64)
+    }
+}
+
+/// Calls every program may make: without `exit` a program could never end cleanly.
+pub const ALWAYS: u32 = Number::Exit.bit();
+
+/// The calls a built-in program is allowed to make (least privilege: `hello` may print, `denied`
+/// may only exit). Unknown program names get `exit` only.
+pub fn allow_mask(program: &str) -> u32 {
+    ALWAYS
+        | match program {
+            "hello" | "badcall" => Number::Write.bit(),
+            "spin" => Number::Yield.bit(),
+            _ => 0,
+        }
+}
+
+/// True if `mask` lets the program make call `n`.
+pub const fn permits(mask: u32, n: Number) -> bool {
+    mask & n.bit() != 0
+}
+
 pub fn decode(n: u64) -> Option<Number> {
     Some(match n {
         1 => Number::Write,
@@ -48,6 +74,37 @@ mod tests {
     fn decode_roundtrip() {
         for n in [Number::Write, Number::Exit, Number::Yield, Number::Uptime, Number::GetPid] {
             assert_eq!(decode(n as u64), Some(n));
+        }
+    }
+
+    #[test]
+    fn allow_masks_are_least_privilege() {
+        let all = [Number::Write, Number::Exit, Number::Yield, Number::Uptime, Number::GetPid];
+        // Every program can exit, and nothing can make a call outside its list.
+        for p in ["hello", "fault", "gp", "spin", "badcall", "denied", "whatever"] {
+            assert!(permits(allow_mask(p), Number::Exit), "{p} must be able to exit");
+            assert!(!permits(allow_mask(p), Number::Uptime), "{p} must not read the clock");
+            assert!(!permits(allow_mask(p), Number::GetPid), "{p} must not read its id");
+        }
+        assert!(permits(allow_mask("hello"), Number::Write));
+        assert!(!permits(allow_mask("hello"), Number::Yield));
+        assert!(permits(allow_mask("spin"), Number::Yield));
+        assert!(!permits(allow_mask("spin"), Number::Write));
+        // `denied` and unknown names can only exit.
+        for p in ["denied", "whatever", ""] {
+            for n in all {
+                assert_eq!(permits(allow_mask(p), n), n == Number::Exit, "{p} {n:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn number_bits_are_distinct() {
+        let all = [Number::Write, Number::Exit, Number::Yield, Number::Uptime, Number::GetPid];
+        let mut seen = 0u32;
+        for n in all {
+            assert_eq!(seen & n.bit(), 0);
+            seen |= n.bit();
         }
     }
 

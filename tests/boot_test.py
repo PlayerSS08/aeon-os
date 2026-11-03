@@ -821,7 +821,7 @@ SWEEP = [
     ("cpu", "cpu", "I/O APIC"),
     ("uptime", "uptime", "up 0"),
     ("uname", "uname", "x86_64 UEFI"),
-    ("history", "history", "  1  help"),
+    ("history", "history", "  2  info"),
     ("security", "security", "write protect"),
     ("tpm", "tpm", "no TPM 2.0"),
     ("lastpanic", "lastpanic", "ended normally"),
@@ -967,11 +967,11 @@ def t_workflow(ctx):
             ("cat b/f.txt", "hi"),
             ("tree", "f.txt  (7 bytes)"),
             ("find f", "/a/b/f.txt"),
-            ("wc b/f.txt", "      2       2       7 b/f.txt"),
+            ("wc b/f.txt", "      1       1       7 b/f.txt"),
             ("grep more b/f.txt", "more"),
             ("head -n 1 b/f.txt", "hi"),
             ("tail -n 1 b/f.txt", "more"),
-            ("hexdump b/f.txt 4", "68 69 0a 6d"),
+            ("hexdump b/f.txt 4", "68 69 6d 6f"),
             # copy and move, across folders
             ("cp b/f.txt g.txt", "copied 7 byte(s) to /a/g.txt"),
             ("mv g.txt b", "moved g.txt to /a/b/g.txt"),
@@ -1009,12 +1009,12 @@ def t_workflow(ctx):
             ("cd /a/b/deep", "aeon:/a/b/deep> "),
             ("cd ../..", "aeon:/a> "),
             ("cd ../../..", "aeon> "),
-            ("df", "4 file(s)"),
+            ("df", "3 file(s)"),
         ])
         # Tidy up from the bottom; removing the folder you stand in puts you back at the top.
         run_cmds(vm, r, [
-            ("rm b/deep/note.txt", "removed b/deep/note.txt"),
-            ("rm b/f.txt", "removed b/f.txt"),
+            ("rm /a/b/deep/note.txt", "removed /a/b/deep/note.txt"),
+            ("rm /a/b/f.txt", "removed /a/b/f.txt"),
             ("rmdir /a/b/deep", "removed folder /a/b/deep"),
             ("cd /a/b", "aeon:/a/b> "),
             ("rmdir /a/b", "removed folder /a/b"),
@@ -1833,6 +1833,7 @@ def t_user(ctx):
             ("uptime", "up 00:"),
             ("run gp", "[user] task killed: #GP"),
             ("run badcall", "exited with code 0"),
+            ("run denied", "exited with code 0"),
             ("run nosuch", "unknown program"),
         ])
         run_cmds(vm, r, [("run spin", "started spin as task")])

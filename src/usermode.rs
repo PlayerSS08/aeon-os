@@ -6,7 +6,7 @@
 //! SMAP temporarily lifted (`stac`/`clac`). A user fault or bad syscall ends only that task.
 
 use core::arch::{asm, global_asm};
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::arch::{self, ExcFrame};
 use crate::mm;
@@ -138,6 +138,20 @@ global_asm!(
     1:  jmp 1b
     .globl aeon_user_badcall_end
     aeon_user_badcall_end:
+
+    // Calls `uptime`, which this program is not allowed to make. The kernel must refuse (-1); the
+    // program exits with code 0 only if it did, and with 1 if the call was obeyed.
+    .globl aeon_user_denied_start
+    aeon_user_denied_start:
+        mov eax, 4
+        syscall
+        add rax, 1
+        mov rdi, rax
+        mov eax, 2
+        syscall
+    1:  jmp 1b
+    .globl aeon_user_denied_end
+    aeon_user_denied_end:
     "#
 );
 
@@ -153,10 +167,15 @@ unsafe extern "C" {
     static aeon_user_spin_end: u8;
     static aeon_user_badcall_start: u8;
     static aeon_user_badcall_end: u8;
+    static aeon_user_denied_start: u8;
+    static aeon_user_denied_end: u8;
 }
 
 /// The built-in programs `run` can start.
-pub const PROGRAMS: [&str; 5] = ["hello", "fault", "gp", "spin", "badcall"];
+pub const PROGRAMS: [&str; 6] = ["hello", "fault", "gp", "spin", "badcall", "denied"];
+
+/// Which calls the running program may make (see `syscall::allow_mask`); set by `run`.
+static ALLOW: AtomicU32 = AtomicU32::new(syscall::ALWAYS);
 
 fn program(name: &str) -> Option<&'static [u8]> {
     // SAFETY: the symbols mark the start and end of byte ranges emitted by the global_asm! block above.
@@ -167,6 +186,7 @@ fn program(name: &str) -> Option<&'static [u8]> {
             "gp" => (&aeon_user_gp_start as *const u8, &aeon_user_gp_end as *const u8),
             "spin" => (&aeon_user_spin_start as *const u8, &aeon_user_spin_end as *const u8),
             "badcall" => (&aeon_user_badcall_start as *const u8, &aeon_user_badcall_end as *const u8),
+            "denied" => (&aeon_user_denied_start as *const u8, &aeon_user_denied_end as *const u8),
             _ => return None,
         };
         Some(core::slice::from_raw_parts(s, e as usize - s as usize))
@@ -235,6 +255,7 @@ pub fn run(name: &str) -> Result<usize, RunError> {
         }
     }
     let top = base + WINDOW_PAGES as u64 * PAGE - 16;
+    ALLOW.store(syscall::allow_mask(name), Ordering::Relaxed);
     let id = sched::spawn_user(name, base, top).ok_or(RunError::NoMemory)?;
     ACTIVE.store(id, Ordering::Relaxed);
     Ok(id)
@@ -263,7 +284,9 @@ fn copy_from_user(ptr: u64, buf: &mut [u8]) -> bool {
 /// Rust side of the `syscall` entry. Runs with interrupts off on the task's kernel stack.
 #[unsafe(no_mangle)]
 extern "C" fn aeon_syscall_dispatch(n: u64, a0: u64, a1: u64) -> u64 {
-    match syscall::decode(n) {
+    // Least privilege: a call outside the program's allow-list is refused like an unknown one.
+    let call = syscall::decode(n).filter(|c| syscall::permits(ALLOW.load(Ordering::Relaxed), *c));
+    match call {
         Some(Number::Write) => {
             let len = a1;
             if len > syscall::MAX_WRITE {
