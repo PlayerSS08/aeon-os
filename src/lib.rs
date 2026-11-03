@@ -29,6 +29,7 @@ pub mod gfont;
 pub mod gopmode;
 pub mod frames;
 pub mod heapalloc;
+pub mod hidkbd;
 pub mod keymap;
 pub mod lineedit;
 pub mod logfmt;
