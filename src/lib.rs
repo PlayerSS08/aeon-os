@@ -15,6 +15,7 @@ pub mod anim;
 pub mod apicmath;
 pub mod banker;
 pub mod block;
+pub mod ahcifis;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;
