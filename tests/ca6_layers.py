@@ -255,7 +255,6 @@ def layer_alloc(E, ctx, out):
     data = {"sizes": []}
     try:
         E.check(tag, "boot", s.booted)
-        mem0 = s.mem()
         for kib in (1, 64, 1024, 8192, 16384):
             o = s.run(f"alloc {kib}")
             m = ALLOC_OK.search(o)
@@ -264,6 +263,9 @@ def layer_alloc(E, ctx, out):
             if m:
                 data["sizes"].append((kib, int(m.group(2))))
         E.metric(tag, "allocation time by size (KiB, microseconds)", data["sizes"], "")
+        # Baseline taken right before the refusal: since 0.9.2 the shell keeps its command history on the
+        # heap, so it grows with every command typed and that is not the refusal's doing.
+        mem0 = s.mem()
         o = s.run("alloc 99999999")
         E.check(tag, "an impossible request is refused cleanly and nothing changes", "refused" in o and "nothing changed" in o, o)
         mem1 = s.mem()

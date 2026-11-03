@@ -1,62 +1,67 @@
 [2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
 BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
-[   0.020622] INFO  stage enter firmware-entry
-[   0.022333] INFO  boot Aeon 0.9.1 git=unknown arch=x86_64 profile=release
-[   0.022444] INFO  boot sinks serial=true debugcon=true watchdog_disabled=true
-[   0.022567] INFO  time tsc_hz=2423030700 source=uefi-stall
-[   0.022753] INFO  stage enter early-init
-[   0.023160] INFO  cpu vendor=AuthenticAMD max_leaf=0xd max_ext=0x80000021 phys_bits=40 virt_bits=57
-[   0.023654] INFO  cpu supported nx=true smep=true smap=true umip=true sse2=true rdrand=true rdseed=true cet_ss=false cet_ibt=false hypervisor=true
-[   0.023916] INFO  cpu state-at-entry cr0.wp=true cr4.smep=false cr4.smap=false cr4.umip=false efer.nxe=true
-[   0.032208] INFO  bootcount failed_boots=0 counting=true recovery=false
-[   0.227730] INFO  fb gop 1280x800 stride=1280 fmt=Bgr base=0x80000000 console=142x38
-[   0.268427] INFO  stage enter platform-discovery
-[   0.269069] INFO  fw vendor="Ubuntu distribution of EDK II" fw_rev=0x10000 uefi=2.7.0
-[   0.269307] INFO  fw secure_boot=unknown tpm2=false
-[   0.269392] INFO  image base=0xde91000 size=0x1b6000 cmdline=""
-[   0.269502] INFO  acpi rsdp=0xfb7e014 rev=2 xsdt=0xfb7d0e8 checksum=ok
-[   0.269599] DEBUG smbios not present
-[   0.309716] INFO  stage enter security-init
-[   0.320215] INFO  seed boot seed ready from 2 hardware source(s); stack canary randomised
-[   0.320434] INFO  seed seed from the previous boot mixed in: false
-[   0.320610] INFO  tpm measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)
-[   0.321137] INFO  menu press any key within 2 s for the boot menu
-[   2.344551] INFO  loader Boot Loader Interface: 5 of 5 variables published and read back
-[   2.384773] INFO  stage enter exit-boot-services
-[   2.513215] INFO  stage enter kernel-env
-[   2.513389] INFO  boot boot services exited after 1 attempt(s)
-[   2.513615] INFO  mem descriptors=122 kept=122 dropped=0 desc_size=48
-[   2.513796] INFO  mem ram_mb=255 usable_mb=207 reclaimable_mb=42 acpi_mb=2 runtime_mb=3 mmio_mb=4 top_of_ram_mb=256
-[   2.513972] INFO  mem largest_free_block_mb=167
-[   2.516761] INFO  paging identity map active: pd_tables=16 split_tables=3 skipped=0 nx=true wc=true
-[   2.517158] INFO  cpu state-now cr0.wp=true cr4.smep=true cr4.smap=true cr4.umip=true efer.nxe=true
-[   2.518284] INFO  cpu gdt/tss/idt loaded, double-fault IST stack set, switching to kernel stack 0xded3000..0xdee3000
-[   2.518588] INFO  kernel kernel_main entered on kernel stack rsp=0xdee2ca0
-[   2.559383] INFO  stage enter kernel-memory
-[   2.792013] INFO  mm frames: 63350 free (247 MB), largest run 213 MB
-[   2.827169] INFO  pci 00:00.0 8086:29c0 Host bridge
-[   2.827522] INFO  pci 00:01.0 1234:1111 VGA controller
-[   2.827613] INFO  pci 00:02.0 8086:10d3 Ethernet controller
-[   2.827697] INFO  pci 00:1f.0 8086:2918 ISA bridge
-[   2.827800] INFO  pci 00:1f.2 8086:2922 SATA controller
-[   2.827892] INFO  pci 00:1f.3 8086:2930 SMBus controller
-[   2.828102] INFO  vblk no virtio-blk device
-[   2.828203] INFO  mm heap: 32768 KiB
-[   2.869054] INFO  timer lapic timer ok hz=100 ticks_seen=3
-[   2.909266] INFO  stage enter kernel-tasks
-[   2.909460] INFO  stage firmware-entry took 2389 us
-[   2.909537] INFO  stage early-init took 205480 us
-[   2.909631] INFO  stage platform-discovery took 41432 us
-[   2.909712] INFO  stage security-init took 2075047 us
-[   2.909817] INFO  stage exit-boot-services took 128441 us
-[   2.909899] INFO  stage kernel-env took 45558 us
-[   2.909968] INFO  stage kernel-memory took 350483 us
-[   2.910139] INFO  stage kernel-tasks took 40882 us
-[   2.910266] INFO  boot boot complete uptime_us=2910218 mode=preemptive
-[   3.236781] INFO  seed stored seed hidden from runtime access: true
-[   3.249149] INFO  bootcount boot succeeded, counter cleared
-[   3.251181] INFO  sched task status started as id 1
-[   3.251656] INFO  sched task shell started as id 2
+[   0.020634] INFO  stage enter firmware-entry
+[   0.021993] INFO  boot Aeon 0.9.2 git=unknown arch=x86_64 profile=release
+[   0.022141] INFO  boot sinks serial=true debugcon=true watchdog_disabled=true
+[   0.022333] INFO  time tsc_hz=2424900700 source=uefi-stall
+[   0.022519] INFO  stage enter early-init
+[   0.022965] INFO  cpu vendor=AuthenticAMD max_leaf=0xd max_ext=0x80000021 phys_bits=40 virt_bits=57
+[   0.023296] INFO  cpu supported nx=true smep=true smap=true umip=true sse2=true rdrand=true rdseed=true cet_ss=false cet_ibt=false hypervisor=true
+[   0.023538] INFO  cpu state-at-entry cr0.wp=true cr4.smep=false cr4.smap=false cr4.umip=false efer.nxe=true
+[   0.032116] INFO  bootcount failed_boots=0 counting=true recovery=false
+[   0.311596] INFO  fb gop 2560x1600 stride=2560 fmt=Bgr base=0x80000000 console=196x53
+[   0.311931] INFO  boot options from aeon.cfg: 9 bytes; effective options "timeout=1"
+[   0.352416] INFO  stage enter platform-discovery
+[   0.353071] INFO  fw vendor="Ubuntu distribution of EDK II" fw_rev=0x10000 uefi=2.7.0
+[   0.353325] INFO  fw secure_boot=unknown tpm2=false
+[   0.353424] INFO  image base=0xde62000 size=0x1cb000 cmdline="timeout=1"
+[   0.353568] INFO  acpi rsdp=0xfb7e014 rev=2 xsdt=0xfb7d0e8 checksum=ok
+[   0.353681] DEBUG smbios not present
+[   0.393806] INFO  stage enter security-init
+[   0.404902] INFO  seed boot seed ready from 2 hardware source(s); stack canary randomised
+[   0.405068] INFO  seed seed from the previous boot mixed in: false
+[   0.405251] INFO  tpm measured boot unavailable: no TPM 2.0 (EFI_TCG2_PROTOCOL not found)
+[   0.405827] INFO  menu menu open: boot starts in 1 s (arrow keys choose another entry, Enter selects, any other key stops the countdown)
+[   0.406041] INFO  menu options: Boot Aeon | Recovery mode | Firmware shell | Debug logging | Firmware setup | Restart | Power off
+[   1.474737] INFO  menu boot continues after the menu
+[   1.477497] INFO  loader Boot Loader Interface: 5 of 5 variables published and read back
+[   1.517715] INFO  stage enter exit-boot-services
+[   1.646704] INFO  stage enter kernel-env
+[   1.646875] INFO  boot boot services exited after 1 attempt(s)
+[   1.647079] INFO  mem descriptors=126 kept=126 dropped=0 desc_size=48
+[   1.647295] INFO  mem ram_mb=255 usable_mb=207 reclaimable_mb=42 acpi_mb=2 runtime_mb=3 mmio_mb=4 top_of_ram_mb=256
+[   1.647473] INFO  mem largest_free_block_mb=167
+[   1.649406] INFO  paging identity map active: pd_tables=16 split_tables=3 skipped=0 nx=true wc=true
+[   1.649791] INFO  cpu state-now cr0.wp=true cr4.smep=true cr4.smap=true cr4.umip=true efer.nxe=true
+[   1.650985] INFO  cpu gdt/tss/idt loaded, double-fault IST stack set, switching to kernel stack 0xdeb0000..0xdec0000
+[   1.651282] INFO  kernel kernel_main entered on kernel stack rsp=0xdebfae0
+[   1.692059] INFO  stage enter kernel-memory
+[   1.920643] INFO  mm frames: 63329 free (247 MB), largest run 213 MB
+[   1.956046] INFO  pci 00:00.0 8086:29c0 Host bridge
+[   1.956412] INFO  pci 00:01.0 1234:1111 VGA controller
+[   1.956502] INFO  pci 00:02.0 8086:10d3 Ethernet controller
+[   1.956586] INFO  pci 00:1f.0 8086:2918 ISA bridge
+[   1.956691] INFO  pci 00:1f.2 8086:2922 SATA controller
+[   1.956785] INFO  pci 00:1f.3 8086:2930 SMBus controller
+[   1.956970] INFO  vblk no virtio-blk device
+[   1.957117] INFO  xhci no xHCI controller on the PCI bus
+[   1.959655] INFO  ahci disk on port 0: QEMU HARDDISK, 1032192 sectors (504 MiB)
+[   1.959846] INFO  mm heap: 32768 KiB
+[   2.000475] INFO  timer lapic timer ok hz=100 ticks_seen=3
+[   2.040744] INFO  stage enter kernel-tasks
+[   2.040957] INFO  stage firmware-entry took 2142 us
+[   2.041055] INFO  stage early-init took 289674 us
+[   2.041128] INFO  stage platform-discovery took 41563 us
+[   2.041221] INFO  stage security-init took 1123879 us
+[   2.041298] INFO  stage exit-boot-services took 128980 us
+[   2.041404] INFO  stage kernel-env took 44789 us
+[   2.041479] INFO  stage kernel-memory took 349224 us
+[   2.041646] INFO  stage kernel-tasks took 40966 us
+[   2.041776] INFO  boot boot complete uptime_us=2041729 mode=preemptive
+[   2.392773] INFO  seed stored seed hidden from runtime access: true
+[   2.406251] INFO  bootcount boot succeeded, counter cleared
+[   2.407527] INFO  sched task status started as id 1
+[   2.408024] INFO  sched task shell started as id 2
 
 Aeon shell. Type `help`.
 aeon> run hello
@@ -65,7 +70,7 @@ aeon> hello from ring 3
 [user] task 3 exited with code 0
 mem
 ram        255 MB total, 207 MB usable at boot, top 256 MB
-frames     55124 free of 63350 (215 MB free, largest run 181 MB)
+frames     55086 free of 63329 (215 MB free, largest run 181 MB)
 heap       0 KiB used of 32768 KiB, 1 free holes
 aeon> spawn
 started worker-a as task 3
@@ -83,103 +88,103 @@ aeon> run spin
 started spin as task 11
 aeon> ps
 id name             state     cpu-ticks
-0  idle             ready     412
-1  status           sleeping  18
+0  idle             ready     414
+1  status           sleeping  17
 2  shell            running   2
 3  worker-a         ready     102
 4  worker-b         ready     102
-5  worker-a         ready     58
-6  worker-b         ready     58
-7  worker-a         ready     36
-8  worker-b         ready     36
+5  worker-a         ready     57
+6  worker-b         ready     57
+7  worker-a         ready     35
+8  worker-b         ready     35
 9  worker-a         ready     21
 10 worker-b         ready     21
-11 spin             ready     5
+11 spin             ready     4
 aeon> ps
 id name             state     cpu-ticks
-0  idle             ready     412
-1  status           sleeping  27
-2  shell            running   4
-3  worker-a         ready     172
+0  idle             ready     414
+1  status           sleeping  26
+2  shell            running   2
+3  worker-a         ready     171
 4  worker-b         ready     171
-5  worker-a         ready     128
-6  worker-b         ready     127
-7  worker-a         ready     106
-8  worker-b         ready     106
-9  worker-a         ready     91
-10 worker-b         ready     91
-11 spin             ready     75
+5  worker-a         ready     126
+6  worker-b         ready     125
+7  worker-a         ready     104
+8  worker-b         ready     104
+9  worker-a         ready     90
+10 worker-b         ready     90
+11 spin             ready     73
 aeon> echo still-alive
 still-alive
 aeon> ps
 id name             state     cpu-ticks
-0  idle             ready     412
-1  status           ready     32
+0  idle             ready     414
+1  status           sleeping  31
 2  shell            running   7
-3  worker-a         ready     206
-4  worker-b         ready     205
+3  worker-a         ready     207
+4  worker-b         ready     207
 5  worker-a         ready     162
 6  worker-b         ready     162
 7  worker-a         ready     140
 8  worker-b         ready     140
-9  worker-a         ready     125
-10 worker-b         ready     125
+9  worker-a         ready     126
+10 worker-b         ready     126
 11 spin             ready     109
 aeon> kill 11
 task 11 stopped
 aeon> run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> run hello
+aeon> [user] task 11 exited with code 0
+run hello
 started hello as task 11
 hello from ring 3
-[user] task 11 exited with code 0
-aeon> ps
+aeon> [user] task 11 exited with code 0
+ps
 id name             state     cpu-ticks
-0  idle             ready     412
-1  status           sleeping  65
-2  shell            running   30
-3  worker-a         ready     481
-4  worker-b         ready     480
-5  worker-a         ready     436
-6  worker-b         ready     436
-7  worker-a         ready     415
-8  worker-b         ready     415
-9  worker-a         ready     400
-10 worker-b         ready     400
+0  idle             ready     414
+1  status           ready     65
+2  shell            running   32
+3  worker-a         ready     483
+4  worker-b         ready     483
+5  worker-a         ready     437
+6  worker-b         ready     437
+7  worker-a         ready     416
+8  worker-b         ready     416
+9  worker-a         ready     402
+10 worker-b         ready     402
 aeon> kill 3
 task 3 stopped
 aeon> kill 4
@@ -198,12 +203,12 @@ aeon> kill 10
 task 10 stopped
 aeon> mem
 ram        255 MB total, 207 MB usable at boot, top 256 MB
-frames     55124 free of 63350 (215 MB free, largest run 181 MB)
-heap       0 KiB used of 32768 KiB, 1 free holes
+frames     55086 free of 63329 (215 MB free, largest run 181 MB)
+heap       0 KiB used of 32768 KiB, 2 free holes
 aeon> mem
 ram        255 MB total, 207 MB usable at boot, top 256 MB
-frames     55124 free of 63350 (215 MB free, largest run 181 MB)
-heap       0 KiB used of 32768 KiB, 1 free holes
+frames     55086 free of 63329 (215 MB free, largest run 181 MB)
+heap       0 KiB used of 32768 KiB, 2 free holes
 aeon> write f0 abc0
 wrote 4 byte(s) to f0
 aeon> write f1 abc1
@@ -248,8 +253,8 @@ aeon> df
 20 file(s), used 90 of 1048576 bytes
 aeon> mem
 ram        255 MB total, 207 MB usable at boot, top 256 MB
-frames     55124 free of 63350 (215 MB free, largest run 181 MB)
-heap       2 KiB used of 32768 KiB, 4 free holes
+frames     55086 free of 63329 (215 MB free, largest run 181 MB)
+heap       2 KiB used of 32768 KiB, 3 free holes
 aeon> rm f0
 removed f0
 aeon> rm f1
@@ -292,6 +297,6 @@ aeon> rm f19
 removed f19
 aeon> mem
 ram        255 MB total, 207 MB usable at boot, top 256 MB
-frames     55124 free of 63350 (215 MB free, largest run 181 MB)
-heap       1 KiB used of 32768 KiB, 2 free holes
+frames     55086 free of 63329 (215 MB free, largest run 181 MB)
+heap       1 KiB used of 32768 KiB, 3 free holes
 aeon> 

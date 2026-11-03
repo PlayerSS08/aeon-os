@@ -3,64 +3,64 @@ check,M1,kernel boots to the shell prompt,PASS,
 check,M2,boot log shows numbered stages and 'boot complete',PASS,17
 check,M5,timer source is reported (lapic or pit),PASS,"firmware   Ubuntu distribution of EDK II rev 0x10000, UEFI 2.7
 secure boot unknown
-tsc        2423 MHz
+tsc        2421 MHz
 timer      lapic
-image      base 0xde84000 size 1752 KiB"
+image      base 0xde64000 size 1836 KiB"
 check,M2,"diagnostic commands answer (version, info, cpu, security)",PASS,
 check,TC1,boot,PASS,
 check,TC1,two tasks created,PASS,"started worker-a as task 3
 started worker-b as task 4"
 check,TC1,both workers got CPU (preemption works),PASS,"{3: 306, 4: 306}"
-check,TC1,both counters advanced,PASS,"['222', '228']->['1558', '1593']"
+check,TC1,both counters advanced,PASS,"['227', '227']->['1582', '1606']"
 check,TC1,fairness: the two workers are within 25% of each other,PASS,1.0
 check,TC2,boot,PASS,
 check,TC2,user program (ring 3) started,PASS,started spin as task 7
 check,TC2,a task blocked on a wait queue was created,PASS,started waiter as task 8 (it waits until you type `wake`)
-check,TC2,4 workers all got CPU,PASS,"{3: 124, 4: 124, 5: 123, 6: 123}"
-check,TC2,the ring-3 task got CPU,PASS,{7: 124}
+check,TC2,4 workers all got CPU,PASS,"{3: 123, 4: 123, 5: 122, 6: 122}"
+check,TC2,the ring-3 task got CPU,PASS,{7: 122}
 check,TC2,the blocked task used no CPU,PASS,{8: 0}
-check,TC2,fairness: runnable tasks within 40% of each other,PASS,0.9919354838709677
+check,TC2,fairness: runnable tasks within 40% of each other,PASS,0.991869918699187
 check,TC2,wake releases the blocked task,PASS,"woke 1 task(s)
-waiter: woke up"
+aeon> waiter: woke up"
 check,TC3,boot,PASS,
 check,TC3,spawn reported two task ids,PASS,"started worker-a as task 3
 started worker-b as task 4"
 check,TC3,"one worker stopped, one remains",PASS,task 4 stopped
-check,TC3,the lone worker keeps running,PASS,[0.9823434991974318]
-check,TC3,the lone worker gets about twice the share of a worker in TC1,PASS,0.982 vs 0.4904
+check,TC3,the lone worker keeps running,PASS,[0.9807073954983923]
+check,TC3,the lone worker gets about twice the share of a worker in TC1,PASS,0.981 vs 0.4912
 check,TC3,`kill 0` is refused,PASS,no killable task 0
 check,TC3,`kill 99` is refused,PASS,no killable task 99
 check,TC3,`kill x` is refused,PASS,usage: kill <id>
 check,TC4,boot,PASS,
-check,TC4,every busy task got CPU,PASS,"[70, 69, 70, 69, 70, 70, 70, 70, 70]"
+check,TC4,every busy task got CPU,PASS,"[69, 69, 69, 68, 69, 69, 69, 69, 69]"
 check,TC4,the shell stays responsive under load,PASS,still-alive
 check,TC4,ten ring-3 launches under load all worked,PASS,launched=10 greeted=10
-check,TC4,no frame leak: free frames are back to the starting value,PASS,55124 vs 55124
+check,TC4,no frame leak: free frames are back to the starting value,PASS,55086 vs 55086
 check,TC4,20 files stored,PASS,"20 file(s), used 90 of 1048576 bytes"
 check,TC4,the heap returned to its baseline after removing the files,PASS,0 -> 1
 check,TC5,boot,PASS,
-check,TC5,`run nosuch` -> unknown program,PASS,"unknown program 'nosuch', available: hello fault gp spin badcall"
+check,TC5,`run nosuch` -> unknown program,PASS,"unknown program 'nosuch', available: hello fault gp spin badcall denied"
 check,TC5,`run fault` -> killed: #PF,PASS,"ted fault as task 3
-aeon> [   9.951351] WARN  user task 3 killed: #PF page fault at rip=0x2912005 error_code=0x7 cr2=0x100000
+aeon> [   9.161553] WARN  user task 3 killed: #PF page fault at rip=0x2923005 error_code=0x7 cr2=0x100000
 [user] task killed: #PF page fault"
-check,TC5,`run gp` -> #GP,PASS,"11.030803] WARN  user task 3 killed: #GP general protection at rip=0x2912000 error_code=0x0 cr2=0x100000
-[user] task killed: #GP general protection
-gp as task 3"
+check,TC5,`run gp` -> #GP,PASS,"k 3
+aeon> [  10.210459] WARN  user task 3 killed: #GP general protection at rip=0x2923000 error_code=0x0 cr2=0x100000
+[user] task killed: #GP general protection"
 check,TC5,`run badcall` -> exited with code 0,PASS,"started badcall as task 3
 aeon> [user] task 3 exited with code 0"
 check,TC5,`cat nothere` -> no such file,PASS,no such file 'nothere'
-check,TC5,`write` -> bad name,PASS,"bad name '' (1-32 chars each, no backslash or control characters, path up to 128)"
+check,TC5,`write` -> usage: write,PASS,usage: write [-f] <f> <t>
 check,TC5,`write a/b x` -> no such folder,PASS,no such folder for 'a/b' (make it with `mkdir`)
 check,TC5,`rmdir nosuch` -> no such folder,PASS,no such folder 'nosuch'
 check,TC5,`rm nothere` -> no such file,PASS,no such file 'nothere'
 check,TC5,`sort 5 a` -> not a number,PASS,not a number: a
 check,TC5,`hlep` -> Did you mean `help`,PASS,unknown command 'hlep'. Did you mean `help`? (`help` lists everything)
-check,TC5,`dread 99999` -> no disk,PASS,no disk
+check,TC5,`dread 99999999` -> read failed,PASS,read failed: BadRequest
 check,TC5,after every failure the kernel and shell still answer,PASS,kernel-alive
-check,TC5,failed ring-3 programs leaked no frames,PASS,55124 vs 55124
-check,TC5,no ring-3 task is left behind,PASS,"{0: ('idle', 'ready', 2429), 1: ('status', 'sleeping', 51), 2: ('shell', 'running', 15)}"
+check,TC5,failed ring-3 programs leaked no frames,PASS,55086 vs 55086
+check,TC5,no ring-3 task is left behind,PASS,"{0: ('idle', 'ready', 2500), 1: ('status', 'sleeping', 52), 2: ('shell', 'running', 3)}"
 check,M6,boot,PASS,
-check,M6,waiter is blocked,PASS,"{0: ('idle', 'ready', 449), 1: ('status', 'sleeping', 9), 2: ('shell', 'running', 0), 3: ('waiter', 'blocked', 0)}"
+check,M6,waiter is blocked,PASS,"{0: ('idle', 'ready', 448), 1: ('status', 'sleeping', 9), 2: ('shell', 'running', 2), 3: ('waiter', 'blocked', 0)}"
 check,M6,a blocked task uses 0 CPU ticks over 3 s,PASS,"('waiter', 'blocked', 0) -> ('waiter', 'blocked', 0)"
 check,M6,wake releases exactly one waiter,PASS,"woke 1 task(s)
 aeon> waiter: woke up"
@@ -69,61 +69,61 @@ check,M6,a second wake finds nobody,PASS,woke 0 task(s)
 check,TC6,boot,PASS,
 check,TC6,two tasks created,PASS,"started worker-a as task 3
 started worker-b as task 4"
-check,TC6,both workers got CPU (preemption works),PASS,"{3: 304, 4: 305}"
-check,TC6,both counters advanced,PASS,"['226', '226']->['1579', '1604']"
-check,TC6,fairness: the two workers are within 25% of each other,PASS,0.9967213114754099
+check,TC6,both workers got CPU (preemption works),PASS,"{3: 306, 4: 306}"
+check,TC6,both counters advanced,PASS,"['224', '223']->['1561', '1589']"
+check,TC6,fairness: the two workers are within 25% of each other,PASS,1.0
 check,TC6,boot,PASS,
 check,TC6,two tasks created,PASS,"started worker-a as task 3
 started worker-b as task 4"
-check,TC6,both workers got CPU (preemption works),PASS,"{3: 304, 4: 305}"
-check,TC6,both counters advanced,PASS,"['223', '223']->['1578', '1603']"
-check,TC6,fairness: the two workers are within 25% of each other,PASS,0.9967213114754099
+check,TC6,both workers got CPU (preemption works),PASS,"{3: 306, 4: 306}"
+check,TC6,both counters advanced,PASS,"['364', '365']->['1994', '2006']"
+check,TC6,fairness: the two workers are within 25% of each other,PASS,1.0
 check,TC6,boot,PASS,
 check,TC6,two tasks created,PASS,"started worker-a as task 3
 started worker-b as task 4"
-check,TC6,both workers got CPU (preemption works),PASS,"{3: 304, 4: 305}"
-check,TC6,both counters advanced,PASS,"['224', '227']->['1585', '1614']"
-check,TC6,fairness: the two workers are within 25% of each other,PASS,0.9967213114754099
-check,TC6,all repeats keep the fairness ratio above 0.75,PASS,"[0.9967213114754099, 0.9967213114754099, 0.9967213114754099]"
-check,TC6,timer rate repeats within 10%,PASS,7.906878256196228e-06
-check,TC6,boot time repeats within 25%,PASS,0.01082648336712505
+check,TC6,both workers got CPU (preemption works),PASS,"{3: 303, 4: 303}"
+check,TC6,both counters advanced,PASS,"['224', '221']->['1584', '1552']"
+check,TC6,fairness: the two workers are within 25% of each other,PASS,1.0
+check,TC6,all repeats keep the fairness ratio above 0.75,PASS,"[1.0, 1.0, 1.0]"
+check,TC6,timer rate repeats within 10%,PASS,0.009645172357445367
+check,TC6,boot time repeats within 25%,PASS,0.054966113656617986
 check,TC6,a deterministic command gives identical output in two fresh boots,PASS,"[['1 3 5 9'], ['1 3 5 9']]"
 check,L4/L5,boot,PASS,
 check,L4/L5,idle system: the ready queue is empty and matches the task states,PASS,"ready queue (front runs next): (empty: only the idle task can run)
 queue matches the task states: yes"
-check,L4/L5,"with 4 workers the queue lists 3 or 4 of them (one is running, unless a short task has the CPU)",PASS,"ready queue (front runs next): 5(worker-a) 1(status) 6(worker-b) 4(worker-b) 3(worker-a)
+check,L4/L5,"with 4 workers the queue lists 3 or 4 of them (one is running, unless a short task has the CPU)",PASS,"ready queue (front runs next): 3(worker-a) 5(worker-a) 6(worker-b) 4(worker-b)
 queue matches the task states: yes"
-check,L4/L5,the trace has events and a summary,PASS,"ck     1368  2 -> 4  sleep
-tick     1369  4 -> 1  timer
-tick     1370  1 -> 3  timer
-tick     1371  3 -> 5  timer
-tick     1372  5 -> 6  timer
-tick     1373  6 -> 4  timer
-tick     1374  4 -> 2  timer"
+check,L4/L5,the trace has events and a summary,PASS,"ck     1376  2 -> 6  sleep
+tick     1377  6 -> 4  timer
+tick     1378  4 -> 1  timer
+tick     1378  1 -> 3  sleep
+tick     1379  3 -> 5  timer
+tick     1380  5 -> 6  timer
+tick     1381  6 -> 2  timer"
 check,L4/L5,four workers are running,PASS,"[3, 4, 5, 6]"
-check,L4/L5,a worker that never yields always loses the CPU to the timer (at least 99% of its departures),PASS,1.0 of 830
+check,L4/L5,a worker that never yields always loses the CPU to the timer (at least 99% of its departures),PASS,1.0 of 829
 check,L4/L5,time slice: at least 90% of worker stretches last exactly one tick,PASS,1.0
 check,L4/L5,round-robin order: the workers take turns in the same cycle (at least 90%),PASS,1.0
-check,L4/L5,scheduling latency is about (workers - 1) time slices,PASS,3.072639225181598
+check,L4/L5,scheduling latency is about (workers - 1) time slices,PASS,3.0727272727272728
 check,L6,boot,PASS,
-check,L6,the trace has events and a summary,PASS,"ck     1082  3 -> 4  yield
-tick     1082  4 -> 3  yield
-tick     1083  3 -> 4  timer
-tick     1083  4 -> 1  yield
-tick     1084  1 -> 3  timer
-tick     1084  3 -> 4  yield
-tick     1084  4 -> 2  yield"
-check,L6,cooperative workers are switched by `yield` (at least 90% of switches),PASS,0.9584974250227204
-check,L6,cooperative switching is not limited by the 100 Hz tick (switches far more often),PASS,4401.333333333333 vs 183.16666666666666
+check,L6,the trace has events and a summary,PASS,"ck     1087  4 -> 3  yield
+tick     1087  3 -> 4  yield
+tick     1087  4 -> 3  yield
+tick     1087  3 -> 4  yield
+tick     1087  4 -> 3  yield
+tick     1088  3 -> 4  timer
+tick     1088  4 -> 2  yield"
+check,L6,cooperative workers are switched by `yield` (at least 90% of switches),PASS,0.9589633641766343
+check,L6,cooperative switching is not limited by the 100 Hz tick (switches far more often),PASS,4431.0 vs 182.33333333333334
 check,L5,boot,PASS,
 check,L5,one command started three jobs,PASS,"started job-0 as task 3 (600 units)
 started job-1 as task 4 (300 units)
 started job-2 as task 5 (150 units)"
-check,L5,all three jobs finished and reported,PASS,"[('2', '150', '2', '127'), ('1', '300', '1', '216'), ('0', '600', '0', '300')]"
+check,L5,all three jobs finished and reported,PASS,"[('2', '150', '2', '127'), ('1', '300', '1', '212'), ('0', '600', '0', '297')]"
 check,L5,"round robin finishes the shortest job first (order 150, 300, 600)",PASS,"[150, 300, 600]"
 check,L5,every job first ran within 3 ticks of creation (three jobs share the queue),PASS,"[2, 1, 0]"
-check,L5,measured turnaround follows equal-share round robin within 15%,PASS,1.701 2.362
-check,L5,"finished jobs have left the task table (state terminated, slot freed)",PASS,"{0: ('idle', 'ready', 250), 1: ('status', 'sleeping', 11), 2: ('shell', 'running', 0)}"
+check,L5,measured turnaround follows equal-share round robin within 15%,PASS,1.669 2.339
+check,L5,"finished jobs have left the task table (state terminated, slot freed)",PASS,"{0: ('idle', 'ready', 250), 1: ('status', 'sleeping', 13), 2: ('shell', 'running', 1)}"
 check,L5,after completion the queue is empty and consistent,PASS,"ready queue (front runs next): 1(status)
 queue matches the task states: yes"
 check,L7,boot,PASS,
@@ -143,88 +143,88 @@ check,L7,`race` finished and reported,PASS,"nlock
 aeon> race with lock: expected 40000, got 40000, lost 0 update(s)
 race
 started two racers, 20000 additions each, no lock
-aeon> race no lock: expected 40000, got 20000, lost 20000 update(s)
+aeon> race no lock: expected 40000, got 20015, lost 19985 update(s)
 "
-check,L7,`race lock` finished and reported,PASS,"race no lock: expected 40000, got 20000, lost 20000 update(s)
+check,L7,`race lock` finished and reported,PASS,"race no lock: expected 40000, got 20015, lost 19985 update(s)
 race lock
 started two racers, 20000 additions each, with a spinlock
 aeon> race with lock: expected 40000, got 40000, lost 0 update(s)
 "
-check,L7,the problem is real: every unprotected run lost updates,PASS,"[(40000, 20000, 20000), (40000, 20000, 20000)]"
+check,L7,the problem is real: every unprotected run lost updates,PASS,"[(40000, 20000, 20000), (40000, 20015, 19985)]"
 check,L7,the fix works: every locked run lost nothing and reached the expected total,PASS,"[(40000, 40000, 0), (40000, 40000, 0)]"
 check,L8,boot,PASS,
-check,L8,alloc 1 KiB succeeds and is freed,PASS,"allocated 1 KiB in 419 us: heap used 0 -> 1 KiB of 32768 KiB
+check,L8,alloc 1 KiB succeeds and is freed,PASS,"allocated 1 KiB in 42 us: heap used 0 -> 1 KiB of 32768 KiB
 freed: heap used 0 KiB, 1 free hole(s)"
-check,L8,alloc 64 KiB succeeds and is freed,PASS,"allocated 64 KiB in 10 us: heap used 0 -> 64 KiB of 32768 KiB
+check,L8,alloc 64 KiB succeeds and is freed,PASS,"allocated 64 KiB in 6 us: heap used 0 -> 64 KiB of 32768 KiB
 freed: heap used 0 KiB, 1 free hole(s)"
-check,L8,alloc 1024 KiB succeeds and is freed,PASS,"allocated 1024 KiB in 8 us: heap used 0 -> 1024 KiB of 32768 KiB
+check,L8,alloc 1024 KiB succeeds and is freed,PASS,"allocated 1024 KiB in 4 us: heap used 0 -> 1024 KiB of 32768 KiB
 freed: heap used 0 KiB, 1 free hole(s)"
-check,L8,alloc 8192 KiB succeeds and is freed,PASS,"allocated 8192 KiB in 9 us: heap used 0 -> 8192 KiB of 32768 KiB
+check,L8,alloc 8192 KiB succeeds and is freed,PASS,"allocated 8192 KiB in 3 us: heap used 0 -> 8192 KiB of 32768 KiB
 freed: heap used 0 KiB, 1 free hole(s)"
-check,L8,alloc 16384 KiB succeeds and is freed,PASS,"allocated 16384 KiB in 6 us: heap used 0 -> 16384 KiB of 32768 KiB
-freed: heap used 0 KiB, 1 free hole(s)"
-check,L8,an impossible request is refused cleanly and nothing changes,PASS,"allocation of 99999999 KiB refused after 89 us: not enough heap (32768 KiB free of 32768 KiB, 1 hole(s)); nothing changed"
-check,L8,the heap is intact after the refusal (used and holes unchanged),PASS,"{'frames_free': 55140, 'frames_total': 63350, 'heap_used_kib': 0, 'heap_holes': 1} -> {'frames_free': 55140, 'frames_total': 63350, 'heap_used_kib': 0, 'heap_holes': 1}"
+check,L8,alloc 16384 KiB succeeds and is freed,PASS,"allocated 16384 KiB in 31 us: heap used 0 -> 16384 KiB of 32768 KiB
+freed: heap used 0 KiB, 2 free hole(s)"
+check,L8,an impossible request is refused cleanly and nothing changes,PASS,"allocation of 99999999 KiB refused after 118 us: not enough heap (32767 KiB free of 32768 KiB, 2 hole(s)); nothing changed"
+check,L8,the heap is intact after the refusal (used and holes unchanged),PASS,"{'frames_free': 55102, 'frames_total': 63329, 'heap_used_kib': 0, 'heap_holes': 2} -> {'frames_free': 55102, 'frames_total': 63329, 'heap_used_kib': 0, 'heap_holes': 2}"
 check,L8,a request of zero is accepted,PASS,"allocated 0 KiB in 31 us: heap used 0 -> 0 KiB of 32768 KiB
-freed: heap used 0 KiB, 1 free hole(s)"
+freed: heap used 0 KiB, 2 free hole(s)"
 check,L8,the kernel carries on after allocation failure,PASS,allocator-ok
-metric,M1,kernel uptime when the shell starts,3.273941,s
+metric,M1,kernel uptime when the shell starts,2.369695,s
 metric,TC1,"worker CPU ticks (a, b)","[306, 306]",ticks
 metric,TC1,fairness ratio min/max,1.0,
-metric,TC1,measured timer rate,96.7,Hz
-metric,TC1,CPU share per task,"{""idle"": 0.0, ""status"": 0.0192, ""shell"": 0.0, ""worker-a"": 0.4904, ""worker-b"": 0.4904}",
+metric,TC1,measured timer rate,96.5,Hz
+metric,TC1,CPU share per task,"{""idle"": 0.0, ""status"": 0.0177, ""shell"": 0.0, ""worker-a"": 0.4912, ""worker-b"": 0.4912}",
 metric,TC2,runnable tasks,5,
 metric,TC2,fairness ratio min/max over runnable tasks,0.992,
 metric,TC2,tasks alive,9,
-metric,TC2,CPU share per task,"{""idle#0"": 0.0, ""status#1"": 0.0159, ""shell#2"": 0.0, ""worker-a#3"": 0.1975, ""worker-b#4"": 0.1975, ""worker-a#5"": 0.1959, ""worker-b#6"": 0.1959, ""spin#7"": 0.1975, ""waiter#8"": 0.0}",
-metric,TC3,CPU share of the lone worker,0.982,of all ticks
-metric,TC3,CPU share of one worker when two run (TC1),0.4904,of all ticks
+metric,TC2,CPU share per task,"{""idle#0"": 0.0, ""status#1"": 0.0161, ""shell#2"": 0.0, ""worker-a#3"": 0.1977, ""worker-b#4"": 0.1977, ""worker-a#5"": 0.1961, ""worker-b#6"": 0.1961, ""spin#7"": 0.1961, ""waiter#8"": 0.0}",
+metric,TC3,CPU share of the lone worker,0.981,of all ticks
+metric,TC3,CPU share of one worker when two run (TC1),0.4912,of all ticks
 metric,TC4,busy tasks,9,
 metric,TC4,fairness ratio min/max with 9 busy tasks,0.986,
-metric,TC4,CPU share of one busy task with 9 busy tasks,0.1092,of all ticks
+metric,TC4,CPU share of one busy task with 9 busy tasks,0.1095,of all ticks
 metric,TC4,ring-3 launches accepted,10,of 10
 metric,TC4,ring-3 launches that printed their greeting,10,of 10
-metric,TC4,frames free before / after,55124 / 55124,frames
+metric,TC4,frames free before / after,55086 / 55086,frames
 metric,TC4,heap used before / with 20 files / after,0 / 2 / 1,KiB
-metric,TC6,"worker CPU ticks (a, b)","[304, 305]",ticks
-metric,TC6,fairness ratio min/max,0.997,
-metric,TC6,measured timer rate,96.2,Hz
-metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0193, ""shell"": 0.0, ""worker-a"": 0.4895, ""worker-b"": 0.4911}",
-metric,TC6,"worker CPU ticks (a, b)","[304, 305]",ticks
-metric,TC6,fairness ratio min/max,0.997,
-metric,TC6,measured timer rate,96.2,Hz
-metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0193, ""shell"": 0.0, ""worker-a"": 0.4895, ""worker-b"": 0.4911}",
-metric,TC6,"worker CPU ticks (a, b)","[304, 305]",ticks
-metric,TC6,fairness ratio min/max,0.997,
-metric,TC6,measured timer rate,96.2,Hz
-metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0193, ""shell"": 0.0, ""worker-a"": 0.4895, ""worker-b"": 0.4911}",
-metric,TC6,fairness ratios,"[0.997, 0.997, 0.997]",
-metric,TC6,timer rates,"[96.2, 96.2, 96.2]",Hz
-metric,TC6,boot times (kernel uptime at shell start),"[3.228418, 3.248571, 3.26357]",s
-metric,TC6,timer-rate spread across repeats,0.0,%
-metric,TC6,boot-time spread across repeats,1.08,%
-metric,L4/L5,context switches in the window,1099,
-metric,L4/L5,switches per second,183.2,1/s
-metric,L4/L5,share of all switches caused by the timer,0.8244,
+metric,TC6,"worker CPU ticks (a, b)","[306, 306]",ticks
+metric,TC6,fairness ratio min/max,1.0,
+metric,TC6,measured timer rate,96.7,Hz
+metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0192, ""shell"": 0.0, ""worker-a"": 0.4904, ""worker-b"": 0.4904}",
+metric,TC6,"worker CPU ticks (a, b)","[306, 306]",ticks
+metric,TC6,fairness ratio min/max,1.0,
+metric,TC6,measured timer rate,96.7,Hz
+metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0192, ""shell"": 0.0, ""worker-a"": 0.4904, ""worker-b"": 0.4904}",
+metric,TC6,"worker CPU ticks (a, b)","[303, 303]",ticks
+metric,TC6,fairness ratio min/max,1.0,
+metric,TC6,measured timer rate,95.8,Hz
+metric,TC6,CPU share per task,"{""idle"": 0.0, ""status"": 0.0194, ""shell"": 0.0, ""worker-a"": 0.4903, ""worker-b"": 0.4903}",
+metric,TC6,fairness ratios,"[1.0, 1.0, 1.0]",
+metric,TC6,timer rates,"[96.7, 96.7, 95.8]",Hz
+metric,TC6,boot times (kernel uptime at shell start),"[2.428062, 2.29745, 2.403171]",s
+metric,TC6,timer-rate spread across repeats,0.96,%
+metric,TC6,boot-time spread across repeats,5.5,%
+metric,L4/L5,context switches in the window,1094,
+metric,L4/L5,switches per second,182.3,1/s
+metric,L4/L5,share of all switches caused by the timer,0.8236,
 metric,L4/L5,busy workers (task ids from ps),"[3, 4, 5, 6]",task ids
 metric,L4/L5,share of the workers' departures caused by the timer,1.0,
 metric,L4/L5,worker stretches that lasted exactly one tick (one 10 ms slice),1.0,
 metric,L4/L5,round-robin order repeats (fraction of turns that match one cycle earlier),1.0,
 metric,L4/L5,"scheduling latency of the workers, mean / max",3.07 / 4,ticks (10 ms each)
-metric,L6,context switches in the window (cooperative),26408,
-metric,L6,switches per second (cooperative),4401.3,1/s
-metric,L6,share of switches that were `yield`,0.9585,
-metric,L6,switch-rate ratio cooperative / timer-driven,24.0,x
+metric,L6,context switches in the window (cooperative),26586,
+metric,L6,switches per second (cooperative),4431.0,1/s
+metric,L6,share of switches that were `yield`,0.959,
+metric,L6,switch-rate ratio cooperative / timer-driven,24.3,x
 metric,L5,response time of the three jobs (first run after creation),"[2, 1, 0]",ticks
-metric,L5,"turnaround of the jobs of 150, 300, 600 units","[127, 216, 300]",ticks
-metric,L5,turnaround ratios 300:150 and 600:150 (measured),"[1.701, 2.362]",
+metric,L5,"turnaround of the jobs of 150, 300, 600 units","[127, 212, 297]",ticks
+metric,L5,turnaround ratios 300:150 and 600:150 (measured),"[1.669, 2.339]",
 metric,L5,turnaround ratios predicted by equal-share round robin,"[1.667, 2.333]",
-metric,L5,throughput,350.0,units/s
-metric,L5,time for one unit of work (from the longest job),2.86,ms per unit of work
-metric,L7,"without a lock: (expected, got, lost) per run","[(40000, 20000, 20000), (40000, 20000, 20000)]",
+metric,L5,throughput,353.5,units/s
+metric,L5,time for one unit of work (from the longest job),2.83,ms per unit of work
+metric,L7,"without a lock: (expected, got, lost) per run","[(40000, 20000, 20000), (40000, 20015, 19985)]",
 metric,L7,"with the lock: (expected, got, lost) per run","[(40000, 40000, 0), (40000, 40000, 0)]",
 metric,L7,share of additions lost without the lock,"[50.0, 50.0]",%
-metric,L8,"allocation time by size (KiB, microseconds)","[(1, 419), (64, 10), (1024, 8), (8192, 9), (16384, 6)]",
+metric,L8,"allocation time by size (KiB, microseconds)","[(1, 42), (64, 6), (1024, 4), (8192, 3), (16384, 31)]",
 metric,L8,heap capacity,32768,KiB
 metric,L8,heap utilization at rest,0 of 32768,KiB
-metric,size,kernel image (unsigned build),259072,bytes
+metric,size,kernel image (unsigned build),313344,bytes

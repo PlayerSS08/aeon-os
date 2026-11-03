@@ -1,6 +1,6 @@
 # Aeon: a micro-OS in Rust
 
-**CA-6 final technical report.** Project: Aeon 0.9.1, `G:\Aeon\OS`. Specialization: Security and Isolation (Track F). Team and individual roles: see `contribution-statement.md` (to be completed by the student).
+**CA-6 final technical report.** Project: Aeon 0.9.2, `G:\Aeon\OS`. Specialization: Security and Isolation (Track F). Team and individual roles: see `contribution-statement.md` (to be completed by the student).
 
 ## 1. Title
 
@@ -92,8 +92,8 @@ Tasks join the back of the ready queue when created, woken from sleep or from a 
 | Time slice | 100% of worker stretches last exactly one tick (10 ms) |
 | Why a worker leaves the CPU | 100% timer |
 | Scheduling latency | Mean 3.07 ticks, max 4 (4 workers: expected about 3) |
-| Share of CPU | 1/n each (98.2%, 49.0%, 19.6% to 19.8%, 10.9% for 1, 2, 5, 9 busy tasks); fairness ratio (smallest share over largest) 1.000, 0.992 and 0.986 for 2, 5 and 9 tasks |
-| Cooperative alternative | `spawn coop`: 95.9% of switches are `yield`, 4401 switches per second against 183, 24 times more, because the tick no longer limits them |
+| Share of CPU | 1/n each (98.1%, 49.0%, 19.6% to 19.8%, 10.9% for 1, 2, 5, 9 busy tasks); fairness ratio (smallest share over largest) 1.000, 0.992 and 0.986 for 2, 5 and 9 tasks |
+| Cooperative alternative | `spawn coop`: 95.9% of switches are `yield`, 4431 switches per second against 182, 24 times more, because the tick no longer limits them |
 | Task completion | Jobs of 150, 300, 600 units end in that order; turnaround 127, 216, 300 ticks; ratios 1.701 and 2.362 against 1.667 and 2.333 predicted; response time at most 2 ticks; finished jobs leave the task table |
 
 ## 10. Synchronization
@@ -139,7 +139,7 @@ See `performance.md`. Metrics requested by the assignment and what was done with
 
 | Metric | Measured | Value |
 |---|---|---|
-| Task-switch count | yes | 183 per second timer-driven, 4401 per second cooperative |
+| Task-switch count | yes | 182 per second timer-driven, 4431 per second cooperative |
 | Scheduling latency | yes | mean 3.07 ticks, max 4 |
 | Response time | yes | at most 2 ticks for three simultaneous jobs |
 | Throughput | yes | 350 work units per second (about 2.9 ms per unit in QEMU) |

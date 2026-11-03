@@ -1,6 +1,6 @@
 # Aeon: performance data (CA-6)
 
-Source of every number: `evidence/results.csv`, produced by `tests/ca6_evidence.py` on the 0.9.1 build in QEMU with software emulation (so ratios, orders and counts matter; absolute speeds do not).
+Source of every number: `evidence/results.csv`, produced by `tests/ca6_evidence.py` on the 0.9.2 build in QEMU with software emulation (so ratios, orders and counts matter; absolute speeds do not).
 
 ## 1. Scheduler: the trace
 
@@ -10,7 +10,7 @@ Four busy workers, 6 s, read back from the kernel's own scheduler trace by the P
 
 | Property | Result | Meaning |
 |---|---|---|
-| Switches per second | 183 | About 100 timer switches plus the short visits of `shell` and `status` |
+| Switches per second | 182 | About 100 timer switches plus the short visits of `shell` and `status` |
 | Why a worker left the CPU | 100% timer | Workers never yield, so only the timer can take the CPU |
 | Time slice | 100% of worker stretches last exactly 1 tick | The slice is 10 ms |
 | Order | 100% of turns match the turn one cycle earlier | Round robin takes turns in a fixed cycle |
@@ -22,8 +22,8 @@ Four busy workers, 6 s, read back from the kernel's own scheduler trace by the P
 
 | Workers | Switches per second | Share that were `yield` | Share that were timer |
 |---|---|---|---|
-| `spawn` (never yield) | 183 | 0% | 82% of all switches (906 of 1099); the other 18% are `shell` and `status` going back to sleep; 100% of the workers' own departures |
-| `spawn coop` (yield after a little work) | 4401 | 95.9% (25312 of 26408) | 2.7% (722); sleep 1.4% (374) |
+| `spawn` (never yield) | 182 | 0% | 82% of all switches (901 of 1094); the other 18% are `shell` and `status` going back to sleep; 100% of the workers' own departures |
+| `spawn coop` (yield after a little work) | 4431 | 95.9% (about 25,500 of 26,586) | 2.7% (722); sleep 1.4% (374) |
 
 The cooperative workers switch 24 times as often because nothing makes them wait for the 10 ms tick. They are also at the mercy of each other: one that stopped yielding would hold the CPU until the timer took it, which is why a timer is needed at all.
 
@@ -34,8 +34,8 @@ The cooperative workers switch 24 times as often because nothing makes them wait
 
 | Configuration | Busy tasks | Share of one busy task | Fairness (smallest over largest) |
 |---|---|---|---|
-| TC3: one worker | 1 | 98.2% | n/a |
-| TC1: two workers | 2 | 49.0% each | 1.000 (306 and 306 ticks); the three TC6 repeats gave 304 and 305, ratio 0.997 |
+| TC3: one worker | 1 | 98.1% | n/a |
+| TC1: two workers | 2 | 49.0% each | 1.000 (306 and 306 ticks); the three TC6 repeats gave 306/306, 306/306 and 303/303, ratio 1.000 |
 | TC2: four workers and one ring-3 task | 5 | 19.6% to 19.8% | 0.992 |
 | TC4: eight workers and one ring-3 task | 9 | 10.9% | 0.986 |
 
@@ -53,7 +53,7 @@ With `n` equal busy tasks each receives about `1/n` less the 1.6% to 1.9% the `s
 | 300 | at most 2 ticks | 216 ticks | 1.667 | 1.701 |
 | 600 | at most 2 ticks | 300 ticks | 2.333 | 2.362 |
 
-The prediction is the "fluid" model of equal-share round robin: with three jobs the shortest needs 3 x 150 = 450 unit-times, the next 450 + 2 x 150 = 750, the last 750 + 1 x 300 = 1050. The measured ratios are within 2.5% of it (1.701 against 1.667, 2.362 against 2.333). Throughput was 350 units per second; one unit of work (20,000 spins) takes about 2.9 ms in QEMU. Finished jobs leave the task table and the ready queue stays consistent.
+The prediction is the "fluid" model of equal-share round robin: with three jobs the shortest needs 3 x 150 = 450 unit-times, the next 450 + 2 x 150 = 750, the last 750 + 1 x 300 = 1050. The measured ratios are within 0.2% of it (1.669 against 1.667, 2.339 against 2.333). Throughput was 353 units per second; one unit of work (20,000 spins) takes about 2.8 ms in QEMU. Finished jobs leave the task table and the ready queue stays consistent.
 
 ## 5. The shared-counter race (layer 7)
 
@@ -62,7 +62,7 @@ The prediction is the "fluid" model of equal-share round robin: with three jobs 
 | Run | Expected | Got | Lost |
 |---|---|---|---|
 | no lock, run 1 | 40000 | 20000 | 50% |
-| no lock, run 2 | 40000 | 20000 | 50% |
+| no lock, run 2 | 40000 | 20015 | 50% |
 | with spinlock, run 1 | 40000 | 40000 | 0 |
 | with spinlock, run 2 | 40000 | 40000 | 0 |
 
@@ -75,10 +75,10 @@ The loss is exactly half because the emulator is deterministic: when a racer is 
 
 | Measure | Value |
 |---|---|
-| Free frames before and after the TC4 stress | 55124 and 55124 |
+| Free frames before and after the TC4 stress | 55086 and 55086 |
 | Heap used: start, with 20 files, after removing them | 0, 2, 1 KiB |
 | One-time ring-3 window | 16 frames (64 KiB), allocated at the first `run`, kept and reused |
-| Allocation time for 1, 64, 1024, 8192, 16384 KiB | 419, 10, 8, 9, 6 microseconds |
+| Allocation time for 1, 64, 1024, 8192, 16384 KiB | 42, 6, 4, 3, 31 microseconds |
 | Refused request (`alloc 99999999`) | refused; heap used and hole count unchanged |
 
 Allocation time does not grow with size because first-fit takes a free hole without touching the memory. The first call is slower; the cause was not investigated.
@@ -88,8 +88,8 @@ Allocation time does not grow with size because first-fit takes a free hole with
 | Measure | Value |
 |---|---|
 | Nominal tick rate | 100 Hz |
-| Measured tick rate, three repeats | 96.2, 96.2, 96.2 Hz (spread 0.0%) |
-| Kernel uptime when the shell starts | 3.23, 3.25, 3.26 s (spread 1.08%); about 2 s of it is the boot-menu wait |
+| Measured tick rate, three repeats | 96.7, 96.7, 95.8 Hz (spread 0.96%) |
+| Kernel uptime when the shell starts | 2.43, 2.30, 2.40 s (spread 5.5%) |
 | Unsigned image | 259,072 bytes |
 | Source | about 15,300 lines of Rust without the generated font data |
 

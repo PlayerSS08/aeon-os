@@ -169,7 +169,7 @@ Text is drawn with smooth fonts rasterised ahead of time by `tools/genfont.py` (
 
 ### Screenshots
 
-Taken by the boot tests (`target/test-shots/`) from the 0.9.1 build in QEMU at 1280x800.
+Taken by the boot tests (`target/test-shots/`) from the 0.9.2 build in QEMU.
 
 | Splash | Dawn boot menu | Shell |
 |---|---|---|

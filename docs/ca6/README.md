@@ -1,6 +1,6 @@
 # CA-6 submission package: Aeon, a Rust micro-OS
 
-Assignment: *CA6 Rust Micro-OS Engineering Project* (Operating System Concepts, 15 marks). Specialization: Security and Isolation (Track F). Build: Aeon 0.9.1.
+Assignment: *CA6 Rust Micro-OS Engineering Project* (Operating System Concepts, 15 marks). Specialization: Security and Isolation (Track F). Build: Aeon 0.9.2.
 
 ## The submission package (assignment section 42)
 

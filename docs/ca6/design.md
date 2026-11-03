@@ -1,6 +1,6 @@
 # Aeon: design document (CA-6)
 
-This document explains the choices behind each mechanism, what was rejected, and where the risky (`unsafe`) code lives. Numbers come from the 0.9.1 source tree.
+This document explains the choices behind each mechanism, what was rejected, and where the risky (`unsafe`) code lives. Numbers come from the 0.9.2 source tree.
 
 ## 1. Design principles
 

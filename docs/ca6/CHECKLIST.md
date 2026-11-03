@@ -4,7 +4,7 @@
 
 ## A. The ten layers
 
-- [x] **1 Boot**: kernel starts, prints, stays up. Proof: boot test group `boot`; M1, kernel at the shell in 3.27 s
+- [x] **1 Boot**: kernel starts, prints, stays up. Proof: boot test group `boot`; M1, kernel at the shell in 2.37 s
 - [x] **2 Console and diagnostics**: information, warning/error, structured messages. Proof: `log`, `info`; M2
 - [x] **3 Task representation**: id, state, context, stack, ticks. Proof: `ps`; TC1, TC2
 - [x] **4 Ready queue**: insert, select, remove, order. Proof: `src/readyq.rs` (7 tests, 5000 random operations), `queue` command
@@ -26,9 +26,9 @@
 - [x] TC1 minimum configuration (two workers, fairness 1.000)
 - [x] TC2 multiple tasks (5 runnable, fairness 0.992, blocked task uses 0 CPU)
 - [x] TC3 boundary (lone worker 98.2%, bad `kill` arguments refused)
-- [x] TC4 stress (9 busy tasks, no frame leak: 55124 before and after)
+- [x] TC4 stress (9 busy tasks, no frame leak: 55086 before and after)
 - [x] TC5 failure (12 hostile requests contained)
-- [x] TC6 repeatability (3 fresh boots, timer-rate spread 0.0%, boot-time spread 1.08%)
+- [x] TC6 repeatability (3 fresh boots, timer-rate spread 0.96%, boot-time spread 5.5%)
 
 ## D. Metrics
 
@@ -66,14 +66,15 @@
 - [ ] Real hardware boot
 - [ ] Push to GitHub (never done without your word)
 
-## I. After 0.9.1: what changed and what is re-proved (2026-11-03)
+## I. After 0.9.1: what changed and what is re-proved (2026-11-03, done)
 
-The numbers in sections A to D come from the 0.9.1 evidence run. Build 0.9.2 adds work that is **not** part of that run and is not needed for the assignment's core requirements:
+The numbers in sections A to D now come from the 0.9.2 evidence run (111 passed, 0 failed). Build 0.9.2 also adds work that the assignment's core requirements do not need:
 
 - [x] Dawn boot menu: 15 s countdown, arrow keys and Enter only, the countdown never freezes, unsafe entries fall back to booting Aeon (12 unit tests, QEMU group `dawn` 19 of 19)
 - [x] Apple-like menu and stop screen, colours checked for contrast (`src/palette.rs`)
-- [x] Full-screen `edit`, folder prompt, 1024-character lines, `write` refuses to replace without `-f`, 14 new commands (373 unit tests in all)
+- [x] Full-screen `edit`, folder prompt, 1024-character lines, `write` refuses to replace without `-f`, 14 new commands (375 unit tests in all)
 - [x] xHCI USB keyboard, AHCI SATA disk (read only), ELF parser (not used by the kernel yet): QEMU only
-- [ ] Re-run the evidence run (`tests/ca6_evidence.py`) on 0.9.2 so the numbers in `test-results.md` and `performance.md` match the shipped build (needs free memory; not started)
-- [ ] Re-run the whole QEMU suite after the editor work; the groups `editor`, `workflow`, `sweep` and `power` are written but not yet run
-- [ ] Change "0.9.1" to "0.9.2" in the package once the evidence is refreshed
+- [x] Evidence run (`tests/ca6_evidence.py`) repeated on 0.9.2; `test-results.md`, `performance.md` and the final report carry the new numbers
+- [x] QEMU groups `editor` 25/25, `workflow` 61/61, `sweep` 72/72, `power` 8/8, `user` 17/17 all pass on 0.9.2 (the full suite was last run in full on 0.9.1)
+- [x] Syscall allow-list (security item S7): every built-in program may only make the calls it needs; `run denied` proves a refused call
+- [x] "0.9.1" changed to "0.9.2" in the package

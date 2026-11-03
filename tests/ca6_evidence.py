@@ -333,13 +333,13 @@ def tc5(ctx, out):
             ("run gp", "#GP"),
             ("run badcall", "exited with code 0"),
             ("cat nothere", "no such file"),
-            ("write", "bad name"),
+            ("write", "usage: write"),
             ("write a/b x", "no such folder"),
             ("rmdir nosuch", "no such folder"),
             ("rm nothere", "no such file"),
             ("sort 5 a", "not a number"),
             ("hlep", "Did you mean `help`"),
-            ("dread 99999", "no disk"),
+            ("dread 99999999", "read failed"),
         ]
         for cmd, expect in cases:
             o = s.run(cmd)
