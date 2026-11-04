@@ -122,7 +122,7 @@ pub fn find_mass_storage(config_desc: &[u8]) -> Option<MassStorage> {
                 let ep_num = e[2] & 0x0F;
                 let max_packet = u16::from_le_bytes([e[4], e[5]]) & 0x07FF;
                 if e[2] & 0x80 != 0 {
-                    ep_in = Some((ep_num, max_packet));
+                    ep_in = Some((e[2], max_packet));
                 } else {
                     ep_out = Some((ep_num, max_packet));
                 }
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(find_mass_storage(&FLASH_DRIVE), Some(MassStorage {
             config: 1,
             interface: 0,
-            ep_in: 1,
+            ep_in: 0x81,
             max_packet_in: 512,
             ep_out: 2,
             max_packet_out: 512,

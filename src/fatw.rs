@@ -206,14 +206,14 @@ impl Fat32Writer {
 
     /// Opens the first FAT32 volume labelled `AEON` on the disk: at sector 0, or inside an MBR or GPT partition.
     pub fn open_any(dev: &mut dyn BlockWrite) -> Result<(Fat32Writer, u64), WriteError> {
-        let first_err = match Fat32Writer::open(dev, 0) {
+        let mut best_err = match Fat32Writer::open(dev, 0) {
             Ok(w) => return Ok((w, 0)),
             Err(e) => e,
         };
         let mut s = [0u8; SECTOR_SIZE];
         dev.read(0, &mut s)?;
         if s[510] != 0x55 || s[511] != 0xAA {
-            return Err(first_err);
+            return Err(best_err);
         }
         let mut gpt = false;
         for i in 0..4 {
@@ -223,8 +223,11 @@ impl Fat32Writer {
                 0xEE => gpt = true,
                 _ => {
                     let start = u64::from(le32(e, 8));
-                    if let Ok(w) = Fat32Writer::open(dev, start) {
-                        return Ok((w, start));
+                    match Fat32Writer::open(dev, start) {
+                        Ok(w) => return Ok((w, start)),
+                        Err(e @ WriteError::NotWritable(Reason::WrongLabel)) => best_err = e,
+                        Err(e) if matches!(best_err, WriteError::NotWritable(Reason::NotFat32)) => best_err = e,
+                        Err(_) => {}
                     }
                 }
             }
@@ -246,14 +249,17 @@ impl Fat32Writer {
                             continue;
                         }
                         let start = u64::from_le_bytes(e[32..40].try_into().unwrap_or([0; 8]));
-                        if let Ok(w) = Fat32Writer::open(dev, start) {
-                            return Ok((w, start));
+                        match Fat32Writer::open(dev, start) {
+                            Ok(w) => return Ok((w, start)),
+                            Err(e @ WriteError::NotWritable(Reason::WrongLabel)) => best_err = e,
+                            Err(e) if matches!(best_err, WriteError::NotWritable(Reason::NotFat32)) => best_err = e,
+                            Err(_) => {}
                         }
                     }
                 }
             }
         }
-        Err(first_err)
+        Err(best_err)
     }
 
     /// Bytes in one cluster.

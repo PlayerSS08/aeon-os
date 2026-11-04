@@ -31,10 +31,11 @@ pub fn rel_path(path: &str) -> &str {
 
 /// Checks safety rules before any write operation.
 pub fn check_write_safety(rel: &str) -> Result<(), &'static str> {
-    if rel.is_empty() {
+    let clean = rel.trim_matches('/');
+    if clean.is_empty() {
         return Err("cannot operate on volume root as a file");
     }
-    let first = rel.split('/').next().unwrap_or("");
+    let first = clean.split('/').next().unwrap_or("");
     if first.eq_ignore_ascii_case("EFI") {
         return Err("writing inside EFI is prohibited");
     }
@@ -242,8 +243,15 @@ mod tests {
     fn efi_protection() {
         assert_eq!(check_write_safety("EFI/boot.efi"), Err("writing inside EFI is prohibited"));
         assert_eq!(check_write_safety("efi/boot.efi"), Err("writing inside EFI is prohibited"));
+        assert_eq!(check_write_safety("/efi/boot.efi"), Err("writing inside EFI is prohibited"));
+        assert_eq!(check_write_safety("//EFI/boot.efi"), Err("writing inside EFI is prohibited"));
         assert_eq!(check_write_safety("EFI"), Err("writing inside EFI is prohibited"));
+        assert_eq!(check_write_safety("/EFI"), Err("writing inside EFI is prohibited"));
+        assert_eq!(check_write_safety("EFI/"), Err("writing inside EFI is prohibited"));
+        assert_eq!(check_write_safety(""), Err("cannot operate on volume root as a file"));
+        assert_eq!(check_write_safety("/"), Err("cannot operate on volume root as a file"));
         assert!(check_write_safety("docs/note.txt").is_ok());
+        assert!(check_write_safety("/docs/note.txt").is_ok());
     }
 
     #[test]

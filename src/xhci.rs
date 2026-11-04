@@ -169,10 +169,11 @@ impl BlockDev for XhciDisk {
             let chunk_sectors = rem_sectors.min(MAX_SECTORS as u64) as u16;
             let chunk_bytes = usize::from(chunk_sectors) * SECTOR_SIZE;
 
+            let lba32 = u32::try_from(cur_lba).map_err(|_| BlockError::BadRequest)?;
             // SAFETY: rule A.
             let x = unsafe { XHCI.get() }.as_mut().ok_or(BlockError::NoDevice)?;
             let tag = x.next_storage_tag()?;
-            let cbw = usbmsd::scsi_read_10(tag, 0, cur_lba as u32, chunk_sectors, SECTOR_SIZE as u32)
+            let cbw = usbmsd::scsi_read_10(tag, 0, lba32, chunk_sectors, SECTOR_SIZE as u32)
                 .map_err(|_| BlockError::BadRequest)?;
             let bounce = x.storage.as_ref().ok_or(BlockError::NoDevice)?.bounce;
             x.storage_transfer(&cbw, bounce)?;
@@ -199,10 +200,11 @@ impl BlockWrite for XhciDisk {
             let chunk_sectors = rem_sectors.min(MAX_SECTORS as u64) as u16;
             let chunk_bytes = usize::from(chunk_sectors) * SECTOR_SIZE;
 
+            let lba32 = u32::try_from(cur_lba).map_err(|_| BlockError::BadRequest)?;
             // SAFETY: rule A.
             let x = unsafe { XHCI.get() }.as_mut().ok_or(BlockError::NoDevice)?;
             let tag = x.next_storage_tag()?;
-            let cbw = usbmsd::scsi_write_10(tag, 0, cur_lba as u32, chunk_sectors, SECTOR_SIZE as u32)
+            let cbw = usbmsd::scsi_write_10(tag, 0, lba32, chunk_sectors, SECTOR_SIZE as u32)
                 .map_err(|_| BlockError::BadRequest)?;
             let bounce = x.storage.as_ref().ok_or(BlockError::NoDevice)?.bounce;
 
@@ -686,7 +688,13 @@ impl Xhci {
         }
         s.out_ring.enqueue(Trb::normal(cbw_buf, 31)).ok_or(BlockError::Io)?;
         wr32(self.db + 4 * u64::from(slot), u32::from(dci_out));
-        let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_out, 2000).ok_or(BlockError::Timeout)?;
+        let event = match self.wait_for(TRB_TRANSFER_EVENT, slot, dci_out, 2000) {
+            Some(ev) => ev,
+            None => {
+                self.storage_reset_recovery();
+                return Err(BlockError::Timeout);
+            }
+        };
         let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
         s.out_ring.retire();
         let code = event.completion_code();
@@ -701,7 +709,13 @@ impl Xhci {
                 let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
                 s.in_ring.enqueue(Trb::normal(data_phys, cbw.data_len)).ok_or(BlockError::Io)?;
                 wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
-                let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 5000).ok_or(BlockError::Timeout)?;
+                let event = match self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 5000) {
+                    Some(ev) => ev,
+                    None => {
+                        self.storage_reset_recovery();
+                        return Err(BlockError::Timeout);
+                    }
+                };
                 let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
                 s.in_ring.retire();
                 let code = event.completion_code();
@@ -712,7 +726,13 @@ impl Xhci {
                 let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
                 s.out_ring.enqueue(Trb::normal(data_phys, cbw.data_len)).ok_or(BlockError::Io)?;
                 wr32(self.db + 4 * u64::from(slot), u32::from(dci_out));
-                let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_out, 5000).ok_or(BlockError::Timeout)?;
+                let event = match self.wait_for(TRB_TRANSFER_EVENT, slot, dci_out, 5000) {
+                    Some(ev) => ev,
+                    None => {
+                        self.storage_reset_recovery();
+                        return Err(BlockError::Timeout);
+                    }
+                };
                 let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
                 s.out_ring.retire();
                 let code = event.completion_code();
@@ -731,7 +751,13 @@ impl Xhci {
         }
         s.in_ring.enqueue(Trb::normal(csw_buf, 13)).ok_or(BlockError::Io)?;
         wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
-        let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 2000).ok_or(BlockError::Timeout)?;
+        let event = match self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 2000) {
+            Some(ev) => ev,
+            None => {
+                self.storage_reset_recovery();
+                return Err(BlockError::Timeout);
+            }
+        };
         let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
         s.in_ring.retire();
         let code = event.completion_code();
@@ -740,7 +766,13 @@ impl Xhci {
             let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
             s.in_ring.enqueue(Trb::normal(csw_buf, 13)).ok_or(BlockError::Io)?;
             wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
-            let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 2000).ok_or(BlockError::Timeout)?;
+            let event = match self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 2000) {
+                Some(ev) => ev,
+                None => {
+                    self.storage_reset_recovery();
+                    return Err(BlockError::Timeout);
+                }
+            };
             let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
             s.in_ring.retire();
             let code = event.completion_code();

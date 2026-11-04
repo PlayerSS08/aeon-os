@@ -1020,3 +1020,17 @@ fn open_any_finds_volume_at_root_or_in_mbr() {
     assert_eq!(base, 63);
     assert_eq!(w.root_cluster(), 2);
 }
+
+#[test]
+fn open_any_preserves_wrong_label_error_on_partitioned_disk() {
+    const OTHER: [u8; 11] = *b"OTHER      ";
+    let vol = mkimg(OTHER, 100, 1);
+    let mut mbr = vec![0u8; 63 * SECTOR_SIZE];
+    mbr.extend_from_slice(&vol);
+    mbr[446 + 4] = 0x0C; // FAT32 LBA
+    mbr[446 + 8..446 + 12].copy_from_slice(&63u32.to_le_bytes());
+    mbr[510] = 0x55;
+    mbr[511] = 0xAA;
+    let mut d = MemDiskMut(&mut mbr);
+    assert_eq!(Fat32Writer::open_any(&mut d).err(), Some(WriteError::NotWritable(Reason::WrongLabel)));
+}

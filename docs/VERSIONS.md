@@ -1,11 +1,11 @@
-# Versions of everything Aeon uses (checked 2026-11-03)
+# Versions of everything Aeon uses (checked 2026-11-04)
 
 Every file with its date and version is in [INVENTORY.md](INVENTORY.md) (made by `tools/inventory.py`).
 Aeon has **no third-party Rust crates**: `Cargo.lock` lists only `aeon` itself, so there is nothing to update there.
 
 | Part | Was | Now | Newest found | State |
 |---|---|---|---|---|
-| Aeon | 0.9.1 (signed `usb/`) | **0.9.2 (signed `usb/`)** | 0.9.2 | released; evidence run repeated |
+| Aeon | 0.9.1 (signed `usb/`) | **0.9.2 (signed `usb/`)** | 0.9.3 ready (USB pendrive storage implemented) | ready for release |
 | Rust compiler and cargo | 1.99.0 | **1.99.1** | 1.99.1 | upgraded |
 | Rust nightly (Miri) | 1.101.0-nightly, 2026-10-29 | **2026-11-02** | 2026-11-02 | upgraded |
 | Rust edition | 2021 | **2024** | 2024 | upgraded (`cargo fix --edition`, 15 lines) |

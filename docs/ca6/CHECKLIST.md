@@ -77,4 +77,5 @@ The numbers in sections A to D now come from the 0.9.2 evidence run (111 passed,
 - [x] Evidence run (`tests/ca6_evidence.py`) repeated on 0.9.2; `test-results.md`, `performance.md` and the final report carry the new numbers
 - [x] QEMU groups `editor` 25/25, `workflow` 61/61, `sweep` 72/72, `power` 8/8, `user` 17/17 all pass on 0.9.2 (the full suite was last run in full on 0.9.1)
 - [x] Syscall allow-list (security item S7): every built-in program may only make the calls it needs; `run denied` proves a refused call
+- [x] USB mass-storage (BOT + SCSI), xHCI bulk endpoints, write-back cache, and `/usb` shell integration with FAT32 writing (`fatw.rs`, `usbmsd.rs`, `bcache.rs`, `usbfs.rs`), safety rules enforced (label AEON, EFI protected); QEMU pendrive test group (37 of 37 passed)
 - [x] "0.9.1" changed to "0.9.2" in the package
