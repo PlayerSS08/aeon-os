@@ -10,11 +10,11 @@ A pure-Rust, `no_std`, zero-dependency UEFI x86_64 micro-OS. Kernel is called Ne
 
 | Task | Command (from `G:\Aeon\OS`, Git Bash) |
 |---|---|
-| Host unit tests (375) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
+| Host unit tests (454) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
 | Clippy | `cargo clippy --release -- -D warnings` and `cargo clippy --target x86_64-pc-windows-gnu --lib -- -D warnings` |
 | Release build | `cargo build --release` (output `target\x86_64-unknown-uefi\release\aeon.efi`) |
 | Full test run (about 10 min, lint + host tests + QEMU boot tests in WSL Ubuntu) | `bash tests/run.sh` (run it detached and wait; it exceeds a 10 min tool limit). One test: `bash tests/run.sh -k console` |
-| Latest result | 2026-11-03, 0.9.2: 375 host tests; QEMU groups editor 25, workflow 61, sweep 72, power 8, user 17, release 5, all passed; CA-6 evidence run 111 passed, 0 failed. The last run of the whole suite was 359 on 0.9.1 |
+| Latest result | 2026-11-04, 0.9.2: 454 host tests; QEMU groups pendrive 37, sweep 73, usb 13, editor 25, workflow 61, power 8, user 17, release 5, all passed; tools/fatw-check.sh 38 paths verified clean with fsck.vfat. |
 | See Aeon in a QEMU window | `powershell -ExecutionPolicy Bypass -File tools\run-qemu.ps1 -Build -Disk` |
 | Signed release for the pendrive | `bash tools/release.sh` (builds with reproducible flags, signs in WSL with the key in `~/.aeon-keys`, rewrites `usb/`) |
 | Tester's checklist | `G:\AEON-TEST-GUIDE.md` |
@@ -25,7 +25,7 @@ Boot-test screenshots land in `target\test-shots\` (the console test saves `cons
 
 - Commit with `git -c user.name="Scrooge-777" -c user.email="318593710+Scrooge-777@users.noreply.github.com" commit ...` (the shell has no git identity; do not change git config).
 - Do not push unless the owner asks.
-- Latest commits: `274fab4` signed `usb/` refresh, `80919c6` Up/Down scroll, `6247a6a` line editing, `499c228` scrollback and grouped help.
+- Latest commits: `687e232` USB mass storage BOT + SCSI logic (`usbmsd.rs`), `ebc4733` FAT32 writer (`fatw.rs`).
 
 ## State of the pendrive
 
@@ -35,13 +35,13 @@ Boot-test screenshots land in `target\test-shots\` (the console test saves `cons
 
 - Boot: signed image, Secure Boot, TPM measured boot (PCR 11 and 12), event-log replay, SBAT, boot counting and recovery mode, Dawn menu, splash.
 - Kernel: W^X paging to 1 TiB, SMEP/SMAP/UMIP, GDT/TSS/IDT with IST stacks, preemptive round-robin scheduler at 100 Hz, wait queues, SpinLock (used on 2 statics), ring 3 via syscall/sysret (5 built-in programs), LAPIC timer (PIT fallback), ACPI MADT, PCI scan, virtio-blk, read-only FAT16/FAT32.
-- Console and shell: smooth fonts (Inter, JetBrains Mono), 512-line scrollback, Up/Down/PgUp/PgDn scroll, Ctrl+Home/End, block cursor, line editing (Left/Right/Home/End/Delete, Ctrl+A/E/B/F/U/K/W/D), Tab completion, Ctrl+Up/Down or Ctrl+P/N command history (last 8), did-you-mean, aliases (cls, dir, ver, man, free, uname, history), grouped `help`, `help <cmd>`, `help all`. The command table is `src/cmdhelp.rs`; a unit test checks it matches what `src/shell.rs` dispatches.
-- RAM file system with folders (`mkdir cd pwd tree rmdir`, paths up to 128 characters, `.` and `..`), many-line files (`edit <file>` ends on a lone `.`, `append`, `
-` escapes in `write`). Nothing is kept after a reboot.
+- Storage: FAT32 writer (`fatw.rs`), USB mass-storage Bulk-Only Transport (BOT) and SCSI driver (`usbmsd.rs`), xHCI bulk endpoints (`xhci.rs`), 64-slot write-back block cache with dirty flush (`bcache.rs`), `sync` on shell command, reboot, and shutdown.
+- Filesystems: RAM disk, and pendrive FAT32 volume mounted at `/usb` (`usbfs.rs`) with safety rules (only `AEON` label writable, `EFI/` path write protected, bounds validation).
+- Console and shell: smooth fonts (Inter, JetBrains Mono), 512-line scrollback, Up/Down/PgUp/PgDn scroll, Ctrl+Home/End, block cursor, line editing (Left/Right/Home/End/Delete, Ctrl+A/E/B/F/U/K/W/D), Tab completion, Ctrl+Up/Down or Ctrl+P/N command history (last 8), did-you-mean, aliases (cls, dir, ver, man, free, uname, history), grouped `help`, `help <cmd>`, `help all`. The command table is `src/cmdhelp.rs`; a unit test checks it matches what `src/shell.rs` dispatches. Shell commands (`ls`, `cat`, `write`, `append`, `edit`, `rm`, `cp`, `mv`, `mkdir`, `rmdir`, `touch`, `tree`, `find`, `head`, `tail`, `wc`, `grep`, `hexdump`, `df`, `sync`) work transparently across RAM and `/usb`.
 
 ## Not built yet
 
-ELF loader and per-process address spaces (apps from files), USB (xHCI) keyboard and mouse, NVMe/AHCI, networking, disk writes, IOAPIC and device interrupts, SMP, desktop, AI service, tickless idle and priority classes.
+ELF loader and per-process address spaces (apps from files), USB mouse, NVMe/AHCI, networking, IOAPIC and device interrupts, SMP, desktop, AI service, tickless idle and priority classes.
 
 ## The plan: read the research report
 

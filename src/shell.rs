@@ -23,6 +23,7 @@ use crate::ramfs::{resolve, unescape, FsError, RamFs, MAX_NAME, MAX_PATH};
 use crate::sched;
 use crate::spin::SpinLock;
 use crate::textcmd;
+use crate::usbfs;
 use crate::usermode;
 
 struct Out;
@@ -415,6 +416,10 @@ fn cmd_usb() {
         Some(p) => out!("USB keyboard: in use on port {}\n", p),
         None => out!("USB keyboard: none set up\n"),
     }
+    match s.storage_port {
+        Some(p) => out!("USB storage: in use on port {}\n", p),
+        None => out!("USB storage: none set up\n"),
+    }
     let mut connected = 0;
     crate::xhci::for_each_port(|n, portsc| {
         if portsc & crate::xhcireg::PORT_CONNECTED != 0 {
@@ -741,8 +746,21 @@ fn cmd_pwd() {
 
 fn cmd_cd(arg: &str) {
     let Some(p) = folder_arg(if arg.is_empty() { "/" } else { arg }) else { return };
-    if fs().is_dir(&p) {
-        *cwd() = if p == "/" { String::new() } else { p };
+    if p == "/" {
+        cwd().clear();
+        return;
+    }
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if usbfs::hw_is_dir(rel) {
+            *cwd() = p;
+        } else if usbfs::hw_read(rel, 1).is_ok() {
+            fs_error(FsError::NotDir, arg);
+        } else {
+            out!("no such folder '{}'\n", arg);
+        }
+    } else if fs().is_dir(&p) {
+        *cwd() = p;
     } else if fs().read(&p).is_some() {
         fs_error(FsError::NotDir, arg);
     } else {
@@ -752,19 +770,48 @@ fn cmd_cd(arg: &str) {
 
 fn cmd_mkdir(arg: &str) {
     let Some(p) = path_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        match usbfs::hw_mkdir(rel) {
+            Ok(()) => out!("made folder {}\n", p),
+            Err(why) => out!("cannot make folder '{}': {}\n", arg, why),
+        }
+        return;
+    }
     match fs().mkdir(&p) {
         Ok(()) => out!("made folder {}\n", p),
         Err(e) => fs_error(e, arg),
     }
 }
 
+fn is_dir_path(p: &str) -> bool {
+    if usbfs::is_usb(p) {
+        usbfs::hw_is_dir(usbfs::rel_path(p))
+    } else {
+        fs().is_dir(p)
+    }
+}
+
 fn cmd_rmdir(arg: &str) {
     let Some(p) = path_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        match usbfs::hw_remove_dir(rel) {
+            Ok(()) => {
+                out!("removed folder {}\n", p);
+                if !cwd().is_empty() && (cwd().as_str() == p || cwd().starts_with(&alloc::format!("{p}/"))) {
+                    cwd().clear();
+                }
+            }
+            Err(why) => out!("cannot remove folder '{}': {}\n", arg, why),
+        }
+        return;
+    }
     match fs().rmdir(&p) {
         Ok(()) => {
             out!("removed folder {}\n", p);
             // Never leave the shell standing in a folder that no longer exists.
-            if !fs().is_dir(cwd().as_str()) && !cwd().is_empty() {
+            if !is_dir_path(cwd().as_str()) && !cwd().is_empty() {
                 cwd().clear();
             }
         }
@@ -774,6 +821,34 @@ fn cmd_rmdir(arg: &str) {
 
 fn cmd_ls(arg: &str) {
     let Some(p) = folder_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if usbfs::hw_is_dir(rel) {
+            let mut n = 0;
+            let res = usbfs::hw_list(rel, |e| {
+                if e.is_dir {
+                    out!("{:>8}  {}/\n", "<dir>", e.name());
+                } else {
+                    out!("{:>8}  {}\n", e.size, e.name());
+                }
+                n += 1;
+            });
+            match res {
+                Ok(()) => {
+                    if n == 0 {
+                        out!("(empty folder)\n");
+                    }
+                }
+                Err(why) => out!("cannot list '{}': {}\n", arg, why),
+            }
+        } else {
+            match usbfs::hw_read(rel, 1024 * 1024) {
+                Ok(d) => out!("{:>8}  {}\n", d.len(), arg),
+                Err(_) => out!("no such folder '{}'\n", arg),
+            }
+        }
+        return;
+    }
     if !fs().is_dir(&p) {
         match fs().read(&p) {
             Some(d) => out!("{:>8}  {}\n", d.len(), arg),
@@ -782,6 +857,10 @@ fn cmd_ls(arg: &str) {
         return;
     }
     let mut n = 0;
+    if p == "/" && crate::xhci::has_storage() {
+        out!("{:>8}  usb/\n", "<dir>");
+        n += 1;
+    }
     for (name, size) in fs().list(&p) {
         match size {
             Some(s) => out!("{:>8}  {}\n", s, name),
@@ -812,14 +891,47 @@ fn print_tree(dir: &str, indent: usize, depth: usize) {
     }
 }
 
+fn print_usb_tree(rel: &str, indent: usize, depth: usize) {
+    if depth >= 16 {
+        return;
+    }
+    let mut entries: Vec<(String, bool, usize)> = Vec::new();
+    let _ = usbfs::hw_list(rel, |e| {
+        entries.push((String::from(e.name()), e.is_dir, e.size as usize));
+    });
+    for (name, is_dir, size) in entries {
+        if is_dir {
+            out!("{:indent$}{}/\n", "", name, indent = indent);
+            let child = if rel.is_empty() { name } else { alloc::format!("{rel}/{name}") };
+            print_usb_tree(&child, indent + 2, depth + 1);
+        } else {
+            out!("{:indent$}{}  ({} bytes)\n", "", name, size, indent = indent);
+        }
+    }
+}
+
 fn cmd_tree(arg: &str) {
     let Some(p) = folder_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if !usbfs::hw_is_dir(rel) {
+            out!("no such folder '{}'\n", arg);
+            return;
+        }
+        out!("{}\n", p);
+        print_usb_tree(rel, 2, 0);
+        return;
+    }
     if !fs().is_dir(&p) {
         out!("no such folder '{}'\n", arg);
         return;
     }
     out!("{}\n", p);
     print_tree(&p, 2, 0);
+    if p == "/" && crate::xhci::has_storage() {
+        out!("  usb/\n");
+        print_usb_tree("", 4, 0);
+    }
 }
 
 fn cmd_df() {
@@ -829,10 +941,29 @@ fn cmd_df() {
         out!(", {} folder(s)", f.dir_count());
     }
     out!("\n");
+    if let Some(info) = crate::xhci::disk_info() {
+        out!("usb: /usb  {} MiB  ({} sectors)\n", info.sectors / 2048, info.sectors);
+    }
 }
 
 fn cmd_cat(arg: &str) {
     let Some(p) = path_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if usbfs::hw_is_dir(rel) {
+            fs_error(FsError::IsDir, arg);
+            return;
+        }
+        match usbfs::hw_read(rel, 1024 * 1024) {
+            Ok(data) => {
+                log::print_raw(&data);
+                out!("\n");
+            }
+            Err("is a directory") => fs_error(FsError::IsDir, arg),
+            Err(_) => out!("no such file '{}'\n", arg),
+        }
+        return;
+    }
     match fs().read(&p) {
         Some(data) => {
             log::print_raw(data);
@@ -853,6 +984,30 @@ fn cmd_write(args: &str) {
     let (name, text) = args.split_once(' ').map_or((args, ""), |(n, t)| (n, t.trim_start()));
     let Some(p) = path_arg(name) else { return };
     let data = unescape(text);
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if rel.is_empty() {
+            out!("bad name '{}' (cannot operate on volume root as a file)\n", name);
+            return;
+        }
+        if let Err(why) = usbfs::check_write_safety(rel) {
+            out!("cannot write '{}': {}\n", name, why);
+            return;
+        }
+        let old_len = usbfs::hw_read(rel, 1024 * 1024).map(|d| d.len()).ok();
+        if let (Some(n), false) = (old_len, force) {
+            out!("'{}' already exists ({} byte(s)): nothing written. `write -f {} <text>` replaces it, `append {} <text>` adds a line\n", name, n, name, name);
+            return;
+        }
+        match usbfs::hw_write(rel, &data, force) {
+            Ok(()) => match old_len {
+                Some(n) => out!("wrote {} byte(s) to {}, replacing the old {} byte(s)\n", data.len(), name, n),
+                None => out!("wrote {} byte(s) to {}\n", data.len(), name),
+            },
+            Err(why) => out!("cannot write '{}': {}\n", name, why),
+        }
+        return;
+    }
     let old = fs().read(&p).map(<[u8]>::len);
     if let (Some(n), false) = (old, force) {
         out!("'{}' already exists ({} byte(s)): nothing written. `write -f {} <text>` replaces it, `append {} <text>` adds a line\n", name, n, name, name);
@@ -873,6 +1028,24 @@ fn cmd_append(args: &str) {
     let Some(p) = path_arg(name) else { return };
     let mut data = unescape(text);
     data.push(b'\n');
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if rel.is_empty() {
+            out!("bad name '{}' (cannot operate on volume root as a file)\n", name);
+            return;
+        }
+        if let Err(why) = usbfs::check_write_safety(rel) {
+            out!("cannot write '{}': {}\n", name, why);
+            return;
+        }
+        let mut cur = usbfs::hw_read(rel, 1024 * 1024).unwrap_or_default();
+        cur.extend_from_slice(&data);
+        match usbfs::hw_write(rel, &cur, true) {
+            Ok(()) => out!("added {} byte(s) to {}\n", data.len(), name),
+            Err(why) => out!("cannot write '{}': {}\n", name, why),
+        }
+        return;
+    }
     match fs().append(&p, &data) {
         Ok(()) => out!("added {} byte(s) to {}\n", data.len(), name),
         Err(e) => fs_error(e, name),
@@ -895,6 +1068,18 @@ fn fs_error(e: FsError, name: &str) {
 
 fn cmd_rm(arg: &str) {
     let Some(p) = path_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if usbfs::hw_is_dir(rel) {
+            out!("'{}' is a folder: use `rmdir`\n", arg);
+            return;
+        }
+        match usbfs::hw_remove_file(rel) {
+            Ok(()) => out!("removed {}\n", arg),
+            Err(why) => out!("cannot remove '{}': {}\n", arg, why),
+        }
+        return;
+    }
     if fs().remove(&p) {
         out!("removed {}\n", arg);
     } else if fs().is_dir(&p) {
@@ -924,15 +1109,34 @@ fn cmd_run(name: &str) {
 /// A copy of a file's content, or `None` after printing why not.
 fn read_file_arg(arg: &str) -> Option<Vec<u8>> {
     let p = path_arg(arg)?;
-    match fs().read(&p) {
-        Some(d) => Some(d.to_vec()),
-        None if fs().is_dir(&p) => {
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if usbfs::hw_is_dir(rel) {
             fs_error(FsError::IsDir, arg);
-            None
+            return None;
         }
-        None => {
-            out!("no such file '{}'\n", arg);
-            None
+        match usbfs::hw_read(rel, 1024 * 1024) {
+            Ok(d) => Some(d),
+            Err("is a directory") => {
+                fs_error(FsError::IsDir, arg);
+                None
+            }
+            Err(_) => {
+                out!("no such file '{}'\n", arg);
+                None
+            }
+        }
+    } else {
+        match fs().read(&p) {
+            Some(d) => Some(d.to_vec()),
+            None if fs().is_dir(&p) => {
+                fs_error(FsError::IsDir, arg);
+                None
+            }
+            None => {
+                out!("no such file '{}'\n", arg);
+                None
+            }
         }
     }
 }
@@ -940,7 +1144,12 @@ fn read_file_arg(arg: &str) -> Option<Vec<u8>> {
 /// Where `cp` and `mv` put the file: at `dst`, or inside it when `dst` is a folder.
 fn target_path(src_path: &str, dst: &str) -> Option<String> {
     let d = path_arg(dst)?;
-    if !fs().is_dir(&d) {
+    let is_dir = if usbfs::is_usb(&d) {
+        usbfs::hw_is_dir(usbfs::rel_path(&d))
+    } else {
+        fs().is_dir(&d)
+    };
+    if !is_dir {
         return Some(d);
     }
     let name = src_path.rsplit('/').next().unwrap_or(src_path);
@@ -959,39 +1168,122 @@ fn copy_or_move(args: &str, name: &str, remove_source: bool) {
         return;
     };
     let Some(sp) = path_arg(src) else { return };
-    let Some(data) = fs().read(&sp).map(<[u8]>::to_vec) else {
-        if fs().is_dir(&sp) {
-            out!("'{}' is a folder: {} works on files only\n", src, name);
-        } else {
-            out!("no such file '{}'\n", src);
-        }
-        return;
-    };
     let Some(tp) = target_path(&sp, dst) else { return };
     if tp == sp {
         out!("'{}' and '{}' are the same file\n", src, dst);
         return;
     }
-    if fs().is_dir(&tp) {
+
+    // 1. Read source
+    let data = if usbfs::is_usb(&sp) {
+        let rel_src = usbfs::rel_path(&sp);
+        if usbfs::hw_is_dir(rel_src) {
+            out!("'{}' is a folder: {} works on files only\n", src, name);
+            return;
+        }
+        match usbfs::hw_read(rel_src, 1024 * 1024) {
+            Ok(d) => d,
+            Err(_) => {
+                out!("no such file '{}'\n", src);
+                return;
+            }
+        }
+    } else {
+        match fs().read(&sp).map(<[u8]>::to_vec) {
+            Some(d) => d,
+            None if fs().is_dir(&sp) => {
+                out!("'{}' is a folder: {} works on files only\n", src, name);
+                return;
+            }
+            None => {
+                out!("no such file '{}'\n", src);
+                return;
+            }
+        }
+    };
+
+    // 2. Check destination folder
+    let dst_is_dir = if usbfs::is_usb(&tp) {
+        usbfs::hw_is_dir(usbfs::rel_path(&tp))
+    } else {
+        fs().is_dir(&tp)
+    };
+    if dst_is_dir {
         fs_error(FsError::IsDir, dst);
         return;
     }
-    if fs().read(&tp).is_some() && !force {
+
+    // 3. Check existing destination
+    let dst_exists = if usbfs::is_usb(&tp) {
+        usbfs::hw_read(usbfs::rel_path(&tp), 1).is_ok()
+    } else {
+        fs().read(&tp).is_some()
+    };
+    if dst_exists && !force {
         out!("'{}' already exists (use `{} -f` to replace it)\n", dst, name);
         return;
     }
-    match fs().write(&tp, &data) {
-        Ok(()) if remove_source => {
-            fs().remove(&sp);
-            out!("moved {} to {}\n", src, tp);
+
+    // 4. Write to destination
+    if usbfs::is_usb(&tp) {
+        let rel_dst = usbfs::rel_path(&tp);
+        if let Err(why) = usbfs::check_write_safety(rel_dst) {
+            out!("cannot write to '{}': {}\n", dst, why);
+            return;
         }
-        Ok(()) => out!("copied {} byte(s) to {}\n", data.len(), tp),
-        Err(e) => fs_error(e, dst),
+        match usbfs::hw_write(rel_dst, &data, force) {
+            Ok(()) => {
+                if remove_source {
+                    if usbfs::is_usb(&sp) {
+                        let _ = usbfs::hw_remove_file(usbfs::rel_path(&sp));
+                    } else {
+                        fs().remove(&sp);
+                    }
+                    out!("moved {} to {}\n", src, tp);
+                } else {
+                    out!("copied {} byte(s) to {}\n", data.len(), tp);
+                }
+            }
+            Err(why) => out!("cannot write to '{}': {}\n", dst, why),
+        }
+    } else {
+        match fs().write(&tp, &data) {
+            Ok(()) if remove_source => {
+                if usbfs::is_usb(&sp) {
+                    let _ = usbfs::hw_remove_file(usbfs::rel_path(&sp));
+                } else {
+                    fs().remove(&sp);
+                }
+                out!("moved {} to {}\n", src, tp);
+            }
+            Ok(()) => out!("copied {} byte(s) to {}\n", data.len(), tp),
+            Err(e) => fs_error(e, dst),
+        }
     }
 }
 
 fn cmd_touch(arg: &str) {
     let Some(p) = path_arg(arg) else { return };
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if usbfs::hw_is_dir(rel) {
+            fs_error(FsError::IsDir, arg);
+            return;
+        }
+        if usbfs::hw_read(rel, 1).is_ok() {
+            out!("'{}' exists; Aeon has no clock, so there is nothing to update\n", arg);
+        } else {
+            if let Err(why) = usbfs::check_write_safety(rel) {
+                out!("cannot create '{}': {}\n", arg, why);
+                return;
+            }
+            match usbfs::hw_write(rel, b"", false) {
+                Ok(()) => out!("created {}\n", p),
+                Err(why) => out!("cannot create '{}': {}\n", arg, why),
+            }
+        }
+        return;
+    }
     if fs().read(&p).is_some() {
         out!("'{}' exists; Aeon has no clock, so there is nothing to update\n", arg);
     } else if fs().is_dir(&p) {
@@ -1096,13 +1388,31 @@ fn find_walk(dir: &str, text: &str, depth: usize, found: &mut usize) {
     }
 }
 
+fn find_usb_walk(rel: &str, text: &str, depth: usize, found: &mut usize) {
+    let mut entries: Vec<(String, bool)> = Vec::new();
+    let _ = usbfs::hw_list(rel, |e| {
+        entries.push((String::from(e.name()), e.is_dir));
+    });
+    for (name, is_dir) in entries {
+        let child_rel = if rel.is_empty() { name.clone() } else { alloc::format!("{rel}/{name}") };
+        let full_path = alloc::format!("/usb/{child_rel}");
+        if textcmd::contains(name.as_bytes(), text.as_bytes(), true) {
+            out!("{}{}\n", full_path, if is_dir { "/" } else { "" });
+            *found += 1;
+        }
+        if is_dir && depth < 16 {
+            find_usb_walk(&child_rel, text, depth + 1, found);
+        }
+    }
+}
+
 /// `find [folder] [text]`: names below a folder (default: the current one) that contain the text.
 fn cmd_find(args: &str) {
     let all = textcmd::split_args(args);
     let (start, text) = match all.as_slice() {
         [] => ("", ""),
         [one] => match folder_arg(one) {
-            Some(p) if fs().is_dir(&p) => (one.as_str(), ""),
+            Some(p) if is_dir_path(&p) => (one.as_str(), ""),
             _ => ("", one.as_str()),
         },
         [dir, text] => (dir.as_str(), text.as_str()),
@@ -1112,12 +1422,19 @@ fn cmd_find(args: &str) {
         }
     };
     let Some(p) = folder_arg(start) else { return };
-    if !fs().is_dir(&p) {
+    if !is_dir_path(&p) {
         out!("no such folder '{}'\n", start);
         return;
     }
     let mut found = 0;
-    find_walk(&p, text, 0, &mut found);
+    if usbfs::is_usb(&p) {
+        find_usb_walk(usbfs::rel_path(&p), text, 0, &mut found);
+    } else {
+        find_walk(&p, text, 0, &mut found);
+        if p == "/" && crate::xhci::has_storage() {
+            find_usb_walk("", text, 0, &mut found);
+        }
+    }
     if found == 0 {
         out!("(nothing found)\n");
     }
@@ -1257,6 +1574,11 @@ fn run(line: &str, hist: &History) {
         "clear" | "cls" => {
             log::with_console(Console::clear_log);
         }
+        "sync" => match crate::xhci::sync() {
+            Ok(()) => out!("synced\n"),
+            Err(crate::block::BlockError::NoDevice) => out!("no USB drive connected\n"),
+            Err(_) => out!("sync failed\n"),
+        },
         "panic" => panic!("panic requested from the shell"),
         "reboot" => power::reboot(),
         "shutdown" => power::shutdown(),
@@ -1337,6 +1659,21 @@ const EDIT_HELP: &str = " Ctrl+S save   Ctrl+X leave   Ctrl+K cut line   Up/Down
 /// returns `None` for a folder, a bad name or a missing parent folder.
 fn open_editor(name: &str) -> Option<EditSession> {
     let p = path_arg(name)?;
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if let Err(why) = usbfs::check_write_safety(rel) {
+            out!("cannot edit '{}': {}\n", name, why);
+            return None;
+        }
+        if usbfs::hw_is_dir(rel) {
+            fs_error(FsError::IsDir, name);
+            return None;
+        }
+        let old = usbfs::hw_read(rel, 1024 * 1024).unwrap_or_default();
+        let room = 512 * 1024;
+        let note = if Doc::truncated(&old) { String::from(" this file has lines over the limits: saving cuts them") } else { String::new() };
+        return Some(EditSession { path: p, doc: Doc::new(&old, room), note, leave_armed: false });
+    }
     if let Err(e) = fs().check_writable(&p) {
         fs_error(e, name);
         return None;
@@ -1391,17 +1728,28 @@ fn edit_key(s: &mut EditSession, key: Key) -> bool {
         Key::Ctrl(b'k') => moved(&mut s.doc, Doc::cut_line),
         Key::Ctrl(b's') => {
             let text = s.doc.text();
-            s.note = match fs().write(&s.path, &text) {
-                Ok(()) => {
-                    s.doc.mark_saved();
-                    alloc::format!(" saved {} byte(s) to {}", text.len(), s.path)
-                }
-                Err(FsError::TooBig) => String::from(" not saved: no room on the RAM disk"),
-                Err(FsError::Full) => String::from(" not saved: too many files"),
-                Err(FsError::NoParent) => String::from(" not saved: the folder is gone"),
-                Err(FsError::IsDir) => String::from(" not saved: a folder has this name now"),
-                Err(_) => String::from(" not saved: this name is not allowed"),
-            };
+            if usbfs::is_usb(&s.path) {
+                let rel = usbfs::rel_path(&s.path);
+                s.note = match usbfs::hw_write(rel, &text, true) {
+                    Ok(()) => {
+                        s.doc.mark_saved();
+                        alloc::format!(" saved {} byte(s) to {}", text.len(), s.path)
+                    }
+                    Err(why) => alloc::format!(" not saved: {}", why),
+                };
+            } else {
+                s.note = match fs().write(&s.path, &text) {
+                    Ok(()) => {
+                        s.doc.mark_saved();
+                        alloc::format!(" saved {} byte(s) to {}", text.len(), s.path)
+                    }
+                    Err(FsError::TooBig) => String::from(" not saved: no room on the RAM disk"),
+                    Err(FsError::Full) => String::from(" not saved: too many files"),
+                    Err(FsError::NoParent) => String::from(" not saved: the folder is gone"),
+                    Err(FsError::IsDir) => String::from(" not saved: a folder has this name now"),
+                    Err(_) => String::from(" not saved: this name is not allowed"),
+                };
+            }
             Ok(())
         }
         Key::Ctrl(b'x') | Key::Interrupt => {

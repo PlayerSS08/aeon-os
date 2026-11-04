@@ -16,14 +16,17 @@
 
 use core::ptr::read_volatile;
 
+use crate::bcache::BlockCache;
+use crate::block::{check_request, BlockDev, BlockError, BlockWrite, SECTOR_SIZE};
 use crate::global::Global;
 use crate::hidkbd::HidKeyboard;
 use crate::keymap::Key;
+use crate::mmio::{dma_frames, dma_page, rd32, wait_until, wr32, wr64, PAGE_BYTES};
 use crate::usbdesc;
+use crate::usbmsd::{self, Cbw, Csw, CswStatus};
 use crate::xhcictx::{self, Endpoint};
 use crate::xhcireg::{self as reg, Caps};
 use crate::xhcitrb::{EventRing, ProducerRing, Trb, CC_SHORT_PACKET, CC_SUCCESS, TRB_COMMAND_COMPLETION, TRB_TRANSFER_EVENT};
-use crate::mmio::{dma_page, rd32, wait_until, wr32, wr64, PAGE_BYTES};
 use crate::{arch, log, paging, pci};
 
 /// TRBs per ring: one 4 KiB frame holds 256 of 16 bytes.
@@ -32,6 +35,9 @@ const RING_TRBS: usize = 256;
 const MAX_SLOTS: u8 = 32;
 /// Longest configuration descriptor that is read (it must fit the one-page buffer).
 const MAX_CONFIG_DESC: u16 = 1024;
+/// Bounce buffer size in 4 KiB frames for bulk transfers (64 KiB = 128 sectors).
+const BOUNCE_FRAMES: usize = 16;
+const MAX_SECTORS: usize = BOUNCE_FRAMES * PAGE_BYTES / SECTOR_SIZE;
 
 // ---- register and memory access (shared helpers are in `mmio.rs`) ----
 
@@ -107,6 +113,112 @@ struct Device {
     buf: u64,
 }
 
+struct Storage {
+    port: u8,
+    slot: u8,
+    interface: u8,
+    dci_in: u8,
+    dci_out: u8,
+    ep_in_addr: u8,
+    ep_out_addr: u8,
+    ep0: ProducerRing<'static>,
+    ep0_buf: u64,
+    in_ring: ProducerRing<'static>,
+    out_ring: ProducerRing<'static>,
+    cbw_buf: u64,
+    bounce: u64,
+    sectors: u64,
+    tag: u32,
+    vendor: [u8; 8],
+    product: [u8; 16],
+}
+
+pub struct StorageInfo {
+    pub slot: u8,
+    pub sectors: u64,
+    pub vendor: [u8; 8],
+    pub product: [u8; 16],
+}
+
+impl StorageInfo {
+    pub fn vendor_str(&self) -> &str {
+        core::str::from_utf8(&self.vendor).unwrap_or("?").trim()
+    }
+
+    pub fn product_str(&self) -> &str {
+        core::str::from_utf8(&self.product).unwrap_or("?").trim()
+    }
+}
+
+pub struct XhciDisk;
+
+impl BlockDev for XhciDisk {
+    fn sectors(&self) -> u64 {
+        // SAFETY: rule A: only shell task touches XHCI.
+        let x = unsafe { XHCI.get() }.as_ref();
+        x.and_then(|x| x.storage.as_ref()).map_or(0, |s| s.sectors)
+    }
+
+    fn read(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+        let sectors = self.sectors();
+        check_request(sectors, lba, buf.len())?;
+        let mut cur_lba = lba;
+        let mut offset = 0;
+        while offset < buf.len() {
+            let rem_sectors = ((buf.len() - offset) / SECTOR_SIZE) as u64;
+            let chunk_sectors = rem_sectors.min(MAX_SECTORS as u64) as u16;
+            let chunk_bytes = usize::from(chunk_sectors) * SECTOR_SIZE;
+
+            // SAFETY: rule A.
+            let x = unsafe { XHCI.get() }.as_mut().ok_or(BlockError::NoDevice)?;
+            let tag = x.next_storage_tag()?;
+            let cbw = usbmsd::scsi_read_10(tag, 0, cur_lba as u32, chunk_sectors, SECTOR_SIZE as u32)
+                .map_err(|_| BlockError::BadRequest)?;
+            let bounce = x.storage.as_ref().ok_or(BlockError::NoDevice)?.bounce;
+            x.storage_transfer(&cbw, bounce)?;
+
+            // SAFETY: `bounce` holds `chunk_bytes` freshly read from the device; `buf` has at least `offset + chunk_bytes`.
+            unsafe {
+                core::ptr::copy_nonoverlapping(bounce as *const u8, buf.as_mut_ptr().add(offset), chunk_bytes);
+            }
+            cur_lba += u64::from(chunk_sectors);
+            offset += chunk_bytes;
+        }
+        Ok(())
+    }
+}
+
+impl BlockWrite for XhciDisk {
+    fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), BlockError> {
+        let sectors = self.sectors();
+        check_request(sectors, lba, buf.len())?;
+        let mut cur_lba = lba;
+        let mut offset = 0;
+        while offset < buf.len() {
+            let rem_sectors = ((buf.len() - offset) / SECTOR_SIZE) as u64;
+            let chunk_sectors = rem_sectors.min(MAX_SECTORS as u64) as u16;
+            let chunk_bytes = usize::from(chunk_sectors) * SECTOR_SIZE;
+
+            // SAFETY: rule A.
+            let x = unsafe { XHCI.get() }.as_mut().ok_or(BlockError::NoDevice)?;
+            let tag = x.next_storage_tag()?;
+            let cbw = usbmsd::scsi_write_10(tag, 0, cur_lba as u32, chunk_sectors, SECTOR_SIZE as u32)
+                .map_err(|_| BlockError::BadRequest)?;
+            let bounce = x.storage.as_ref().ok_or(BlockError::NoDevice)?.bounce;
+
+            // SAFETY: `buf` has at least `offset + chunk_bytes`; `bounce` has at least `chunk_bytes` capacity.
+            unsafe {
+                core::ptr::copy_nonoverlapping(buf.as_ptr().add(offset), bounce as *mut u8, chunk_bytes);
+            }
+            x.storage_transfer(&cbw, bounce)?;
+
+            cur_lba += u64::from(chunk_sectors);
+            offset += chunk_bytes;
+        }
+        Ok(())
+    }
+}
+
 pub struct Xhci {
     vendor: u16,
     device: u16,
@@ -122,9 +234,11 @@ pub struct Xhci {
     events: EventRing,
     event_mem: u64,
     keyboard: Option<Keyboard>,
+    storage: Option<Storage>,
 }
 
 static XHCI: Global<Option<Xhci>> = Global::new(None);
+static USB_CACHE: Global<Option<BlockCache<XhciDisk, 64>>> = Global::new(None);
 
 /// Asks the firmware to hand the controller over (USB legacy support capability).
 fn take_over_from_firmware(base: u64, caps: &Caps) -> &'static str {
@@ -223,7 +337,7 @@ fn bring_up(d: &pci::Device) -> Result<Xhci, &'static str> {
     if rd32(op + 4) & (1 << 2) != 0 {
         return Err("host system error after start");
     }
-    Ok(Xhci { vendor: d.header.vendor, device: d.header.device, caps, slots, op, db, rt, dcbaa, handoff, cmd, events, event_mem, keyboard: None })
+    Ok(Xhci { vendor: d.header.vendor, device: d.header.device, caps, slots, op, db, rt, dcbaa, handoff, cmd, events, event_mem, keyboard: None, storage: None })
 }
 
 impl Xhci {
@@ -374,52 +488,351 @@ impl Xhci {
         self.control(&mut dev, [0x80, 6, 0, 2, 0, 0, lo, hi], Some((total, true)))?;
         // SAFETY: as above.
         let b = unsafe { page_bytes(buf) };
-        let Some(kb) = usbdesc::find_boot_keyboard(&b[..usize::from(total)]) else {
-            info!("xhci", "port {}: device is not a boot keyboard, ignored", port);
-            return Ok(());
-        };
-        if self.keyboard.is_some() {
-            info!("xhci", "port {}: a second keyboard is ignored", port);
-            return Ok(());
+        let desc_slice = &b[..usize::from(total)];
+        if let Some(kb) = usbdesc::find_boot_keyboard(desc_slice) {
+            if self.keyboard.is_some() {
+                info!("xhci", "port {}: a second keyboard is ignored", port);
+                return Ok(());
+            }
+
+            // Configuration, boot protocol, and no idle repeats from the device.
+            self.control(&mut dev, [0x00, 9, kb.config, 0, 0, 0, 0, 0], None)?;
+            self.control(&mut dev, [0x21, 0x0B, 0, 0, kb.interface, 0, 0, 0], None)?;
+            let _ = self.control(&mut dev, [0x21, 0x0A, 0, 0, kb.interface, 0, 0, 0], None); // stalls on some keyboards: fine
+
+            // Tell the controller about the interrupt IN endpoint.
+            let dci = xhcictx::dci_in(kb.endpoint);
+            let (ring_phys, ring) = new_ring(ac64)?;
+            // SAFETY: `in_ctx` and `out_ctx` are pages from `dma_page`; no command is running.
+            let (ctx, out) = unsafe { (page_bytes(in_ctx), page_bytes(out_ctx)) };
+            ctx.fill(0);
+            let ep = Endpoint {
+                dci,
+                ep_type: xhcictx::EP_INTERRUPT_IN,
+                max_packet: kb.max_packet,
+                interval: reg::interrupt_interval_field(speed, kb.interval),
+                dequeue: ring_phys,
+                avg_trb_len: 8,
+            };
+            if !(xhcictx::input_control(ctx, 0, 1 | 1 << dci) && xhcictx::copy_slot_from_output(out, ctx, csz) && xhcictx::set_slot_entries(ctx, csz, dci) && xhcictx::endpoint(ctx, csz, &ep)) {
+                return Err("input context too small");
+            }
+            self.command(Trb::configure_endpoint(in_ctx, slot))?;
+
+            let report = dma_page(ac64)?;
+            let mut keyboard = Keyboard { port, slot, dci, ring, report, hid: HidKeyboard::new(), queue: KeyQueue::new(), errors: 0 };
+            keyboard.ring.enqueue(Trb::normal(report, 8)).ok_or("interrupt ring full")?;
+            wr32(self.db + 4 * u64::from(slot), u32::from(dci));
+            self.keyboard = Some(keyboard);
+            info!("xhci", "port {}: USB keyboard ready (slot {}, speed {})", port, slot, reg::speed_name(speed));
+            Ok(())
+        } else if let Some(ms) = usbdesc::find_mass_storage(desc_slice) {
+            if self.storage.is_some() {
+                info!("xhci", "port {}: a second storage device is ignored", port);
+                return Ok(());
+            }
+
+            // Set configuration
+            self.control(&mut dev, [0x00, 9, ms.config, 0, 0, 0, 0, 0], None)?;
+
+            // Configure bulk IN and bulk OUT endpoints
+            let dci_out = xhcictx::dci_out(ms.ep_out & 0x0F);
+            let dci_in = xhcictx::dci_in(ms.ep_in & 0x0F);
+            let (out_ring_phys, out_ring) = new_ring(ac64)?;
+            let (in_ring_phys, in_ring) = new_ring(ac64)?;
+
+            // SAFETY: `in_ctx` and `out_ctx` are pages from `dma_page`; no command is running.
+            let (ctx, out) = unsafe { (page_bytes(in_ctx), page_bytes(out_ctx)) };
+            ctx.fill(0);
+            let ep_out = Endpoint {
+                dci: dci_out,
+                ep_type: xhcictx::EP_BULK_OUT,
+                max_packet: ms.max_packet_out,
+                interval: 0,
+                dequeue: out_ring_phys,
+                avg_trb_len: 512,
+            };
+            let ep_in = Endpoint {
+                dci: dci_in,
+                ep_type: xhcictx::EP_BULK_IN,
+                max_packet: ms.max_packet_in,
+                interval: 0,
+                dequeue: in_ring_phys,
+                avg_trb_len: 512,
+            };
+            let max_dci = dci_out.max(dci_in);
+            let add_flags = 1 | (1 << dci_out) | (1 << dci_in);
+            if !(xhcictx::input_control(ctx, 0, add_flags)
+                && xhcictx::copy_slot_from_output(out, ctx, csz)
+                && xhcictx::set_slot_entries(ctx, csz, max_dci)
+                && xhcictx::endpoint(ctx, csz, &ep_out)
+                && xhcictx::endpoint(ctx, csz, &ep_in))
+            {
+                return Err("input context too small");
+            }
+            self.command(Trb::configure_endpoint(in_ctx, slot))?;
+
+            let cbw_buf = dma_page(ac64)?;
+            let bounce = dma_frames(BOUNCE_FRAMES, ac64)?;
+
+            let storage = Storage {
+                port,
+                slot,
+                interface: ms.interface,
+                dci_in,
+                dci_out,
+                ep_in_addr: ms.ep_in,
+                ep_out_addr: ms.ep_out,
+                ep0: dev.ep0,
+                ep0_buf: dev.buf,
+                in_ring,
+                out_ring,
+                cbw_buf,
+                bounce,
+                sectors: 0,
+                tag: 0,
+                vendor: [b' '; 8],
+                product: [b' '; 16],
+            };
+            self.storage = Some(storage);
+
+            if let Err(why) = self.init_storage(port, slot, speed) {
+                self.storage = None;
+                return Err(why);
+            }
+            Ok(())
+        } else {
+            info!("xhci", "port {}: device is not supported, ignored", port);
+            Ok(())
+        }
+    }
+
+    /// Control transfer to the storage device on endpoint 0.
+    fn storage_control(&mut self, packet: [u8; 8], data: Option<(u16, bool)>) -> Result<(), &'static str> {
+        let s = self.storage.as_mut().ok_or("no storage device")?;
+        let slot = s.slot;
+        let buf = s.ep0_buf;
+        let in_data = data.map(|d| d.1);
+        let mut trbs = 0;
+        s.ep0.enqueue(Trb::setup_stage(packet, in_data)).ok_or("control ring full")?;
+        trbs += 1;
+        if let Some((len, dir_in)) = data {
+            s.ep0.enqueue(Trb::data_stage(buf, len, dir_in)).ok_or("control ring full")?;
+            trbs += 1;
+        }
+        s.ep0.enqueue(Trb::status_stage(in_data != Some(true))).ok_or("control ring full")?;
+        trbs += 1;
+        wr32(self.db + 4 * u64::from(slot), 1);
+        let event = self.wait_for(TRB_TRANSFER_EVENT, slot, 1, 1000);
+        let s = self.storage.as_mut().ok_or("no storage device")?;
+        for _ in 0..trbs {
+            s.ep0.retire();
+        }
+        match event.map(|e| e.completion_code()) {
+            Some(CC_SUCCESS | CC_SHORT_PACKET) => Ok(()),
+            _ => Err("storage control transfer failed"),
+        }
+    }
+
+    /// Clears a stall on a bulk endpoint: resets the endpoint in xHCI, sets the dequeue pointer,
+    /// and sends ClearFeature(ENDPOINT_HALT) to the device.
+    fn clear_storage_stall(&mut self, dci: u8, is_in: bool) {
+        let Some(s) = self.storage.as_mut() else { return };
+        let slot = s.slot;
+        let ep_addr = if is_in { s.ep_in_addr } else { s.ep_out_addr };
+        let base = if is_in { s.in_ring.base() } else { s.out_ring.base() };
+        if is_in {
+            s.in_ring.reset();
+        } else {
+            s.out_ring.reset();
+        }
+        let _ = self.command(Trb::reset_endpoint(slot, dci));
+        let _ = self.command(Trb::set_tr_dequeue_pointer(base, slot, dci, true));
+        let _ = self.storage_control([0x02, 0x01, 0, 0, ep_addr, 0, 0, 0], None);
+    }
+
+    /// Bulk-Only Transport reset recovery: sends class-specific reset then clears halt on both endpoints.
+    fn storage_reset_recovery(&mut self) {
+        let Some(s) = self.storage.as_ref() else { return };
+        let iface = s.interface;
+        let dci_in = s.dci_in;
+        let dci_out = s.dci_out;
+        let _ = self.storage_control([0x21, 0xFF, 0, 0, iface, 0, 0, 0], None);
+        self.clear_storage_stall(dci_in, true);
+        self.clear_storage_stall(dci_out, false);
+    }
+
+    fn next_storage_tag(&mut self) -> Result<u32, BlockError> {
+        let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+        s.tag = s.tag.wrapping_add(1);
+        Ok(s.tag)
+    }
+
+    /// Executes one SCSI command via USB Bulk-Only Transport.
+    fn storage_transfer(&mut self, cbw: &Cbw, data_phys: u64) -> Result<u32, BlockError> {
+        let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+        let tag = cbw.tag;
+        let slot = s.slot;
+        let dci_out = s.dci_out;
+        let dci_in = s.dci_in;
+        let cbw_buf = s.cbw_buf;
+        let csw_buf = s.cbw_buf + 64;
+
+        // 1. Send CBW
+        let cbw_encoded = cbw.encode();
+        // SAFETY: `cbw_buf` is a live DMA page owned by `storage`.
+        unsafe {
+            core::ptr::copy_nonoverlapping(cbw_encoded.as_ptr(), cbw_buf as *mut u8, 31);
+        }
+        s.out_ring.enqueue(Trb::normal(cbw_buf, 31)).ok_or(BlockError::Io)?;
+        wr32(self.db + 4 * u64::from(slot), u32::from(dci_out));
+        let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_out, 2000).ok_or(BlockError::Timeout)?;
+        let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+        s.out_ring.retire();
+        let code = event.completion_code();
+        if code != CC_SUCCESS && code != CC_SHORT_PACKET {
+            self.clear_storage_stall(dci_out, false);
+            return Err(BlockError::Io);
         }
 
-        // Configuration, boot protocol, and no idle repeats from the device.
-        self.control(&mut dev, [0x00, 9, kb.config, 0, 0, 0, 0, 0], None)?;
-        self.control(&mut dev, [0x21, 0x0B, 0, 0, kb.interface, 0, 0, 0], None)?;
-        let _ = self.control(&mut dev, [0x21, 0x0A, 0, 0, kb.interface, 0, 0, 0], None); // stalls on some keyboards: fine
-
-        // Tell the controller about the interrupt IN endpoint.
-        let dci = xhcictx::dci_in(kb.endpoint);
-        let (ring_phys, ring) = new_ring(ac64)?;
-        // SAFETY: `in_ctx` and `out_ctx` are pages from `dma_page`; no command is running.
-        let (ctx, out) = unsafe { (page_bytes(in_ctx), page_bytes(out_ctx)) };
-        ctx.fill(0);
-        let ep = Endpoint {
-            dci,
-            ep_type: xhcictx::EP_INTERRUPT_IN,
-            max_packet: kb.max_packet,
-            interval: reg::interrupt_interval_field(speed, kb.interval),
-            dequeue: ring_phys,
-            avg_trb_len: 8,
-        };
-        if !(xhcictx::input_control(ctx, 0, 1 | 1 << dci) && xhcictx::copy_slot_from_output(out, ctx, csz) && xhcictx::set_slot_entries(ctx, csz, dci) && xhcictx::endpoint(ctx, csz, &ep)) {
-            return Err("input context too small");
+        // 2. Data stage (if any)
+        if cbw.data_len > 0 {
+            if cbw.direction == usbmsd::Direction::In {
+                let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+                s.in_ring.enqueue(Trb::normal(data_phys, cbw.data_len)).ok_or(BlockError::Io)?;
+                wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
+                let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 5000).ok_or(BlockError::Timeout)?;
+                let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+                s.in_ring.retire();
+                let code = event.completion_code();
+                if code != CC_SUCCESS && code != CC_SHORT_PACKET {
+                    self.clear_storage_stall(dci_in, true);
+                }
+            } else {
+                let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+                s.out_ring.enqueue(Trb::normal(data_phys, cbw.data_len)).ok_or(BlockError::Io)?;
+                wr32(self.db + 4 * u64::from(slot), u32::from(dci_out));
+                let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_out, 5000).ok_or(BlockError::Timeout)?;
+                let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+                s.out_ring.retire();
+                let code = event.completion_code();
+                if code != CC_SUCCESS && code != CC_SHORT_PACKET {
+                    self.clear_storage_stall(dci_out, false);
+                    return Err(BlockError::Io);
+                }
+            }
         }
-        self.command(Trb::configure_endpoint(in_ctx, slot))?;
 
-        let report = dma_page(ac64)?;
-        let mut keyboard = Keyboard { port, slot, dci, ring, report, hid: HidKeyboard::new(), queue: KeyQueue::new(), errors: 0 };
-        keyboard.ring.enqueue(Trb::normal(report, 8)).ok_or("interrupt ring full")?;
-        wr32(self.db + 4 * u64::from(slot), u32::from(dci));
-        self.keyboard = Some(keyboard);
-        info!("xhci", "port {}: USB keyboard ready (slot {}, speed {})", port, slot, reg::speed_name(speed));
+        // 3. Status stage (CSW)
+        let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+        // SAFETY: zeroing CSW buffer prior to reception.
+        unsafe {
+            core::ptr::write_bytes(csw_buf as *mut u8, 0, 13);
+        }
+        s.in_ring.enqueue(Trb::normal(csw_buf, 13)).ok_or(BlockError::Io)?;
+        wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
+        let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 2000).ok_or(BlockError::Timeout)?;
+        let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+        s.in_ring.retire();
+        let code = event.completion_code();
+        if code != CC_SUCCESS && code != CC_SHORT_PACKET {
+            self.clear_storage_stall(dci_in, true);
+            let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+            s.in_ring.enqueue(Trb::normal(csw_buf, 13)).ok_or(BlockError::Io)?;
+            wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
+            let event = self.wait_for(TRB_TRANSFER_EVENT, slot, dci_in, 2000).ok_or(BlockError::Timeout)?;
+            let s = self.storage.as_mut().ok_or(BlockError::NoDevice)?;
+            s.in_ring.retire();
+            let code = event.completion_code();
+            if code != CC_SUCCESS && code != CC_SHORT_PACKET {
+                return Err(BlockError::Io);
+            }
+        }
+
+        // 4. Validate CSW
+        // SAFETY: reading back the 13-byte status wrapper filled by DMA.
+        let csw_slice = unsafe { core::slice::from_raw_parts(csw_buf as *const u8, 13) };
+        let csw = Csw::decode(csw_slice, tag).map_err(|_| BlockError::Io)?;
+        match csw.status {
+            CswStatus::Passed => Ok(cbw.data_len.saturating_sub(csw.data_residue)),
+            CswStatus::Failed => Err(BlockError::Io),
+            CswStatus::PhaseError => {
+                self.storage_reset_recovery();
+                Err(BlockError::Io)
+            }
+        }
+    }
+
+    /// Queries device parameters via SCSI (TEST UNIT READY, INQUIRY, READ CAPACITY).
+    fn init_storage(&mut self, port: u8, slot: u8, speed: u8) -> Result<(), &'static str> {
+        for _ in 0..5 {
+            let tag = self.next_storage_tag().map_err(|_| "no device")?;
+            let cbw = usbmsd::scsi_test_unit_ready(tag, 0);
+            if self.storage_transfer(&cbw, 0).is_ok() {
+                break;
+            }
+            let rs_tag = self.next_storage_tag().map_err(|_| "no device")?;
+            let rs_cbw = usbmsd::scsi_request_sense(rs_tag, 0, 18);
+            let rs_buf = self.storage.as_ref().unwrap().cbw_buf + 128;
+            let _ = self.storage_transfer(&rs_cbw, rs_buf);
+            wait_until(50, || false);
+        }
+
+        let inq_tag = self.next_storage_tag().map_err(|_| "no device")?;
+        let inq_cbw = usbmsd::scsi_inquiry(inq_tag, 0, 36);
+        let inq_buf = self.storage.as_ref().unwrap().cbw_buf + 128;
+        if self.storage_transfer(&inq_cbw, inq_buf).is_err() {
+            return Err("SCSI INQUIRY failed");
+        }
+        // SAFETY: `inq_buf` holds the 36-byte response from the device.
+        let inq_slice = unsafe { core::slice::from_raw_parts(inq_buf as *const u8, 36) };
+        let inq = usbmsd::InquiryData::decode(inq_slice).map_err(|_| "bad INQUIRY response")?;
+        if let Some(s) = self.storage.as_mut() {
+            s.vendor = inq.vendor;
+            s.product = inq.product;
+        }
+
+        let cap_tag = self.next_storage_tag().map_err(|_| "no device")?;
+        let cap_cbw = usbmsd::scsi_read_capacity_10(cap_tag, 0);
+        let cap_buf = self.storage.as_ref().unwrap().cbw_buf + 128;
+        if self.storage_transfer(&cap_cbw, cap_buf).is_err() {
+            return Err("SCSI READ CAPACITY failed");
+        }
+        // SAFETY: `cap_buf` holds the 8-byte response from the device.
+        let cap_slice = unsafe { core::slice::from_raw_parts(cap_buf as *const u8, 8) };
+        let cap = usbmsd::Capacity::decode(cap_slice).map_err(|_| "bad capacity response")?;
+        if cap.block_size != 512 || cap.total_sectors() == 0 {
+            return Err("unsupported block size or 0 sectors");
+        }
+        if let Some(s) = self.storage.as_mut() {
+            s.sectors = cap.total_sectors();
+        }
+
+        let s = self.storage.as_ref().unwrap();
+        info!(
+            "xhci",
+            "port {}: USB mass storage ready (slot {}, speed {}): {} {}, {} sectors ({} MiB)",
+            port,
+            slot,
+            reg::speed_name(speed),
+            core::str::from_utf8(&s.vendor).unwrap_or("?").trim(),
+            core::str::from_utf8(&s.product).unwrap_or("?").trim(),
+            s.sectors,
+            s.sectors / 2048,
+        );
+
+        // SAFETY: rule A: boot code, before shell task starts.
+        unsafe {
+            *USB_CACHE.get() = Some(BlockCache::new(XhciDisk));
+        }
+
         Ok(())
     }
 
-    /// Looks at every port with something connected until a keyboard is found.
+    /// Looks at every port with something connected until a keyboard and storage are set up.
     fn enumerate(&mut self) {
         for port in 1..=self.caps.max_ports {
-            if self.keyboard.is_some() {
+            if self.keyboard.is_some() && self.storage.is_some() {
                 break;
             }
             if rd32(self.port_reg(port)) & reg::PORT_CONNECTED == 0 {
@@ -521,6 +934,8 @@ pub struct Summary {
     pub running: bool,
     /// Port of the USB keyboard in use, if any.
     pub keyboard_port: Option<u8>,
+    /// Port of the USB mass storage device in use, if any.
+    pub storage_port: Option<u8>,
 }
 
 pub fn summary() -> Option<Summary> {
@@ -536,6 +951,7 @@ pub fn summary() -> Option<Summary> {
         handoff: x.handoff,
         running: rd32(x.op + 4) & 1 == 0,
         keyboard_port: x.keyboard.as_ref().map(|k| k.port),
+        storage_port: x.storage.as_ref().map(|s| s.port),
     })
 }
 
@@ -546,4 +962,45 @@ pub fn for_each_port(mut f: impl FnMut(u8, u32)) {
     for p in 1..=x.caps.max_ports {
         f(p, rd32(x.port_reg(p)));
     }
+}
+
+/// Runs `f` on the USB block cache (read path).
+pub fn with_disk<R>(f: impl FnOnce(&mut dyn BlockDev) -> R) -> Option<R> {
+    // SAFETY: rule A: only the shell task and boot code reach USB_CACHE.
+    let cache = unsafe { USB_CACHE.get() }.as_mut()?;
+    Some(f(cache))
+}
+
+/// Runs `f` on the USB block cache (write path).
+pub fn with_usb_write<R>(f: impl FnOnce(&mut dyn BlockWrite) -> R) -> Option<R> {
+    // SAFETY: rule A: only the shell task and boot code reach USB_CACHE.
+    let cache = unsafe { USB_CACHE.get() }.as_mut()?;
+    Some(f(cache))
+}
+
+/// Flushes all cached writes to disk.
+pub fn sync() -> Result<(), BlockError> {
+    // SAFETY: rule A: only the shell task and boot code reach USB_CACHE.
+    let cache = unsafe { USB_CACHE.get() }.as_mut().ok_or(BlockError::NoDevice)?;
+    cache.sync()
+}
+
+/// Returns true if a mass storage drive was detected.
+pub fn has_storage() -> bool {
+    // SAFETY: rule A.
+    let x = unsafe { XHCI.get() }.as_ref();
+    x.and_then(|x| x.storage.as_ref()).is_some()
+}
+
+/// Information about the connected USB mass storage device.
+pub fn disk_info() -> Option<StorageInfo> {
+    // SAFETY: rule A.
+    let x = unsafe { XHCI.get() }.as_ref()?;
+    let s = x.storage.as_ref()?;
+    Some(StorageInfo {
+        slot: s.slot,
+        sectors: s.sectors,
+        vendor: s.vendor,
+        product: s.product,
+    })
 }

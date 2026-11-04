@@ -999,3 +999,24 @@ fn a_name_equal_to_another_files_short_alias_counts_as_existing() {
     assert_eq!(r.mkdir("LONGNA~1.TXT"), Err(WriteError::Exists));
     assert_eq!(r.names(""), ["long name file.txt"]);
 }
+
+#[test]
+fn open_any_finds_volume_at_root_or_in_mbr() {
+    let vol = mkimg(AEON, 100, 1);
+    let mut d = MemDiskMut(&mut vol.clone());
+    let (w, base) = Fat32Writer::open_any(&mut d).unwrap();
+    assert_eq!(base, 0);
+    assert_eq!(w.root_cluster(), 2);
+
+    // MBR partition at sector 63
+    let mut mbr = vec![0u8; 63 * SECTOR_SIZE];
+    mbr.extend_from_slice(&vol);
+    mbr[446 + 4] = 0x0C; // FAT32 LBA
+    mbr[446 + 8..446 + 12].copy_from_slice(&63u32.to_le_bytes());
+    mbr[510] = 0x55;
+    mbr[511] = 0xAA;
+    let mut d = MemDiskMut(&mut mbr);
+    let (w, base) = Fat32Writer::open_any(&mut d).unwrap();
+    assert_eq!(base, 63);
+    assert_eq!(w.root_cluster(), 2);
+}

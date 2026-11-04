@@ -4,7 +4,9 @@
 //! endpoint, an interrupt IN endpoint `n` is DCI `2n + 1`). Each context is 32 or 64 bytes. Offsets and
 //! bit positions are from the xHCI specification, section 6.2. Pure and host-tested.
 
+pub const EP_BULK_OUT: u8 = 2;
 pub const EP_CONTROL: u8 = 4;
+pub const EP_BULK_IN: u8 = 6;
 pub const EP_INTERRUPT_IN: u8 = 7;
 
 /// Device context index of the default control endpoint.
@@ -13,6 +15,11 @@ pub const DCI_EP0: u8 = 1;
 /// Device context index of endpoint `number` (1 to 15), direction IN.
 pub fn dci_in(number: u8) -> u8 {
     number * 2 + 1
+}
+
+/// Device context index of endpoint `number` (1 to 15), direction OUT.
+pub fn dci_out(number: u8) -> u8 {
+    number * 2
 }
 
 fn put32(buf: &mut [u8], at: usize, value: u32) -> bool {
@@ -108,6 +115,25 @@ mod tests {
         assert_eq!(dci_in(1), 3);
         assert_eq!(dci_in(3), 7);
         assert_eq!(dci_in(15), 31);
+        assert_eq!(dci_out(1), 2);
+        assert_eq!(dci_out(2), 4);
+        assert_eq!(dci_out(15), 30);
+    }
+
+    #[test]
+    fn endpoint_context_for_bulk_endpoints() {
+        let csz = 32;
+        let dci_o = dci_out(2);
+        let dci_i = dci_in(1);
+        let mut b = [0u8; 8 * 32];
+        assert!(endpoint(&mut b, csz, &Endpoint { dci: dci_o, ep_type: EP_BULK_OUT, max_packet: 512, interval: 0, dequeue: 0x4000, avg_trb_len: 512 }));
+        let at_o = csz * (usize::from(dci_o) + 1);
+        assert_eq!(word(&b, at_o), 0, "bulk interval is 0");
+        assert_eq!(word(&b, at_o + 4), 3 << 1 | 2 << 3 | 512 << 16, "bulk out type 2");
+
+        assert!(endpoint(&mut b, csz, &Endpoint { dci: dci_i, ep_type: EP_BULK_IN, max_packet: 512, interval: 0, dequeue: 0x5000, avg_trb_len: 512 }));
+        let at_i = csz * (usize::from(dci_i) + 1);
+        assert_eq!(word(&b, at_i + 4), 3 << 1 | 6 << 3 | 512 << 16, "bulk in type 6");
     }
 
     #[test]

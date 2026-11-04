@@ -204,6 +204,58 @@ impl Fat32Writer {
         })
     }
 
+    /// Opens the first FAT32 volume labelled `AEON` on the disk: at sector 0, or inside an MBR or GPT partition.
+    pub fn open_any(dev: &mut dyn BlockWrite) -> Result<(Fat32Writer, u64), WriteError> {
+        let first_err = match Fat32Writer::open(dev, 0) {
+            Ok(w) => return Ok((w, 0)),
+            Err(e) => e,
+        };
+        let mut s = [0u8; SECTOR_SIZE];
+        dev.read(0, &mut s)?;
+        if s[510] != 0x55 || s[511] != 0xAA {
+            return Err(first_err);
+        }
+        let mut gpt = false;
+        for i in 0..4 {
+            let e = &s[446 + 16 * i..446 + 16 * (i + 1)];
+            match e[4] {
+                0 => {}
+                0xEE => gpt = true,
+                _ => {
+                    let start = u64::from(le32(e, 8));
+                    if let Ok(w) = Fat32Writer::open(dev, start) {
+                        return Ok((w, start));
+                    }
+                }
+            }
+        }
+        if gpt {
+            dev.read(1, &mut s)?;
+            if &s[..8] == b"EFI PART" {
+                let entries_lba = u64::from_le_bytes(s[72..80].try_into().unwrap_or([0; 8]));
+                let count = le32(&s, 80).min(128);
+                let size = le32(&s, 84) as usize;
+                if (128..=SECTOR_SIZE).contains(&size) && size % 8 == 0 {
+                    let per_sector = SECTOR_SIZE / size;
+                    for idx in 0..count as usize {
+                        let mut sec = [0u8; SECTOR_SIZE];
+                        let lba = entries_lba.checked_add((idx / per_sector) as u64).ok_or(WriteError::Corrupt)?;
+                        dev.read(lba, &mut sec)?;
+                        let e = &sec[(idx % per_sector) * size..(idx % per_sector + 1) * size];
+                        if e[..16].iter().all(|&b| b == 0) {
+                            continue;
+                        }
+                        let start = u64::from_le_bytes(e[32..40].try_into().unwrap_or([0; 8]));
+                        if let Ok(w) = Fat32Writer::open(dev, start) {
+                            return Ok((w, start));
+                        }
+                    }
+                }
+            }
+        }
+        Err(first_err)
+    }
+
     /// Bytes in one cluster.
     pub fn cluster_bytes(&self) -> usize {
         self.spc as usize * SECTOR_SIZE

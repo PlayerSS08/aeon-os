@@ -871,6 +871,7 @@ SWEEP = [
     ("hexdump", "hexdump", "usage: hexdump"),
     ("dls", "dls", "EFI/"),
     ("dcat", "dcat", "usage: dcat"),
+    ("sync", "sync", "no USB drive connected"),
     ("run", "run hello", "hello from ring 3"),
     ("echo", "echo hi there", "hi there"),
     ("sort", "sort 3 1 2", "1 2 3"),
@@ -1851,8 +1852,84 @@ def t_user(ctx):
         vm.close()
 
 
+def t_pendrive(ctx):
+    """USB mass storage: pendrive attached to xHCI, mounted at /usb, file commands, sync, persistence, safety rules."""
+    r = ctx.r
+    img = os.path.join(ctx.work, "aeon-stick.img")
+    subprocess.run(["mkfs.fat", "-F", "32", "-n", "AEON", "-C", img, "66000"], check=True, capture_output=True)
+
+    extra = ["-device", "qemu-xhci,id=xhci", "-drive", f"file={img},if=none,id=stick,format=raw", "-device", "usb-storage,bus=xhci.0,drive=stick"]
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-pendrive", cfg="nomenu\n"), ctx.work, name="pendrive", extra=extra)
+    try:
+        r.check("shell prompt with pendrive", vm.wait_for("aeon> ", 150, "serial"))
+        t = vm.text()
+        r.check("USB mass storage detected at boot", "USB mass storage ready" in t, t[-800:])
+
+        run_cmds(vm, r, [
+            ("usb", "USB storage: in use on port 1"),
+            ("disks", "uda  usb slot 1"),
+            ("dread 0 510", "55 aa"),
+            ("dread 99999999", "read failed"),
+            ("ls", "usb/"),
+            ("ls /usb", "(empty folder)"),
+            ("cd /usb", "aeon:/usb> "),
+            ("pwd", "/usb"),
+            ("write note.txt hello-pendrive", "wrote 14 byte(s) to note.txt"),
+            ("cat note.txt", "hello-pendrive"),
+            ("append note.txt more-data", "added 10 byte(s) to note.txt"),
+            ("mkdir docs", "made folder /usb/docs"),
+            ("touch docs/empty.txt", "created /usb/docs/empty.txt"),
+            ("grep hello note.txt", "hello-pendrive"),
+            ("head -n 1 note.txt", "hello-pendrive"),
+            ("wc note.txt", "note.txt"),
+            ("hexdump note.txt 16", "68 65 6c 6c 6f 2d 70 65"),
+            ("tree", "note.txt"),
+            ("find docs", "/usb/docs"),
+            ("write /ramfile ramdata", "wrote 7 byte(s) to /ramfile"),
+            ("cp /ramfile /usb/copied.txt", "copied 7 byte(s) to /usb/copied.txt"),
+            ("cat /usb/copied.txt", "ramdata"),
+            ("mv /usb/copied.txt /moved.txt", "moved /usb/copied.txt to /moved.txt"),
+            ("cat /moved.txt", "ramdata"),
+            ("cat /usb/copied.txt", "no such file"),
+            ("write /usb/efi/boot.efi bad", "writing inside EFI is prohibited"),
+            ("rm /usb/efi/boot.efi", "writing inside EFI is prohibited"),
+            ("sync", "synced"),
+        ])
+    finally:
+        vm.close()
+
+    # Integrity check
+    fsck = subprocess.run(["fsck.vfat", "-n", img], capture_output=True, text=True)
+    r.check("fsck.vfat on sync'd image is clean", fsck.returncode == 0, fsck.stdout + fsck.stderr)
+
+    # Persistence check
+    vm2 = Vm(make_esp(ctx.work, ctx.efi, "esp-persist", cfg="nomenu\n"), ctx.work, name="persist", extra=extra)
+    try:
+        r.check("second boot prompt", vm2.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm2, r, [
+            ("cat /usb/note.txt", "hello-pendrive"),
+            ("cat /usb/note.txt", "more-data"),
+        ])
+    finally:
+        vm2.close()
+
+    # Non-AEON label refusal check
+    img_other = os.path.join(ctx.work, "other-stick.img")
+    subprocess.run(["mkfs.fat", "-F", "32", "-n", "OTHER", "-C", img_other, "66000"], check=True, capture_output=True)
+    extra_other = ["-device", "qemu-xhci,id=xhci", "-drive", f"file={img_other},if=none,id=stick,format=raw", "-device", "usb-storage,bus=xhci.0,drive=stick"]
+    vm3 = Vm(make_esp(ctx.work, ctx.efi, "esp-other", cfg="nomenu\n"), ctx.work, name="other", extra=extra_other)
+    try:
+        r.check("non-aeon prompt", vm3.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm3, r, [
+            ("ls /usb", "(empty folder)"),
+            ("write /usb/test.txt bad", "volume label is not AEON (read only)"),
+        ])
+    finally:
+        vm3.close()
+
+
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

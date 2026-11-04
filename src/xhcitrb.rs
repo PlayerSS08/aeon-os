@@ -15,11 +15,14 @@ pub const TRB_ENABLE_SLOT: u8 = 9;
 pub const TRB_ADDRESS_DEVICE: u8 = 11;
 pub const TRB_CONFIGURE_ENDPOINT: u8 = 12;
 pub const TRB_EVALUATE_CONTEXT: u8 = 13;
+pub const TRB_RESET_ENDPOINT: u8 = 14;
+pub const TRB_SET_TR_DEQUEUE_POINTER: u8 = 16;
 pub const TRB_TRANSFER_EVENT: u8 = 32;
 pub const TRB_COMMAND_COMPLETION: u8 = 33;
 pub const TRB_PORT_STATUS_CHANGE: u8 = 34;
 
 pub const CC_SUCCESS: u8 = 1;
+pub const CC_STALL_ERROR: u8 = 6;
 pub const CC_SHORT_PACKET: u8 = 13;
 
 const CYCLE: u32 = 1;
@@ -87,6 +90,19 @@ impl Trb {
         t
     }
 
+    pub fn reset_endpoint(slot: u8, dci: u8) -> Self {
+        let mut t = Self::of_type(TRB_RESET_ENDPOINT);
+        t.control |= u32::from(slot) << 24 | u32::from(dci) << 16;
+        t
+    }
+
+    pub fn set_tr_dequeue_pointer(dequeue: u64, slot: u8, dci: u8, cycle: bool) -> Self {
+        let mut t = Self::of_type(TRB_SET_TR_DEQUEUE_POINTER);
+        t.parameter = (dequeue & !0x0F) | u64::from(cycle);
+        t.control |= u32::from(slot) << 24 | u32::from(dci) << 16;
+        t
+    }
+
     // ---- transfers ----
 
     /// Setup stage of a control transfer. `data` is `None` without a data stage, otherwise whether the
@@ -124,11 +140,11 @@ impl Trb {
         t
     }
 
-    /// A normal TRB for an interrupt endpoint: raises an event when it completes, also on a short packet.
-    pub fn normal(buffer: u64, len: u16) -> Self {
+    /// A normal TRB: raises an event when it completes, also on a short packet.
+    pub fn normal(buffer: u64, len: u32) -> Self {
         let mut t = Self::of_type(TRB_NORMAL);
         t.parameter = buffer;
-        t.status = u32::from(len);
+        t.status = len & 0x1_FFFF;
         t.control |= INTERRUPT_ON_COMPLETION | INTERRUPT_ON_SHORT_PACKET;
         t
     }
@@ -230,6 +246,14 @@ impl<'a> ProducerRing<'a> {
     pub fn retire(&mut self) {
         self.pending = self.pending.saturating_sub(1);
     }
+
+    /// Resets the ring to its initial empty state.
+    pub fn reset(&mut self) {
+        self.trbs.fill(Trb::default());
+        self.enqueue = 0;
+        self.cycle = true;
+        self.pending = 0;
+    }
 }
 
 /// The event ring: the controller writes, software reads. Starts with consumer cycle state 1. The ring
@@ -304,6 +328,10 @@ mod tests {
         assert_eq!((t.kind(), t.parameter, t.slot_id()), (12, 0x2000, 7));
         let t = Trb::evaluate_context(0x3000, 2);
         assert_eq!((t.kind(), t.parameter, t.slot_id()), (13, 0x3000, 2));
+        let t = Trb::reset_endpoint(4, 5);
+        assert_eq!((t.kind(), t.slot_id(), t.endpoint_id()), (14, 4, 5));
+        let t = Trb::set_tr_dequeue_pointer(0x4000, 4, 5, true);
+        assert_eq!((t.kind(), t.parameter, t.slot_id(), t.endpoint_id()), (16, 0x4001, 4, 5));
     }
 
     #[test]
@@ -435,5 +463,16 @@ mod tests {
         let mem = [Trb::default(); 2];
         let mut ring = EventRing::new(3, 0).unwrap();
         assert_eq!(ring.next(&mem), None);
+    }
+
+    #[test]
+    fn producer_ring_reset() {
+        let mut mem = [Trb::default(); 4];
+        let mut ring = ProducerRing::new(&mut mem, 0x1000).unwrap();
+        assert_eq!(ring.pending(), 0);
+        let _ = ring.enqueue(Trb::default());
+        assert_eq!(ring.pending(), 1);
+        ring.reset();
+        assert_eq!(ring.pending(), 0);
     }
 }

@@ -9,6 +9,7 @@ use crate::memmap;
 use crate::uefi::{self, RuntimeServices};
 
 pub fn reboot() -> ! {
+    let _ = crate::xhci::sync();
     let rs = boot::info().runtime_services as *const RuntimeServices;
     warn!("power", "rebooting via firmware ResetSystem");
     if !rs.is_null() {
@@ -99,6 +100,7 @@ fn acpi_poweroff(b: &BootInfo) -> bool {
 
 pub fn shutdown() {
     warn!("power", "shutdown requested");
+    let _ = crate::xhci::sync();
     if acpi_poweroff(boot::info()) {
         return;
     }

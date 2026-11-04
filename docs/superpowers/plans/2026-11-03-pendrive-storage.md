@@ -21,10 +21,10 @@
 ## Tasks
 
 1. [x] `fatw.rs` + `fatname.rs` (done 2026-11-04): 36 writer tests + 15 name tests, all written first and watched failing. Covers allocate/free, files across cluster boundaries, folder growth, 8.3 and long names with `~N` aliases, replace, delete, mkdir/rmdir, volume full (byte-identical after a refusal), the `EFI` and label rules, damaged chains, random garbage, a 700-step random storm against a model, and a disk failure injected at every single write (volume must stay sound). `bash tools/fatw-check.sh` runs the same operations on `mkfs.fat` images and `fsck.vfat -n` calls them clean (checked: the script does fail when one FAT copy is not written). Not done: `rename` (the shell can use copy + remove for now). Nothing touches a real disk yet; the writer is not linked into the kernel.
-2. [ ] `usbmsd.rs`: tests first (command and status wrappers, sense data decoding, capacity, hostile device answers).
-3. [ ] xHCI bulk endpoints: configure endpoint for bulk IN and OUT, transfer ring, polled completion with timeout; QEMU test: Aeon lists the stick, reads sector 0.
-4. [ ] Block cache and `sync`; QEMU test: write a file, `sync`, restart the VM on the same image, the file is there; `fsck.vfat` on the image is clean.
-5. [ ] Shell integration and safety checks; tests: refusal on a non-AEON label, refusal inside `EFI/`.
+2. [x] `usbmsd.rs` (done 2026-11-04, commit `687e232`): 10 unit tests for CBW/CSW wrappers, SCSI commands (INQUIRY, READ CAPACITY(10), READ(10), WRITE(10), TEST UNIT READY, REQUEST SENSE), sense decoding, capacity math, hostile CSW validation, and fuzzing with random garbage.
+3. [x] xHCI bulk endpoints (done 2026-11-04): endpoint context and TRB ring support (`xhcictx.rs`, `xhcitrb.rs`), descriptor detection (`usbdesc.rs`), bulk IN/OUT configuration, stall clearing, BOT reset, `XhciDisk` (`BlockDev` + `BlockWrite`) in `xhci.rs`, disk discovery in `disk.rs`.
+4. [x] Block cache and `sync` (done 2026-11-04): 64-slot LRU write-back block cache with dirty slot tracking (`bcache.rs`), flush on `sync`, `reboot`, and `shutdown` (`power.rs`). 5 unit tests for read/write/eviction/dirty flush.
+5. [x] Shell integration and safety checks (done 2026-11-04): `/usb` mount adapter (`usbfs.rs`) with volume label `AEON` check, `EFI/` path write protection, FAT32 integration; shell routing in `shell.rs` for `cd`, `ls`, `mkdir`, `rmdir`, `tree`, `df`, `cat`, `write`, `append`, `rm`, `cp`, `mv`, `touch`, `find`, `head`, `tail`, `wc`, `grep`, `hexdump`, `edit`, and `sync` registered in `cmdhelp.rs`. Full QEMU `t_pendrive` test suite (37 passed, 0 failed), sweep (73 passed), and usb (13 passed).
 6. [ ] Real pendrive test by the owner, with a spare stick.
 
 ## Then: per-process memory (next plan)
