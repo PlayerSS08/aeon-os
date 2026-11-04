@@ -1913,6 +1913,24 @@ def t_pendrive(ctx):
     finally:
         vm2.close()
 
+    # A change must be on the stick without typing `sync`: write, then kill the VM like a pulled plug.
+    img_hot = os.path.join(ctx.work, "aeon-hot.img")
+    subprocess.run(["mkfs.fat", "-F", "32", "-n", "AEON", "-C", img_hot, "66000"], check=True, capture_output=True)
+    extra_hot = ["-device", "qemu-xhci,id=xhci", "-drive", f"file={img_hot},if=none,id=stick,format=raw", "-device", "usb-storage,bus=xhci.0,drive=stick"]
+    vm4 = Vm(make_esp(ctx.work, ctx.efi, "esp-hot", cfg="nomenu" + chr(10)), ctx.work, name="hot", extra=extra_hot)
+    try:
+        r.check("hot-unplug prompt", vm4.wait_for("aeon> ", 150, "serial"))
+        run_cmds(vm4, r, [
+            ("mkdir /usb/keep", "made folder /usb/keep"),
+            ("write /usb/keep/a.txt unsynced-but-saved", "wrote 18 byte(s) to /usb/keep/a.txt"),
+        ])
+    finally:
+        vm4.close()
+    fsck = subprocess.run(["fsck.vfat", "-n", img_hot], capture_output=True, text=True)
+    r.check("fsck.vfat clean after writes without `sync` and a killed VM", fsck.returncode == 0, fsck.stdout + fsck.stderr)
+    raw = open(img_hot, "rb").read()
+    r.check("the unsynced file's text is on the stick", b"unsynced-but-saved" in raw)
+
     # Non-AEON label refusal check
     img_other = os.path.join(ctx.work, "other-stick.img")
     subprocess.run(["mkfs.fat", "-F", "32", "-n", "OTHER", "-C", img_other, "66000"], check=True, capture_output=True)

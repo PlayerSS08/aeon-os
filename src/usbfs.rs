@@ -158,24 +158,32 @@ pub fn hw_read(rel: &str, limit: usize) -> Result<Vec<u8>, &'static str> {
     crate::xhci::with_disk(|d| read_file(d, rel, limit)).ok_or("no USB drive connected")?
 }
 
+/// Every change to the stick is flushed from the cache before the command returns, so pulling the stick
+/// out after a command loses nothing (`sync` is still there for the ones who like to be sure).
+#[cfg(target_os = "uefi")]
+fn flushed(r: Result<(), &'static str>) -> Result<(), &'static str> {
+    r?;
+    crate::xhci::sync().map_err(|_| "disk I/O error while saving to the stick")
+}
+
 #[cfg(target_os = "uefi")]
 pub fn hw_write(rel: &str, data: &[u8], replace: bool) -> Result<(), &'static str> {
-    crate::xhci::with_usb_write(|d| write_file(d, rel, data, replace)).ok_or("no USB drive connected")?
+    flushed(crate::xhci::with_usb_write(|d| write_file(d, rel, data, replace)).ok_or("no USB drive connected")?)
 }
 
 #[cfg(target_os = "uefi")]
 pub fn hw_mkdir(rel: &str) -> Result<(), &'static str> {
-    crate::xhci::with_usb_write(|d| mkdir(d, rel)).ok_or("no USB drive connected")?
+    flushed(crate::xhci::with_usb_write(|d| mkdir(d, rel)).ok_or("no USB drive connected")?)
 }
 
 #[cfg(target_os = "uefi")]
 pub fn hw_remove_file(rel: &str) -> Result<(), &'static str> {
-    crate::xhci::with_usb_write(|d| remove_file(d, rel)).ok_or("no USB drive connected")?
+    flushed(crate::xhci::with_usb_write(|d| remove_file(d, rel)).ok_or("no USB drive connected")?)
 }
 
 #[cfg(target_os = "uefi")]
 pub fn hw_remove_dir(rel: &str) -> Result<(), &'static str> {
-    crate::xhci::with_usb_write(|d| remove_dir(d, rel)).ok_or("no USB drive connected")?
+    flushed(crate::xhci::with_usb_write(|d| remove_dir(d, rel)).ok_or("no USB drive connected")?)
 }
 
 #[cfg(test)]

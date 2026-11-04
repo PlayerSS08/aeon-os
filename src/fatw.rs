@@ -204,16 +204,20 @@ impl Fat32Writer {
         })
     }
 
-    /// Opens the first FAT32 volume labelled `AEON` on the disk: at sector 0, or inside an MBR or GPT partition.
+    /// Opens the volume the reader (`Volume::open_any`) would show: sector 0 if that is a FAT boot sector,
+    /// otherwise the first MBR or GPT partition that holds a FAT volume. If that volume is not a writable
+    /// `AEON` FAT32 volume the answer is an error: the writer never moves on to a later partition, so what
+    /// `ls` shows and where `write` puts data can never differ.
     pub fn open_any(dev: &mut dyn BlockWrite) -> Result<(Fat32Writer, u64), WriteError> {
-        let mut best_err = match Fat32Writer::open(dev, 0) {
-            Ok(w) => return Ok((w, 0)),
+        let first_err = match Volume::open(dev, 0) {
+            Ok(_) => return Fat32Writer::open(dev, 0).map(|w| (w, 0)),
             Err(e) => e,
         };
+        let not_found = WriteError::NotWritable(Reason::Damaged(first_err));
         let mut s = [0u8; SECTOR_SIZE];
         dev.read(0, &mut s)?;
         if s[510] != 0x55 || s[511] != 0xAA {
-            return Err(best_err);
+            return Err(not_found);
         }
         let mut gpt = false;
         for i in 0..4 {
@@ -223,11 +227,8 @@ impl Fat32Writer {
                 0xEE => gpt = true,
                 _ => {
                     let start = u64::from(le32(e, 8));
-                    match Fat32Writer::open(dev, start) {
-                        Ok(w) => return Ok((w, start)),
-                        Err(e @ WriteError::NotWritable(Reason::WrongLabel)) => best_err = e,
-                        Err(e) if matches!(best_err, WriteError::NotWritable(Reason::NotFat32)) => best_err = e,
-                        Err(_) => {}
+                    if Volume::open(dev, start).is_ok() {
+                        return Fat32Writer::open(dev, start).map(|w| (w, start));
                     }
                 }
             }
@@ -249,17 +250,14 @@ impl Fat32Writer {
                             continue;
                         }
                         let start = u64::from_le_bytes(e[32..40].try_into().unwrap_or([0; 8]));
-                        match Fat32Writer::open(dev, start) {
-                            Ok(w) => return Ok((w, start)),
-                            Err(e @ WriteError::NotWritable(Reason::WrongLabel)) => best_err = e,
-                            Err(e) if matches!(best_err, WriteError::NotWritable(Reason::NotFat32)) => best_err = e,
-                            Err(_) => {}
+                        if Volume::open(dev, start).is_ok() {
+                            return Fat32Writer::open(dev, start).map(|w| (w, start));
                         }
                     }
                 }
             }
         }
-        Err(best_err)
+        Err(not_found)
     }
 
     /// Bytes in one cluster.

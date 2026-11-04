@@ -1034,3 +1034,48 @@ fn open_any_preserves_wrong_label_error_on_partitioned_disk() {
     let mut d = MemDiskMut(&mut mbr);
     assert_eq!(Fat32Writer::open_any(&mut d).err(), Some(WriteError::NotWritable(Reason::WrongLabel)));
 }
+
+/// A disk with an MBR and two FAT32 partitions: first `a`, then `b`.
+fn two_partitions(a: [u8; 11], b: [u8; 11]) -> (Vec<u8>, u64, u64) {
+    let (va, vb) = (mkimg(a, 100, 1), mkimg(b, 100, 1));
+    let start_a = 1u64;
+    let start_b = start_a + (va.len() / SECTOR_SIZE) as u64;
+    let mut disk = vec![0u8; SECTOR_SIZE];
+    disk.extend_from_slice(&va);
+    disk.extend_from_slice(&vb);
+    for (i, start) in [start_a, start_b].into_iter().enumerate() {
+        disk[446 + 16 * i + 4] = 0x0C;
+        disk[446 + 16 * i + 8..446 + 16 * i + 12].copy_from_slice(&(start as u32).to_le_bytes());
+    }
+    disk[510] = 0x55;
+    disk[511] = 0xAA;
+    (disk, start_a, start_b)
+}
+
+#[test]
+fn the_writer_uses_the_same_partition_as_the_reader_never_a_later_aeon_one() {
+    // First partition is someone else's (read only), second is labelled AEON. The reader (`ls /usb`) shows the
+    // first one, so a write must not silently go to the second one: it must be refused.
+    let (mut disk, _, start_b) = two_partitions(*b"OTHER      ", AEON);
+    let before = disk.clone();
+    assert_eq!(Fat32Writer::open_any(&mut MemDiskMut(&mut disk)).err(), Some(WriteError::NotWritable(Reason::WrongLabel)));
+    assert_eq!(disk, before);
+    assert!(start_b > 1);
+}
+
+#[test]
+fn with_an_aeon_first_partition_that_one_is_used() {
+    let (mut disk, start_a, _) = two_partitions(AEON, *b"OTHER      ");
+    let (_, base) = Fat32Writer::open_any(&mut MemDiskMut(&mut disk)).unwrap();
+    assert_eq!(base, start_a);
+}
+
+#[test]
+fn a_partition_the_reader_cannot_open_is_skipped_by_both() {
+    // First partition is not a FAT volume at all; both reader and writer move on to the second.
+    let (mut disk, start_a, start_b) = two_partitions(AEON, AEON);
+    disk[start_a as usize * SECTOR_SIZE + 510] = 0; // break the first boot sector signature
+    let (_, base) = Fat32Writer::open_any(&mut MemDiskMut(&mut disk)).unwrap();
+    assert_eq!(base, start_b);
+    assert!(Volume::open_any(&mut MemDisk(&disk)).is_ok());
+}

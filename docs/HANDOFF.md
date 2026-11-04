@@ -219,3 +219,12 @@ Report: `reports/Hobby Rust OS build checklist.md`, section 6.
 | 5a | ELF parser (pure) | DONE: `src/elf.rs`, 12 tests (323 host tests total) incl. 22,000 random/corrupted inputs. Accepts only static `ET_EXEC` x86_64 files; refuses PIE, dynamic linking, executable stack, W+X segments, segments that share a page, entry outside an executable segment, anything outside the caller's address range or memory budget. Not used by the kernel yet. |
 | 5b | per-process page tables, loader, `run <file>` | NEXT. Needs a design decision: today user code runs in one shared 16-page window (`usermode.rs`); real address spaces mean a second page-table root per task, a CR3 switch in the scheduler, and copying kernel mappings. Large (L). |
 | 7 | FAT32 write | NOT STARTED, needs your word first: it is the first code that can change a real disk. Plan if approved: RAM-disk and QEMU image only, a write command that must be named and confirmed, never on a disk Aeon did not create. |
+
+## 2026-11-04 (later): review of the USB work and two fixes
+
+| Finding | Fix |
+|---|---|
+| Reader and writer could pick different partitions on a stick with two partitions (`ls /usb` showed the first, `write` went to a later one labelled AEON) | `Fat32Writer::open_any` now follows exactly the reader's choice and refuses if that volume is not a writable AEON FAT32 volume; 3 new tests |
+| Nothing flushed the cache after a write, so pulling the stick without `sync` lost data | every `/usb` change (`write append cp mv touch mkdir rm rmdir`) flushes before the command returns (`usbfs::flushed`); QEMU test kills the VM after a write without `sync`: `fsck.vfat` clean and the text is on the stick |
+| **Known limit, not fixed:** the block cache (`src/bcache.rs`) writes dirty sectors in slot order, not in the order the writer made them, and the "clean" flag and the data land together. A power cut *during* the flush can leave an inconsistent volume that still says "clean". The writer's own crash-safe order (data, entry, free) only holds for the writes it issues, not for what the cache does with them | Idea for later: flush data-region sectors first, directory and FAT sectors next, FAT entry 1 last; or make the cache write-through for FAT and directory sectors. Tell the owner to use `sync` and wait for the prompt before unplugging, and to test on a spare stick first |
+| Not yet re-run after the USB work | groups `user power editor release`, the full suite, the CA-6 evidence run, and a real-stick test by the owner |
