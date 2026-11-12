@@ -73,7 +73,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("disk", "dls", "dls [path]", "list a directory on the disk (FAT16/FAT32)"),
     c("disk", "dcat", "dcat <path>", "print a file from the disk (first 64 KiB)"),
     c("disk", "sync", "sync", "flush USB cached writes to disk"),
-    c("programs", "run", "run <program>", "ring 3 demo: hello fault gp spin badcall denied"),
+    c("programs", "run", "run <program>", "ring 3 demo: hello linux fault gp spin badcall"),
     c("tools", "echo", "echo <text>", "print text"),
     c("tools", "sort", "sort <n> <n> ...", "sort numbers (uses the heap)"),
     c("tools", "seq", "seq [first] <last>", "print numbers from first (default 1) to last"),

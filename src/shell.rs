@@ -41,11 +41,11 @@ macro_rules! out {
     }};
 }
 
-/// The RAM filesystem. Only the shell task touches it, so no second reference to it ever exists.
+/// The RAM filesystem. Touched by the shell task and by syscall file handlers (single CPU, interrupts off).
 static FS: Global<RamFs> = Global::new(RamFs::new(64, 1 << 20));
 
-fn fs() -> &'static mut RamFs {
-    // SAFETY: only the single shell task calls this, and no result is held across another command.
+pub(crate) fn fs() -> &'static mut RamFs {
+    // SAFETY: called only by shell or syscall handlers when interrupts are off; no concurrent reference exists.
     unsafe { FS.get() }
 }
 
