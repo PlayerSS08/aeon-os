@@ -1,2 +1,9 @@
 target/
 __pycache__/
+
+# VirtualBox runtime and disk images
+vmbox/*.vdi
+vmbox/*.nvram
+vmbox/*.log
+vmbox/*.vbox-prev
+
