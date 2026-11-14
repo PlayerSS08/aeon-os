@@ -3,6 +3,7 @@ __pycache__/
 
 # VirtualBox runtime and disk images
 vmbox/*.vdi
+vmbox/*.raw
 vmbox/*.nvram
 vmbox/*.log
 vmbox/*.vbox-prev

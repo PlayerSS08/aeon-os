@@ -976,11 +976,11 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         // SAFETY: GOP reported this linear framebuffer; it is mapped by the firmware and stays
         // valid across ExitBootServices, and nothing else draws to it after this point.
         if let Some(mut c) = unsafe { Console::new(&f) } {
-            if opts.verbose {
+            if opts.verbose || opts.recovery || boot_info().recovery {
                 c.clear();
-                c.draw_logo();
+                c.fullscreen_log();
             } else {
-                // Splash: the logo fades in, a thin bar tracks the real boot stages, the log is held back.
+                // Splash: the 8-segment ring fades in and rotates, a thin bar tracks the real boot stages.
                 c.begin_splash();
                 for step in 1..=10u16 {
                     c.fade_logo((u32::from(anim::ease_out_cubic(step * 100)) * 255 / 1000) as u8);
