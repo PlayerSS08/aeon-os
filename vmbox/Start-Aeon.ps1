@@ -4,5 +4,5 @@ if (-not (Test-Path $vbox)) {
     Write-Error "VirtualBox not found at $vbox"
     exit 1
 }
-Write-Host "Launching AEON-VM..." -ForegroundColor Cyan
-Start-Process -FilePath $vbox -ArgumentList '--startvm "AEON-VM"'
+Write-Host "Launching Aeon-VM..." -ForegroundColor Cyan
+Start-Process -FilePath $vbox -ArgumentList '--startvm "Aeon-VM"'
