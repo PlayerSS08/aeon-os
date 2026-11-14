@@ -1,5 +1,9 @@
 # Aeon against Windows 11 and macOS: ratings, reasons, and what to change
 
+**Document Reference**: `docs/COMPARISON.md`  
+**Master Index**: [docs/README.md](README.md)  
+**Obsidian Vault Note**: `G:\Brain\AGY\5 Cortex\Comparisons\Aeon against Windows 11 and macOS.md`  
+
 Ratings are 0 to 10 and are my own judgement (2026-11-03), not benchmarks. The owner decided: networking and apps stay as they are (0); everything else below may be upgraded.
 
 ## 1. Final ratings (as agreed)

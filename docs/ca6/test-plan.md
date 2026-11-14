@@ -4,7 +4,7 @@
 
 | Level | What it tests | How to run | Size |
 |---|---|---|---|
-| Unit tests (host) | Pure logic: ready queue, scheduler trace, allocators, wait list, file system, FAT, parsers, scheduler policies, Banker's algorithm | `cargo test --lib --target x86_64-pc-windows-gnu` (from `G:\Aeon\OS`) | 237 tests |
+| Unit tests (host) | Pure logic: ready queue, scheduler trace, allocators, wait list, file system, FAT, network stack, apt packaging, parsers, scheduler policies, Banker's algorithm | `cargo test --lib --target x86_64-pc-windows-gnu` (from `S:\Works\Projects\Aeon\OS`) | 468 tests |
 | Boot tests (QEMU) | The real kernel in a virtual PC: boot stages, shell, tasks, faults, Secure Boot, TPM, recovery, and the new `sched` group for layers 4 to 8 | `bash tests/run.sh` (about 12 minutes) | 359 checks |
 | CA-6 evidence run | The six required test cases and the layer measurements, with logs, a Python trace parser and charts | `wsl -d Ubuntu -- python3 tests/ca6_evidence.py` (about 8 minutes) | 111 checks, 60 metrics |
 
@@ -76,7 +76,7 @@ The pipeline the assignment describes is implemented end to end: the kernel writ
 ## 7. How to repeat everything
 
 ```
-cd G:\Aeon\OS
+cd S:\Works\Projects\Aeon\OS
 cargo clippy --release -- -D warnings
 cargo test --lib --target x86_64-pc-windows-gnu
 bash tests/run.sh                                      # boot tests

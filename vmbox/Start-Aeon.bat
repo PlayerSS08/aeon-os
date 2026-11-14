@@ -4,4 +4,4 @@ echo ========================================================
 echo        Starting Aeon OS in Oracle VM VirtualBox
 echo ========================================================
 echo.
-"C:\Program Files\Oracle\VirtualBox\VirtualBoxVM.exe" --startvm "Aeon-VM"
+"C:\Program Files\Oracle\VirtualBox\VirtualBoxVM.exe" --startvm "AEON-VM"

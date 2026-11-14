@@ -1318,6 +1318,7 @@ extern "C" fn kernel_main() -> ! {
     aeon::vblk::probe();
     aeon::xhci::init();
     aeon::ahci::probe();
+    aeon::netdev::probe();
     if heap == 0 {
         error!("mm", "could not allocate a kernel heap");
     } else {

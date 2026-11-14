@@ -805,14 +805,14 @@ impl Xhci {
             }
             let rs_tag = self.next_storage_tag().map_err(|_| "no device")?;
             let rs_cbw = usbmsd::scsi_request_sense(rs_tag, 0, 18);
-            let rs_buf = self.storage.as_ref().unwrap().cbw_buf + 128;
+            let rs_buf = self.storage.as_ref().ok_or("no storage")?.cbw_buf + 128;
             let _ = self.storage_transfer(&rs_cbw, rs_buf);
             wait_until(50, || false);
         }
 
         let inq_tag = self.next_storage_tag().map_err(|_| "no device")?;
         let inq_cbw = usbmsd::scsi_inquiry(inq_tag, 0, 36);
-        let inq_buf = self.storage.as_ref().unwrap().cbw_buf + 128;
+        let inq_buf = self.storage.as_ref().ok_or("no storage")?.cbw_buf + 128;
         if self.storage_transfer(&inq_cbw, inq_buf).is_err() {
             return Err("SCSI INQUIRY failed");
         }
@@ -826,7 +826,7 @@ impl Xhci {
 
         let cap_tag = self.next_storage_tag().map_err(|_| "no device")?;
         let cap_cbw = usbmsd::scsi_read_capacity_10(cap_tag, 0);
-        let cap_buf = self.storage.as_ref().unwrap().cbw_buf + 128;
+        let cap_buf = self.storage.as_ref().ok_or("no storage")?.cbw_buf + 128;
         if self.storage_transfer(&cap_cbw, cap_buf).is_err() {
             return Err("SCSI READ CAPACITY failed");
         }
@@ -840,7 +840,7 @@ impl Xhci {
             s.sectors = cap.total_sectors();
         }
 
-        let s = self.storage.as_ref().unwrap();
+        let s = self.storage.as_ref().ok_or("no storage")?;
         info!(
             "xhci",
             "port {}: USB mass storage ready (slot {}, speed {}): {} {}, {} sectors ({} MiB)",

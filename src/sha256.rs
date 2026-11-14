@@ -114,6 +114,14 @@ pub fn digest(data: &[u8]) -> [u8; DIGEST_LEN] {
     h.finalize()
 }
 
+pub fn fmt_hex(digest: &[u8; DIGEST_LEN], out: &mut [u8; 64]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (i, &b) in digest.iter().enumerate() {
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

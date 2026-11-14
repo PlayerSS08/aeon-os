@@ -77,12 +77,12 @@ All results below were produced on 2026-11-03 by running the commands in `test-p
 | Real hardware | Only QEMU was used for the measured runs; the owner booted the 0.9.x image on a real PC once and it worked (no measurements taken) |
 | Synchronization wait time, I/O latency | A spinlock never waits on one CPU; the disk driver is read-only and was not timed |
 | Long runs | Measurement windows are 6 s |
-| SMP, networking | Not built |
+| SMP | Multi-core AP bootstrap planned; single-core LAPIC preemption verified. Networking is fully implemented (Intel e1000 + VirtIO-Net, IPv4/ARP/ICMP/UDP/DHCP/TCP/HTTP) |
 
 ## 7. Re-running
 
 ```
-cd G:\Aeon\OS
+cd S:\Works\Projects\Aeon\OS
 cargo clippy --release -- -D warnings
 cargo clippy --target x86_64-pc-windows-gnu --lib -- -D warnings
 cargo test --lib --target x86_64-pc-windows-gnu

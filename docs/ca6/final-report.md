@@ -1,6 +1,6 @@
 # Aeon: a micro-OS in Rust
 
-**CA-6 final technical report.** Project: Aeon 0.9.2, `G:\Aeon\OS`. Specialization: Security and Isolation (Track F). Team and individual roles: see `contribution-statement.md` (to be completed by the student).
+**CA-6 final technical report.** Project: Aeon 0.9.2, `S:\Works\Projects\Aeon\OS`. Specialization: Security and Isolation (Track F). Team and individual roles: see `contribution-statement.md` (by SREEHARAN, 25BTRCL257).
 
 ## 1. Title
 

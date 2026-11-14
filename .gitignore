@@ -6,4 +6,6 @@ vmbox/*.vdi
 vmbox/*.nvram
 vmbox/*.log
 vmbox/*.vbox-prev
+vmbox/Logs/
+vmbox/*.png
 

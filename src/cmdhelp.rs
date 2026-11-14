@@ -14,7 +14,9 @@ const fn c(group: &'static str, name: &'static str, usage: &'static str, about: 
 
 /// Groups in the order `help` shows them.
 // Aliases people bring from other systems: Windows (cls, dir, ver), Linux (man, free, uname, history).
-pub const GROUPS: &[&str] = &["system", "status", "hardware", "memory", "tasks", "files", "manage", "text", "disk", "programs", "tools", "power"];
+pub const GROUPS: &[&str] = &[
+    "system", "status", "hardware", "memory", "tasks", "network", "packaging", "files", "manage", "text", "disk", "programs", "tools", "power",
+];
 
 pub const COMMANDS: &[Cmd] = &[
     c("system", "help", "help [command|all]", "this list; `help <command>` explains one command"),
@@ -34,6 +36,15 @@ pub const COMMANDS: &[Cmd] = &[
     c("hardware", "usb", "usb", "USB controller and its ports"),
     c("hardware", "disks", "disks", "the disk, if there is one"),
     c("hardware", "dread", "dread <n> [off]", "32 bytes of sector n as hex"),
+    c("network", "ip", "ip [a|r|l|n]", "configure and view IP, links, routing"),
+    c("network", "ifconfig", "ifconfig [if] [ip]", "display or configure network interfaces"),
+    c("network", "ping", "ping <ip> [-c N]", "send ICMP Echo Requests and measure latency"),
+    c("network", "dhcp", "dhcp [renew|status]", "auto-configure IP, gateway, and DNS"),
+    c("network", "curl", "curl <url>", "transfer data over HTTP/TCP"),
+    c("network", "http", "http <url>", "same as `curl`"),
+    c("network", "netstat", "netstat", "interfaces, routes, ARP cache, sockets"),
+    c("packaging", "apt", "apt <cmd> [pkg]", "Debian package manager for .deb packages"),
+    c("packaging", "aptitude", "aptitude", "interactive terminal package dashboard"),
     c("memory", "mem", "mem", "frames, heap and RAM totals"),
     c("memory", "free", "free", "same as `mem`"),
     c("memory", "alloc", "alloc <KiB>", "allocate and free memory; shows a refusal too"),
@@ -187,7 +198,7 @@ mod tests {
 
     #[test]
     fn prefix_matching_and_completion() {
-        assert_eq!(matching("d").count(), 7); // dir dread dls dcat df disks date
+        assert_eq!(matching("d").count(), 8); // dir dread dls dcat df disks date dhcp
         assert_eq!(common_prefix("d"), "d");
         assert_eq!(common_prefix("dc"), "dcat");
         assert_eq!(common_prefix("hel"), "help");

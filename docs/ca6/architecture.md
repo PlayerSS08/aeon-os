@@ -1,6 +1,6 @@
 # Aeon: architecture document (CA-6)
 
-Aeon is a small x86_64 operating system written in Rust (`no_std`, no third-party crates). It starts from UEFI, runs preemptive tasks on a 100 Hz timer, gives each ring-3 program a contained window, and has a shell. Source: `G:\Aeon\OS\src` (about 15,000 lines of Rust without the generated font data).
+Aeon is a small x86_64 operating system written in Rust (`no_std`, no third-party crates). It starts from UEFI, runs preemptive tasks on a 100 Hz timer, gives each ring-3 program a contained window, and has a shell. Source: `S:\Works\Projects\Aeon\OS\src` (about 15,000 lines of Rust without the generated font data).
 
 ## 1. The ten layers of the assignment, and where each lives
 

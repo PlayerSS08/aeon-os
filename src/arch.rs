@@ -60,6 +60,16 @@ pub unsafe fn inb(port: u16) -> u8 {
     v
 }
 
+/// # Safety
+/// Reading some ports has side effects (for example popping a FIFO).
+#[inline]
+pub unsafe fn inw(port: u16) -> u16 {
+    let v: u16;
+    // SAFETY: contract above; `in` touches no memory.
+    unsafe { asm!("in ax, dx", in("dx") port, out("ax") v, options(nomem, nostack, preserves_flags)) };
+    v
+}
+
 // ---------------------------------------------------------------------------------------------
 // CPU registers
 // ---------------------------------------------------------------------------------------------

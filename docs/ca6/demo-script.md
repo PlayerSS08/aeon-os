@@ -1,6 +1,6 @@
 # Aeon: demonstration script (CA-6), about 12 minutes
 
-Start: `powershell -ExecutionPolicy Bypass -File tools\run-qemu.ps1 -Build -Disk` from `G:\Aeon\OS`. Click inside the window to type. The right column is what to say while the command runs. The order follows the assignment's layers 1 to 10.
+Start: `powershell -ExecutionPolicy Bypass -File tools\run-qemu.ps1 -Build -Disk` from `S:\Works\Projects\Aeon\OS`. Click inside the window to type. The right column is what to say while the command runs. The order follows the assignment's layers 1 to 10.
 
 | # | Layer | Type | Point at | Say |
 |---|---|---|---|---|

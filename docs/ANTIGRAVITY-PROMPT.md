@@ -2,7 +2,7 @@
 
 ---
 
-You are continuing work on **Aeon**, a pure-Rust `no_std` UEFI x86_64 micro-OS in `G:\Aeon\OS` (branch `aeon-boot-upgrade`, remote `https://github.com/Scrooge-777/aeon.git`). Kernel "Nexus", shell "Pulse", boot menu "Dawn". Version 0.9.2, signed image in `usb/`. Read these first, in order: `docs/SESSION-2026-11-03.md`, `docs/HANDOFF.md` (top section "2026-11-04"), `docs/superpowers/plans/2026-11-03-pendrive-storage.md`, `docs/COMPARISON.md`.
+You are continuing work on **Aeon**, a pure-Rust `no_std` UEFI x86_64 micro-OS in `S:\Works\Projects\Aeon\OS` (branch `feat/create--user`, remote `https://github.com/Scrooge-777/aeon.git`). Kernel "Nexus", shell "Pulse", boot menu "Dawn". Version 0.9.2, signed image in `usb/`. Read these first, in order: `docs/SESSION-2026-11-03.md`, `docs/HANDOFF.md` (top section "2026-11-04"), `docs/superpowers/plans/2026-11-03-pendrive-storage.md`, `docs/COMPARISON.md`.
 
 ## Where it stands
 

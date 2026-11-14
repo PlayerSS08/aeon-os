@@ -23,6 +23,7 @@ use crate::usbfs;
 
 const WINDOW_PAGES: usize = 16;
 const MAX_EXTRA_PAGES: usize = 32;
+const TOTAL_ARENA_PAGES: usize = WINDOW_PAGES + MAX_EXTRA_PAGES;
 const PAGE: u64 = 4096;
 const NO_TASK: usize = usize::MAX;
 
@@ -57,6 +58,14 @@ struct OpenFile {
     offset: usize,
     flags: u32,
     is_usb: bool,
+    is_socket: bool,
+    _sock_domain: u32,
+    sock_type: u32,
+    _sock_protocol: u32,
+    bound_port: u16,
+    peer_ip: [u8; 4],
+    peer_port: u16,
+    connected: bool,
 }
 
 static FD_TABLE: Global<[Option<OpenFile>; MAX_FDS]> = Global::new([
@@ -131,7 +140,7 @@ global_asm!(
         mov eax, 1
         syscall
         xor edi, edi
-        mov eax, 2
+        mov eax, 60
         syscall
     1:  jmp 1b
     2:  .ascii "hello from ring 3\n"
@@ -174,7 +183,7 @@ global_asm!(
         and rax, rbx
         add rax, 1
         mov rdi, rax
-        mov eax, 2
+        mov eax, 60
         syscall
     1:  jmp 1b
     .globl aeon_user_badcall_end
@@ -188,7 +197,7 @@ global_asm!(
         syscall
         add rax, 1
         mov rdi, rax
-        mov eax, 2
+        mov eax, 60
         syscall
     1:  jmp 1b
     .globl aeon_user_denied_end
@@ -375,7 +384,7 @@ pub fn run(name: &str) -> Result<usize, RunError> {
 
     let mut base = WINDOW.load(Ordering::Relaxed);
     if base == 0 {
-        base = mm::alloc_frames(WINDOW_PAGES).ok_or(RunError::NoMemory)?;
+        base = mm::alloc_frames(TOTAL_ARENA_PAGES).ok_or(RunError::NoMemory)?;
         WINDOW.store(base, Ordering::Relaxed);
     }
     USER_BRK.store(base + WINDOW_PAGES as u64 * PAGE, Ordering::Relaxed);
@@ -498,6 +507,14 @@ fn sys_open(path_ptr: u64, flags: u32, _mode: u32) -> u64 {
                 offset: 0,
                 flags,
                 is_usb,
+                is_socket: false,
+                _sock_domain: 0,
+                sock_type: 0,
+                _sock_protocol: 0,
+                bound_port: 0,
+                peer_ip: [0; 4],
+                peer_port: 0,
+                connected: false,
             });
             return fd as u64;
         }
@@ -524,6 +541,10 @@ fn sys_close(fd: u64) -> u64 {
 
 fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> u64 {
     let fd = fd as usize;
+    if fd == 0 {
+        // Stdin: non-blocking or EOF for scripted userland
+        return 0;
+    }
     if fd >= MAX_FDS {
         return syscall::errno(syscall::EBADF);
     }
@@ -537,6 +558,9 @@ fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         Some(f) => f,
         None => return syscall::errno(syscall::EBADF),
     };
+    if file.is_socket {
+        return sys_recvfrom(fd as u64, buf_ptr, count as u64, 0, 0, 0);
+    }
     if file.flags & syscall::O_WRONLY != 0 && file.flags & syscall::O_RDWR == 0 {
         return syscall::errno(syscall::EBADF);
     }
@@ -607,6 +631,9 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         Some(f) => f,
         None => return syscall::errno(syscall::EBADF),
     };
+    if file.is_socket {
+        return sys_sendto(fd as u64, buf_ptr, count, 0, 0, 0);
+    }
     if file.flags & (syscall::O_WRONLY | syscall::O_RDWR) == 0 && file.flags != 0 {
         return syscall::errno(syscall::EBADF);
     }
@@ -730,6 +757,170 @@ fn sys_mmap(_addr: u64, length: u64, _prot: u64, flags: u64, _fd: u64, _offset: 
     }
 }
 
+fn sys_socket(domain: u32, sock_type: u32, protocol: u32) -> u64 {
+    if domain != syscall::AF_INET && domain != 0 {
+        return syscall::errno(syscall::EAFNOSUPPORT);
+    }
+    // SAFETY: single hardware thread, interrupts off during syscall dispatch.
+    let table = unsafe { FD_TABLE.get() };
+    for (fd, slot) in table.iter_mut().enumerate().take(MAX_FDS).skip(3) {
+        if slot.is_none() {
+            *slot = Some(OpenFile {
+                path: String::from("[socket]"),
+                offset: 0,
+                flags: syscall::O_RDWR,
+                is_usb: false,
+                is_socket: true,
+                _sock_domain: domain,
+                sock_type,
+                _sock_protocol: protocol,
+                bound_port: 0,
+                peer_ip: [0; 4],
+                peer_port: 0,
+                connected: false,
+            });
+            return fd as u64;
+        }
+    }
+    syscall::errno(syscall::ENOMEM)
+}
+
+fn sys_connect(fd: u64, addr_ptr: u64, addr_len: u64) -> u64 {
+    let fd = fd as usize;
+    if fd >= MAX_FDS {
+        return syscall::errno(syscall::EBADF);
+    }
+    if addr_len < 8 {
+        return syscall::errno(syscall::EINVAL);
+    }
+    let mut sock_buf = [0u8; 16];
+    if !copy_from_user(addr_ptr, &mut sock_buf[..addr_len.min(16) as usize]) {
+        return syscall::errno(syscall::EFAULT);
+    }
+    let port = u16::from_be_bytes([sock_buf[2], sock_buf[3]]);
+    let ip = [sock_buf[4], sock_buf[5], sock_buf[6], sock_buf[7]];
+
+    // SAFETY: single hardware thread, interrupts off during syscall dispatch.
+    let table = unsafe { FD_TABLE.get() };
+    let file = match &mut table[fd] {
+        Some(f) if f.is_socket => f,
+        _ => return syscall::errno(syscall::EBADF),
+    };
+
+    file.peer_ip = ip;
+    file.peer_port = port;
+    file.connected = true;
+    0
+}
+
+fn sys_bind(fd: u64, addr_ptr: u64, addr_len: u64) -> u64 {
+    let fd = fd as usize;
+    if fd >= MAX_FDS {
+        return syscall::errno(syscall::EBADF);
+    }
+    if addr_len < 4 {
+        return syscall::errno(syscall::EINVAL);
+    }
+    let mut sock_buf = [0u8; 16];
+    if !copy_from_user(addr_ptr, &mut sock_buf[..addr_len.min(16) as usize]) {
+        return syscall::errno(syscall::EFAULT);
+    }
+    let port = u16::from_be_bytes([sock_buf[2], sock_buf[3]]);
+
+    // SAFETY: single hardware thread, interrupts off during syscall dispatch.
+    let table = unsafe { FD_TABLE.get() };
+    let file = match &mut table[fd] {
+        Some(f) if f.is_socket => f,
+        _ => return syscall::errno(syscall::EBADF),
+    };
+
+    file.bound_port = port;
+    0
+}
+
+fn sys_listen(fd: u64, _backlog: u32) -> u64 {
+    let fd = fd as usize;
+    if fd >= MAX_FDS {
+        return syscall::errno(syscall::EBADF);
+    }
+    // SAFETY: single hardware thread, interrupts off during syscall dispatch.
+    let table = unsafe { FD_TABLE.get() };
+    match &mut table[fd] {
+        Some(f) if f.is_socket => 0,
+        _ => syscall::errno(syscall::EBADF),
+    }
+}
+
+fn sys_sendto(fd: u64, buf_ptr: u64, count: u64, _flags: u32, dst_ptr: u64, _dst_len: u32) -> u64 {
+    let fd = fd as usize;
+    if fd >= MAX_FDS {
+        return syscall::errno(syscall::EBADF);
+    }
+    let to_send = count.min(1500) as usize;
+    let mut buf = alloc::vec![0u8; to_send];
+    if !copy_from_user(buf_ptr, &mut buf) {
+        return syscall::errno(syscall::EFAULT);
+    }
+
+    // SAFETY: single hardware thread, interrupts off during syscall dispatch.
+    let table = unsafe { FD_TABLE.get() };
+    let file = match &mut table[fd] {
+        Some(f) if f.is_socket => f,
+        _ => return syscall::errno(syscall::EBADF),
+    };
+
+    let target_ip = if dst_ptr != 0 {
+        let mut sock_buf = [0u8; 16];
+        if !copy_from_user(dst_ptr, &mut sock_buf[..8]) {
+            return syscall::errno(syscall::EFAULT);
+        }
+        crate::netstack::Ipv4Addr([sock_buf[4], sock_buf[5], sock_buf[6], sock_buf[7]])
+    } else {
+        crate::netstack::Ipv4Addr(file.peer_ip)
+    };
+
+    let proto = if file.sock_type == syscall::SOCK_DGRAM {
+        crate::netstack::IPPROTO_UDP
+    } else {
+        crate::netstack::IPPROTO_TCP
+    };
+
+    match crate::netstack::send_ipv4_packet(target_ip, proto, &buf) {
+        Ok(()) => to_send as u64,
+        Err(_) => syscall::errno(syscall::ENETUNREACH),
+    }
+}
+
+fn sys_recvfrom(fd: u64, buf_ptr: u64, count: u64, _flags: u32, src_ptr: u64, src_len_ptr: u64) -> u64 {
+    let fd = fd as usize;
+    if fd >= MAX_FDS {
+        return syscall::errno(syscall::EBADF);
+    }
+    // SAFETY: single hardware thread, interrupts off during syscall dispatch.
+    let table = unsafe { FD_TABLE.get() };
+    let _file = match &mut table[fd] {
+        Some(f) if f.is_socket => f,
+        _ => return syscall::errno(syscall::EBADF),
+    };
+
+    let mut buf = [0u8; 1500];
+    crate::netstack::poll();
+    match crate::netdev::receive_packet(&mut buf) {
+        Ok(len) if len > 0 => {
+            let to_copy = (count as usize).min(len);
+            if !copy_to_user(buf_ptr, &buf[..to_copy]) {
+                return syscall::errno(syscall::EFAULT);
+            }
+            if src_ptr != 0 && src_len_ptr != 0 {
+                let sock_in = [2u8, 0, 0, 80, 10, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0];
+                let _ = copy_to_user(src_ptr, &sock_in);
+            }
+            to_copy as u64
+        }
+        _ => 0,
+    }
+}
+
 /// Rust side of the `syscall` entry. Runs with interrupts off on the task's kernel stack.
 #[unsafe(no_mangle)]
 extern "C" fn aeon_syscall_dispatch(n: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
@@ -740,20 +931,28 @@ extern "C" fn aeon_syscall_dispatch(n: u64, a0: u64, a1: u64, a2: u64, a3: u64, 
     match n {
         0 => sys_read(a0, a1, a2),
         1 => sys_write(a0, a1, a2),
-        2 if a0 == 0 => {
-            // Legacy exit(0)
-            crate::log::print_raw(b"[user] task ");
-            print_num(sched::current_id() as u64);
-            crate::log::print_raw(b" exited with code 0\n");
-            sched::exit()
+        2 => {
+            if mask & syscall::Number::Open.bit() != 0 {
+                sys_open(a0, a1 as u32, a2 as u32)
+            } else if a0 == 0 && mask & syscall::LEGACY_EXIT_BIT != 0 {
+                crate::log::print_raw(b"[user] task ");
+                print_num(sched::current_id() as u64);
+                crate::log::print_raw(b" exited with code 0\n");
+                sched::exit()
+            } else {
+                sys_open(a0, a1 as u32, a2 as u32)
+            }
         }
-        2 => sys_open(a0, a1 as u32, a2 as u32),
-        3 if a0 < 3 => {
-            // Legacy yield
-            sched::yield_now();
-            0
+        3 => {
+            if mask & syscall::Number::Close.bit() != 0 {
+                sys_close(a0)
+            } else if a0 < 3 && mask & syscall::LEGACY_YIELD_BIT != 0 {
+                sched::yield_now();
+                0
+            } else {
+                sys_close(a0)
+            }
         }
-        3 => sys_close(a0),
         4 => crate::log::uptime_us(),
         5 => sched::current_id() as u64,
         8 => sys_lseek(a0, a1 as i64, a2 as u32),
@@ -764,6 +963,12 @@ extern "C" fn aeon_syscall_dispatch(n: u64, a0: u64, a1: u64, a2: u64, a3: u64, 
             0
         }
         39 => sched::current_id() as u64,
+        41 => sys_socket(a0 as u32, a1 as u32, a2 as u32),
+        42 => sys_connect(a0, a1, a2),
+        44 => sys_sendto(a0, a1, a2, a3 as u32, a4, 0),
+        45 => sys_recvfrom(a0, a1, a2, a3 as u32, a4, 0),
+        49 => sys_bind(a0, a1, a2),
+        50 => sys_listen(a0, a1 as u32),
         60 => {
             crate::log::print_raw(b"[user] task ");
             print_num(sched::current_id() as u64);

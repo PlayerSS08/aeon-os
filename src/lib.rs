@@ -17,6 +17,7 @@ pub mod banker;
 pub mod bcache;
 pub mod block;
 pub mod ahcifis;
+pub mod apt;
 pub mod editbuf;
 pub mod elf;
 pub mod menulogic;
@@ -43,6 +44,8 @@ pub mod keymap;
 pub mod lineedit;
 pub mod logfmt;
 pub mod memmap;
+pub mod netdev;
+pub mod netstack;
 pub mod pci;
 pub mod pixel;
 pub mod readyq;
@@ -74,6 +77,10 @@ pub mod log;
 pub mod ahci;
 #[cfg(target_os = "uefi")]
 pub mod disk;
+#[cfg(target_os = "uefi")]
+pub mod e1000;
+#[cfg(target_os = "uefi")]
+pub mod virtionet;
 #[cfg(target_os = "uefi")]
 pub mod apic;
 #[cfg(target_os = "uefi")]

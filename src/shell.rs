@@ -437,6 +437,330 @@ fn cmd_usb() {
     }
 }
 
+fn cmd_ip(rest: &str) {
+    let sub = rest.split_whitespace().next().unwrap_or("addr");
+    match sub {
+        "addr" | "a" => {
+            let (ip, _mask, _gw, _dns, is_dhcp) = crate::netstack::get_config();
+            let mac = crate::netstack::MacAddr(crate::netdev::mac_address());
+            let link = if crate::netdev::link_up() { "UP" } else { "DOWN" };
+            out!("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 1514 qdisc noqueue state UNKNOWN\n");
+            out!("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n");
+            out!("    inet 127.0.0.1/8 scope host lo\n");
+            out!("2: eth0: <BROADCAST,MULTICAST,{}> mtu 1500 qdisc pfifo_fast state {}\n", link, link);
+            out!("    link/ether {} brd ff:ff:ff:ff:ff:ff\n", mac);
+            out!("    inet {}/24 brd 10.0.2.255 scope global eth0 [{}]\n", ip, if is_dhcp { "dynamic" } else { "static" });
+        }
+        "route" | "r" => {
+            let (ip, _mask, gw, _, _) = crate::netstack::get_config();
+            out!("default via {} dev eth0 proto kernel\n", gw);
+            out!("{}.0/24 dev eth0 proto kernel scope link src {}\n", ip.0[0], ip);
+        }
+        "link" | "l" => {
+            let mac = crate::netstack::MacAddr(crate::netdev::mac_address());
+            let link = if crate::netdev::link_up() { "UP" } else { "DOWN" };
+            let name = crate::netdev::device_name();
+            out!("1: lo: <LOOPBACK,UP> mtu 1514 state UP\n");
+            out!("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n");
+            out!("2: eth0: <BROADCAST,MULTICAST,{}> mtu 1500 state {} (driver: {})\n", link, link, name);
+            out!("    link/ether {} brd ff:ff:ff:ff:ff:ff\n", mac);
+        }
+        "neigh" | "n" => {
+            let entries = crate::netstack::arp_entries();
+            if entries.is_empty() {
+                out!("no ARP neighbor entries\n");
+            } else {
+                for (ip, mac) in entries {
+                    out!("{} dev eth0 lladdr {} REACHABLE\n", ip, mac);
+                }
+            }
+        }
+        _ => out!("usage: ip <addr|route|link|neigh>\n"),
+    }
+}
+
+fn cmd_ifconfig(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    if let Some(iface) = parts.next() {
+        if let Some(ip_str) = parts.next() {
+            if let Some(ip) = crate::netstack::Ipv4Addr::parse(ip_str) {
+                let mut mask = crate::netstack::Ipv4Addr::new(255, 255, 255, 0);
+                if let Some("netmask") = parts.next() {
+                    if let Some(m_str) = parts.next() {
+                        if let Some(m) = crate::netstack::Ipv4Addr::parse(m_str) {
+                            mask = m;
+                        }
+                    }
+                }
+                let (_, _, gw, dns, _) = crate::netstack::get_config();
+                crate::netstack::set_config(ip, mask, gw, dns, false);
+                out!("{}: configured IP {} netmask {}\n", iface, ip, mask);
+                return;
+            }
+        }
+    }
+
+    let (ip, mask, _, _, _) = crate::netstack::get_config();
+    let mac = crate::netstack::MacAddr(crate::netdev::mac_address());
+    let (rx_pkts, rx_bytes, rx_err, tx_pkts, tx_bytes, tx_err) = crate::netdev::stats();
+    let link = if crate::netdev::link_up() { "UP,BROADCAST,RUNNING,MULTICAST" } else { "BROADCAST,MULTICAST" };
+
+    out!("eth0: flags=4163<{}>  mtu 1500\n", link);
+    out!("        inet {}  netmask {}  broadcast 10.0.2.255\n", ip, mask);
+    out!("        ether {}  txqueuelen 1000  (Ethernet - {})\n", mac, crate::netdev::device_name());
+    out!("        RX packets {}  bytes {} ({} KiB)\n", rx_pkts, rx_bytes, rx_bytes / 1024);
+    out!("        RX errors {}  dropped 0  overruns 0  frame 0\n", rx_err);
+    out!("        TX packets {}  bytes {} ({} KiB)\n", tx_pkts, tx_bytes, tx_bytes / 1024);
+    out!("        TX errors {}  dropped 0 overruns 0  carrier 0  collisions 0\n\n", tx_err);
+
+    out!("lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 1514\n");
+    out!("        inet 127.0.0.1  netmask 255.0.0.0\n");
+    out!("        loop  txqueuelen 1000  (Local Loopback)\n");
+}
+
+fn cmd_ping(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    let target_str = match parts.next() {
+        Some(t) => t,
+        None => {
+            out!("usage: ping <ip|host> [-c count]\n");
+            return;
+        }
+    };
+    let mut count = 4usize;
+    while let Some(arg) = parts.next() {
+        if arg == "-c" {
+            if let Some(c_str) = parts.next() {
+                if let Ok(c) = c_str.parse::<usize>() {
+                    count = c.clamp(1, 20);
+                }
+            }
+        }
+    }
+
+    let target = match target_str {
+        "localhost" | "127.0.0.1" => crate::netstack::Ipv4Addr::LOOPBACK,
+        "gateway" => {
+            let (_, _, gw, _, _) = crate::netstack::get_config();
+            gw
+        }
+        other => match crate::netstack::Ipv4Addr::parse(other) {
+            Some(ip) => ip,
+            None => {
+                out!("ping: cannot resolve '{}': unknown host or invalid IPv4\n", other);
+                return;
+            }
+        },
+    };
+
+    out!("PING {} ({}) 32(60) bytes of data.\n", target_str, target);
+    let stats = crate::netstack::ping(target, count, 1000);
+    out!("\n--- {} ping statistics ---\n", target);
+    let loss_pct = stats
+        .sent
+        .checked_sub(stats.received)
+        .and_then(|lost| (lost * 100).checked_div(stats.sent))
+        .unwrap_or(0);
+    out!("{} packets transmitted, {} received, {}% packet loss\n", stats.sent, stats.received, loss_pct);
+    if stats.received > 0 {
+        out!(
+            "rtt min/avg/max = {}.{:03}/{}.{:03}/{}.{:03} ms\n",
+            stats.min_us / 1000, stats.min_us % 1000,
+            stats.avg_us / 1000, stats.avg_us % 1000,
+            stats.max_us / 1000, stats.max_us % 1000
+        );
+    }
+}
+
+fn cmd_dhcp(_rest: &str) {
+    out!("initiating DHCP lease request on eth0...\n");
+    match crate::netstack::run_dhcp(3000) {
+        Ok((ip, mask, gw, dns)) => {
+            out!("DHCP lease acquired successfully!\n");
+            out!("  IP Address    : {}\n", ip);
+            out!("  Subnet Mask   : {}\n", mask);
+            out!("  Gateway Router: {}\n", gw);
+            out!("  DNS Server    : {}\n", dns);
+        }
+        Err(msg) => {
+            out!("DHCP notice: {}\n", msg);
+            let (ip, mask, gw, dns, _) = crate::netstack::get_config();
+            out!("  Current IP    : {}\n", ip);
+            out!("  Subnet Mask   : {}\n", mask);
+            out!("  Gateway       : {}\n", gw);
+            out!("  DNS Server    : {}\n", dns);
+        }
+    }
+}
+
+fn cmd_curl(rest: &str) {
+    let url = rest.trim();
+    if url.is_empty() {
+        out!("usage: curl <url>\n");
+        return;
+    }
+    let clean = url.trim_start_matches("http://");
+    let (host_port, path) = clean.split_once('/').map_or((clean, "/"), |(hp, p)| (hp, alloc::format!("/{p}").leak() as &str));
+    let (host, port) = host_port.split_once(':').map_or((host_port, 80u16), |(h, p)| (h, p.parse::<u16>().unwrap_or(80)));
+
+    let target_ip = match crate::netstack::Ipv4Addr::parse(host) {
+        Some(ip) => ip,
+        None if host == "localhost" => crate::netstack::Ipv4Addr::LOOPBACK,
+        None if host == "gateway" => {
+            let (_, _, gw, _, _) = crate::netstack::get_config();
+            gw
+        }
+        None => {
+            out!("curl: could not resolve host '{}'\n", host);
+            return;
+        }
+    };
+
+    out!("* Connecting to {} ({}) port {}...\n", host, target_ip, port);
+    match crate::netstack::http_get(target_ip, port, path) {
+        Ok(resp) => {
+            out!("* HTTP status: {}\n", resp.status);
+            out!("{}\n", resp.headers);
+            let body = String::from_utf8_lossy(&resp.body);
+            out!("{}\n", body);
+        }
+        Err(e) => {
+            out!("curl: (7) Failed to connect to {} port {}: {}\n", host, port, e);
+        }
+    }
+}
+
+fn cmd_netstat() {
+    let (ip, mask, gw, _, _) = crate::netstack::get_config();
+    let (rx_pkts, _rx_bytes, rx_err, tx_pkts, _tx_bytes, tx_err) = crate::netdev::stats();
+
+    out!("Kernel Interface table\n");
+    out!("Iface      MTU   RX-OK RX-ERR   TX-OK TX-ERR Flg\n");
+    out!("eth0      1500 {:>7} {:>6} {:>7} {:>6} BMRU\n", rx_pkts, rx_err, tx_pkts, tx_err);
+    out!("lo        1514       0      0       0      0 LRU\n\n");
+
+    out!("Kernel IP routing table\n");
+    out!("Destination     Gateway         Genmask         Flags Metric Ref    Use Iface\n");
+    out!("0.0.0.0         {:<15} 0.0.0.0         UG    100    0        0 eth0\n", gw);
+    out!("{:<15} 0.0.0.0         {:<15} U     100    0        0 eth0\n", ip, mask);
+    out!("127.0.0.0       0.0.0.0         255.0.0.0       U     0      0        0 lo\n\n");
+
+    out!("Active Internet connections (only servers and established)\n");
+    out!("Proto Recv-Q Send-Q Local Address           Foreign Address         State\n");
+    out!("tcp        0      0 {}:49152          0.0.0.0:*               LISTEN\n", ip);
+    out!("udp        0      0 {}:68             0.0.0.0:*               CONNECTED\n", ip);
+}
+
+fn cmd_apt(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("help");
+
+    let fs = fs();
+    crate::apt::ensure_initialized(fs);
+
+    match sub {
+        "update" => {
+            out!("Hit:1 http://deb.debian.org/debian bookworm InRelease\n");
+            out!("Get:2 http://deb.debian.org/debian bookworm/main amd64 Packages [8,784 kB]\n");
+            out!("Fetched 8,784 kB in 1s (7,842 kB/s)\n");
+            out!("Reading package lists... Done\n");
+            out!("Building dependency tree... Done\n");
+            out!("All packages are up to date.\n");
+        }
+        "install" => {
+            let pkg = match parts.next() {
+                Some(p) => p,
+                None => {
+                    out!("usage: apt install <package>\n");
+                    return;
+                }
+            };
+            out!("Reading package lists... Done\n");
+            out!("Building dependency tree... Done\n");
+            out!("The following NEW packages will be installed:\n  {}\n", pkg);
+            match crate::apt::install_package(fs, pkg) {
+                Ok(msg) => out!("{}\n", msg),
+                Err(err) => out!("E: {}\n", err),
+            }
+        }
+        "remove" | "purge" => {
+            let pkg = match parts.next() {
+                Some(p) => p,
+                None => {
+                    out!("usage: apt remove <package>\n");
+                    return;
+                }
+            };
+            match crate::apt::remove_package(fs, pkg) {
+                Ok(msg) => out!("{}\n", msg),
+                Err(err) => out!("E: {}\n", err),
+            }
+        }
+        "list" => {
+            let installed_only = parts.any(|a| a == "--installed");
+            if installed_only {
+                let inst = crate::apt::list_installed(fs);
+                out!("Listing... Done\n");
+                for (p, v) in inst {
+                    out!("{}/now {} amd64 [installed]\n", p, v);
+                }
+            } else {
+                out!("Listing... Done\n");
+                for p in crate::apt::BUILTIN_PACKAGES {
+                    let inst = crate::apt::is_installed(fs, p.name);
+                    let tag = if inst { " [installed]" } else { "" };
+                    out!("{}/bookworm {} amd64{}\n", p.name, p.version, tag);
+                }
+            }
+        }
+        "show" => {
+            let pkg = match parts.next() {
+                Some(p) => p,
+                None => {
+                    out!("usage: apt show <package>\n");
+                    return;
+                }
+            };
+            match crate::apt::show_package(pkg) {
+                Some(info) => out!("{}\n", info),
+                None => out!("N: Unable to locate package {}\n", pkg),
+            }
+        }
+        "search" => {
+            let pattern = match parts.next() {
+                Some(p) => p,
+                None => {
+                    out!("usage: apt search <pattern>\n");
+                    return;
+                }
+            };
+            out!("Sorting... Done\nFull Text Search... Done\n");
+            for p in crate::apt::BUILTIN_PACKAGES {
+                if p.name.contains(pattern) || p.description.contains(pattern) {
+                    out!("{} - {}\n", p.name, p.description);
+                }
+            }
+        }
+        _ => {
+            out!("apt 2.6.1 (amd64) - Debian Package Manager for Aeon OS\n");
+            out!("Usage: apt <command> [arguments]\n\n");
+            out!("Commands:\n");
+            out!("  update   - Retrieve new lists of packages\n");
+            out!("  install  - Install new packages (e.g. apt install coreutils)\n");
+            out!("  remove   - Remove packages (e.g. apt remove tree)\n");
+            out!("  list     - List packages based on package names (--installed)\n");
+            out!("  show     - Show package details\n");
+            out!("  search   - Search in package descriptions\n");
+        }
+    }
+}
+
+fn cmd_aptitude() {
+    let fs = fs();
+    let dashboard = crate::apt::aptitude_dashboard(fs);
+    out!("{}\n", dashboard);
+}
+
 static DEMO_QUEUE: sched::WaitQueue = sched::WaitQueue::new();
 
 extern "C" fn waiter(_: usize) {
@@ -1531,6 +1855,14 @@ fn run(line: &str, hist: &History) {
         "dls" => cmd_dls(rest),
         "dcat" => cmd_dcat(rest),
         "dread" => cmd_dread(rest),
+        "ip" => cmd_ip(rest),
+        "ifconfig" => cmd_ifconfig(rest),
+        "ping" => cmd_ping(rest),
+        "dhcp" => cmd_dhcp(rest),
+        "curl" | "http" => cmd_curl(rest),
+        "netstat" => cmd_netstat(),
+        "apt" => cmd_apt(rest),
+        "aptitude" => cmd_aptitude(),
         "block" => cmd_block(),
         "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),

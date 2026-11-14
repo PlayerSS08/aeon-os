@@ -1,6 +1,6 @@
 # Aeon handoff: read this first in a new session
 
-Last updated 2026-11-03 (latest state: `docs/SESSION-2026-11-03.md`, read it first). Branch `aeon-boot-upgrade` in `G:\Aeon\OS`, pushed to `origin` up to `f7144c8`.
+Last updated 2026-11-14 (latest state: `docs/SESSION-2026-11-03.md`, read it first). Branch `feat/create--user` in `S:\Works\Projects\Aeon\OS`, pushed to `origin`.
 
 ## What Aeon is
 
@@ -8,7 +8,7 @@ A pure-Rust, `no_std`, zero-dependency UEFI x86_64 micro-OS. Kernel is called Ne
 
 ## How to build, test, run
 
-| Task | Command (from `G:\Aeon\OS`, Git Bash) |
+| Task | Command (from `S:\Works\Projects\Aeon\OS`, Git Bash) |
 |---|---|
 | Host unit tests (454) | `cargo test --lib --target x86_64-pc-windows-gnu` (MSVC link.exe is not installed, so use the GNU target) |
 | Clippy | `cargo clippy --release -- -D warnings` and `cargo clippy --target x86_64-pc-windows-gnu --lib -- -D warnings` |

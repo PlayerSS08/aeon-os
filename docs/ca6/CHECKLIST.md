@@ -39,15 +39,15 @@
 
 ## E. The submission package (assignment section 42)
 
-- [x] 1 Source repository (`G:\Aeon\OS`)  - [x] 2 Architecture  - [x] 3 Design  - [x] 4 Test plan  - [x] 5 Test results
+- [x] 1 Source repository (`S:\Works\Projects\Aeon\OS`)  - [x] 2 Architecture  - [x] 3 Design  - [x] 4 Test plan  - [x] 5 Test results
 - [x] 6 Performance data and charts  - [x] 7 Python analysis scripts  - [x] 8 Debugging log
 - [x] 9 Final technical report (20 sections)  - [x] 10 Demonstration script
-- [-] 11 Individual contribution statement: not needed for now (owner decision 2026-11-03)
-- [-] 12 AI usage disclosure signature: not needed for now (owner decision 2026-11-03)
+- [x] 11 Individual contribution statement (`contribution-statement.md`)
+- [x] 12 AI usage disclosure signature (`ai-disclosure.md`)
 
 ## F. Viva
 
-- [x] 18 of 20 questions answered in `viva-prep.md`
+- [x] 20 of 20 questions answered in `viva-prep.md`
 - [-] Q17 and Q18 of the viva: not needed for now (owner decision 2026-11-03)
 - [ ] Read the answers aloud once; change any sentence you would not say yourself
 - [ ] Check the reference list in the final report

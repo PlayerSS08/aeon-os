@@ -24,6 +24,18 @@ pub enum Number {
     Yield = 24,
     /// `getpid()`: Linux sys_getpid
     GetPid = 39,
+    /// `socket(domain, type, protocol)`: Linux sys_socket
+    Socket = 41,
+    /// `connect(sockfd, addr, addrlen)`: Linux sys_connect
+    Connect = 42,
+    /// `sendto(sockfd, buf, len, flags, dest_addr, addrlen)`: Linux sys_sendto
+    SendTo = 44,
+    /// `recvfrom(sockfd, buf, len, flags, src_addr, addrlen)`: Linux sys_recvfrom
+    RecvFrom = 45,
+    /// `bind(sockfd, addr, addrlen)`: Linux sys_bind
+    Bind = 49,
+    /// `listen(sockfd, backlog)`: Linux sys_listen
+    Listen = 50,
     /// `exit(code)`: Linux sys_exit
     Exit = 60,
     /// `clock_gettime(clk_id, tp)`: Linux sys_clock_gettime (uptime)
@@ -40,6 +52,13 @@ pub const O_WRONLY: u32 = 1;
 pub const O_RDWR: u32 = 2;
 pub const O_CREAT: u32 = 0x40;
 pub const O_APPEND: u32 = 0x400;
+
+// Standard Linux socket constants
+pub const AF_INET: u32 = 2;
+pub const SOCK_STREAM: u32 = 1;
+pub const SOCK_DGRAM: u32 = 2;
+pub const IPPROTO_TCP: u32 = 6;
+pub const IPPROTO_UDP: u32 = 17;
 
 // Standard Linux lseek whence
 pub const SEEK_SET: u32 = 0;
@@ -63,6 +82,11 @@ pub const EACCES: u64 = 13;
 pub const EFAULT: u64 = 14;
 pub const EINVAL: u64 = 22;
 pub const ENOSPC: u64 = 28;
+pub const EAFNOSUPPORT: u64 = 97;
+pub const ENETUNREACH: u64 = 101;
+pub const ENOTCONN: u64 = 107;
+pub const ETIMEDOUT: u64 = 110;
+pub const ECONNREFUSED: u64 = 111;
 
 pub const fn errno(code: u64) -> u64 {
     (0u64).wrapping_sub(code)
@@ -112,6 +136,12 @@ pub fn allow_mask(program: &str) -> u64 {
                     | Number::Brk.bit()
                     | Number::Yield.bit()
                     | Number::GetPid.bit()
+                    | Number::Socket.bit()
+                    | Number::Connect.bit()
+                    | Number::SendTo.bit()
+                    | Number::RecvFrom.bit()
+                    | Number::Bind.bit()
+                    | Number::Listen.bit()
                     | Number::ClockGetTime.bit()
             }
             _ => 0,
@@ -153,6 +183,12 @@ pub fn decode(n: u64) -> Option<Number> {
         12 => Number::Brk,
         24 => Number::Yield,
         39 => Number::GetPid,
+        41 => Number::Socket,
+        42 => Number::Connect,
+        44 => Number::SendTo,
+        45 => Number::RecvFrom,
+        49 => Number::Bind,
+        50 => Number::Listen,
         60 => Number::Exit,
         228 => Number::ClockGetTime,
         _ => return None,
@@ -175,6 +211,12 @@ mod tests {
             Number::Brk,
             Number::Yield,
             Number::GetPid,
+            Number::Socket,
+            Number::Connect,
+            Number::SendTo,
+            Number::RecvFrom,
+            Number::Bind,
+            Number::Listen,
             Number::Exit,
             Number::ClockGetTime,
         ];
@@ -195,6 +237,12 @@ mod tests {
             Number::Brk,
             Number::Yield,
             Number::GetPid,
+            Number::Socket,
+            Number::Connect,
+            Number::SendTo,
+            Number::RecvFrom,
+            Number::Bind,
+            Number::Listen,
             Number::Exit,
             Number::ClockGetTime,
         ];
@@ -250,6 +298,12 @@ mod tests {
             Number::Brk,
             Number::Yield,
             Number::GetPid,
+            Number::Socket,
+            Number::Connect,
+            Number::SendTo,
+            Number::RecvFrom,
+            Number::Bind,
+            Number::Listen,
             Number::Exit,
             Number::ClockGetTime,
         ];

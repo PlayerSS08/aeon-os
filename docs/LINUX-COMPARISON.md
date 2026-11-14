@@ -1,6 +1,8 @@
 # Aeon OS vs Linux: Speed, Architectural Distance, and POSIX Compatibility Matrix
 
 **Document Reference**: `docs/LINUX-COMPARISON.md`  
+**Master Index**: [docs/README.md](README.md)  
+**Obsidian Vault Note**: `G:\Brain\AGY\5 Cortex\Comparisons\Aeon OS vs Linux.md`  
 **Target Branch**: `feat/create--user`  
 **Evaluation Date**: 2026-11-12  
 **Baseline Targets**: Aeon OS (v0.9.4 `feat/create--user`) vs Linux Kernel (v6.x x86_64)  

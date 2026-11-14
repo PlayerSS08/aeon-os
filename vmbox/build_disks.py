@@ -274,7 +274,11 @@ def main():
     print("Aeon-Boot.vdi created successfully.")
 
     # Generate Demo Disk
-    mkdisk_path = r"G:\Aeon\OS\tests\mkdisk.py"
+    mkdisk_path = os.path.join(vm_dir, "..", "tests", "mkdisk.py")
+    if not os.path.exists(mkdisk_path):
+        mkdisk_path = r"S:\Works\Projects\Aeon\OS\tests\mkdisk.py"
+    if not os.path.exists(mkdisk_path):
+        mkdisk_path = r"G:\Aeon\OS\tests\mkdisk.py"
     if os.path.exists(mkdisk_path):
         demo_raw = os.path.join(vm_dir, "Aeon-DemoDisk.raw")
         demo_vdi = os.path.join(vm_dir, "Aeon-DemoDisk.vdi")

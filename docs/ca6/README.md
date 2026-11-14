@@ -6,7 +6,7 @@ Assignment: *CA6 Rust Micro-OS Engineering Project* (Operating System Concepts, 
 
 | # | Required item | File |
 |---|---|---|
-| 1 | Rust source repository | `G:\Aeon\OS` (git, branch `aeon-boot-upgrade`) |
+| 1 | Rust source repository | `S:\Works\Projects\Aeon\OS` (git, branch `feat/create--user`) |
 | 2 | Architecture document | [architecture.md](architecture.md) |
 | 3 | Design document | [design.md](design.md) |
 | 4 | Test plan | [test-plan.md](test-plan.md) |
@@ -16,8 +16,8 @@ Assignment: *CA6 Rust Micro-OS Engineering Project* (Operating System Concepts, 
 | 8 | Debugging log | [debugging-log.md](debugging-log.md) |
 | 9 | Final technical report (20 sections) | [final-report.md](final-report.md) |
 | 10 | Demonstration | [demo-script.md](demo-script.md) |
-| 11 | Individual contribution statement | [contribution-statement.md](contribution-statement.md) **(student must write)** |
-| 12 | AI usage disclosure | [ai-disclosure.md](ai-disclosure.md) **(student must check and sign)** |
+| 11 | Individual contribution statement | [contribution-statement.md](contribution-statement.md) (completed by SREEHARAN, 25BTRCL257) |
+| 12 | AI usage disclosure | [ai-disclosure.md](ai-disclosure.md) (signed by SREEHARAN, 25BTRCL257) |
 | extra | Viva preparation: the assignment's 20 questions answered | [viva-prep.md](viva-prep.md) |
 
 ## The ten layers (assignment section 9)
@@ -53,7 +53,7 @@ Assignment: *CA6 Rust Micro-OS Engineering Project* (Operating System Concepts, 
 ## Reproduce everything
 
 ```
-cd G:\Aeon\OS
+cd S:\Works\Projects\Aeon\OS
 cargo test --lib --target x86_64-pc-windows-gnu
 bash tests/run.sh
 wsl -d Ubuntu -- python3 tests/ca6_evidence.py
