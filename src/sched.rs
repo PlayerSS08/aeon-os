@@ -77,7 +77,7 @@ struct Sched {
     active: bool,
     /// Top of the boot thread's stack: the kernel stack ring-3 entries use while task 0 runs.
     boot_stack_top: u64,
-    /// The ready queue (CA-6 layer 4): ids of the tasks that can run, front first. It holds exactly the
+    /// The ready queue: ids of the tasks that can run, front first. It holds exactly the
     /// tasks whose state is `Ready`; the running task, the idle task and any waiting task are not in it.
     ready: ReadyQueue<MAX_TASKS>,
 }

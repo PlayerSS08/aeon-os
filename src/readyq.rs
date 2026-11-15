@@ -1,4 +1,4 @@
-//! The ready queue (CA-6 layer 4): a first-in, first-out ring of the ids of tasks that are ready to run.
+//! The ready queue: a first-in, first-out ring of the ids of tasks that are ready to run.
 //! The scheduler takes the task at the front, and puts a task at the back when it becomes ready, so
 //! round robin is simply "take from the front, put the preempted task at the back". Pure and
 //! host-testable: it holds ids only, not tasks.

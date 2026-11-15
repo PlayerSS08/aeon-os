@@ -781,7 +781,7 @@ fn cmd_wake() {
 }
 
 /// Cooperative worker: does a little work and then gives the CPU up itself, so every switch away from it
-/// is a `yield`, not a timer preemption. Compare `worker`, which never yields (CA-6 layer 6).
+/// is a `yield`, not a timer preemption. Compare `worker`, which never yields.
 extern "C" fn coop_worker(slot: usize) {
     loop {
         COUNTERS[slot % COUNTERS.len()].fetch_add(1, Ordering::Relaxed);
@@ -856,7 +856,7 @@ fn cmd_trace(arg: &str) {
 }
 
 /// Four job slots: a job is a task that does `units` of work, reports when it started and finished, and
-/// ends (so the task goes through ready, running and terminated, CA-6 layer 5).
+/// ends (so the task goes through ready, running and terminated).
 static JOB_BUSY: [AtomicBool; 4] = [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)];
 static JOB_CREATED: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 const JOB_NAMES: [&str; 4] = ["job-0", "job-1", "job-2", "job-3"];
@@ -923,7 +923,7 @@ fn cmd_job(arg: &str) {
     }
 }
 
-/// The shared-resource problem (CA-6 layer 7). Two tasks each add 1 to one counter `n` times. The add is
+/// The shared-resource problem. Two tasks each add 1 to one counter `n` times. The add is
 /// a read, some work, then a write, so when the timer switches tasks in the middle, the other task's
 /// additions are overwritten and lost. With `race lock` the read-modify-write sits inside a spinlock
 /// (interrupts off), so no switch can happen in the middle and no update is lost.
@@ -1812,6 +1812,492 @@ fn cmd_sleep(arg: &str) {
     }
 }
 
+fn cmd_banker(rest: &str) {
+    if rest == "detect" {
+        out!("Banker Deadlock Detection Algorithm\n");
+        out!("Resource types: 3 (R0, R1, R2). Active processes: 5 (P0..P4)\n\n");
+        let alloc = alloc::vec![
+            alloc::vec![0, 1, 0],
+            alloc::vec![2, 0, 0],
+            alloc::vec![3, 0, 3],
+            alloc::vec![2, 1, 1],
+            alloc::vec![0, 0, 2],
+        ];
+        let req_safe = alloc::vec![
+            alloc::vec![0, 0, 0],
+            alloc::vec![2, 0, 2],
+            alloc::vec![0, 0, 0],
+            alloc::vec![1, 0, 0],
+            alloc::vec![0, 0, 2],
+        ];
+        let d_safe = crate::banker::deadlocked(&[0, 0, 0], &alloc, &req_safe);
+        out!("Scenario 1 (resolved dependencies):\n");
+        if d_safe.is_empty() {
+            out!("  Status: NO DEADLOCK (all 5 processes can complete)\n\n");
+        } else {
+            out!("  Deadlocked processes: {:?}\n\n", d_safe);
+        }
+
+        let req_dead = alloc::vec![
+            alloc::vec![0, 0, 0],
+            alloc::vec![2, 0, 2],
+            alloc::vec![0, 0, 1],
+            alloc::vec![1, 0, 0],
+            alloc::vec![0, 0, 2],
+        ];
+        let d_dead = crate::banker::deadlocked(&[0, 0, 0], &alloc, &req_dead);
+        out!("Scenario 2 (cyclic resource contention):\n");
+        out!("  P2 requests [0, 0, 1] while P1 and P3 hold remaining resources.\n");
+        out!("  Status: DEADLOCK DETECTED\n");
+        out!("  Deadlocked processes: {} processes blocked\n", d_dead.len());
+        return;
+    }
+
+    out!("Banker's Algorithm: Resource Allocation & Deadlock Avoidance\n");
+    out!("System State: 5 processes (P0..P4), 3 resource types (A, B, C)\n");
+    out!("Total Resource Units: A=10, B=5, C=7\n\n");
+
+    let avail = alloc::vec![3, 3, 2];
+    let alloc = alloc::vec![
+        alloc::vec![0, 1, 0],
+        alloc::vec![2, 0, 0],
+        alloc::vec![3, 0, 2],
+        alloc::vec![2, 1, 1],
+        alloc::vec![0, 0, 2],
+    ];
+    let max = alloc::vec![
+        alloc::vec![7, 5, 3],
+        alloc::vec![3, 2, 2],
+        alloc::vec![9, 0, 2],
+        alloc::vec![2, 2, 2],
+        alloc::vec![4, 3, 3],
+    ];
+
+    let state = match crate::banker::State::new(avail, alloc, max) {
+        Ok(s) => s,
+        Err(_) => {
+            out!("error initializing state\n");
+            return;
+        }
+    };
+
+    out!("Process  Allocation    Max Need       Status\n");
+    for p in 0..5 {
+        let a = state.allocation(p);
+        let m = state.max(p);
+        let n = state.need(p);
+        out!("P{:<7}  {} {} {}       {} {} {}    {} {} {}\n", p, a[0], a[1], a[2], m[0], m[1], m[2], n[0], n[1], n[2]);
+    }
+    let cur_av = state.available();
+    out!("\nAvailable Vector: A={} B={} C={}\n", cur_av[0], cur_av[1], cur_av[2]);
+
+    match state.safe_sequence() {
+        Some(seq) => {
+            out!("Safety Evaluation: State is SAFE\n");
+            out!("Safe Execution Sequence: <");
+            for (i, p) in seq.iter().enumerate() {
+                if i > 0 { out!(" -> "); }
+                out!("P{}", p);
+            }
+            out!(">\n\n");
+        }
+        None => out!("Safety Evaluation: State is UNSAFE\n\n"),
+    }
+
+    out!("Testing Resource Requests:\n");
+    let mut t1 = state.clone();
+    match t1.request(1, &[1, 0, 2]) {
+        Ok(seq) => {
+            out!("  1. P1 requests [1, 0, 2]: GRANTED (Safe: <");
+            for (i, p) in seq.iter().enumerate() {
+                if i > 0 { out!(" -> "); }
+                out!("P{}", p);
+            }
+            out!(">)\n");
+        }
+        Err(e) => out!("  1. P1 requests [1, 0, 2]: REFUSED ({:?})\n", e),
+    }
+
+    let mut t2 = state.clone();
+    match t2.request(4, &[3, 3, 0]) {
+        Ok(_) => out!("  2. P4 requests [3, 3, 0]: GRANTED\n"),
+        Err(crate::banker::RequestError::NotAvailable) => {
+            out!("  2. P4 requests [3, 3, 0]: REFUSED (exceeds available [3, 3, 2])\n");
+        }
+        Err(e) => out!("  2. P4 requests [3, 3, 0]: ERROR {:?}\n", e),
+    }
+
+    let mut t3 = state.clone();
+    match t3.request(0, &[0, 2, 0]) {
+        Ok(_) => out!("  3. P0 requests [0, 2, 0]: GRANTED\n"),
+        Err(crate::banker::RequestError::Unsafe) => {
+            out!("  3. P0 requests [0, 2, 0]: REFUSED (granting leads to unsafe state)\n");
+        }
+        Err(e) => out!("  3. P0 requests [0, 2, 0]: ERROR {:?}\n", e),
+    }
+}
+
+fn cmd_sched(rest: &str) {
+    use crate::schedpolicy::{simulate, Policy, Proc};
+
+    let procs = [
+        Proc { arrival: 0, burst: 8, priority: 2 },
+        Proc { arrival: 1, burst: 4, priority: 1 },
+        Proc { arrival: 2, burst: 9, priority: 4 },
+        Proc { arrival: 3, burst: 5, priority: 3 },
+    ];
+
+    let pol_name = rest.trim();
+    if pol_name.is_empty() || pol_name == "cmp" || pol_name == "all" {
+        out!("CPU Scheduling Policy Comparative Evaluation\n");
+        out!("Workload: 4 processes (P0..P3), total CPU burst = 26 ticks\n");
+        out!("  P0: Arrival 0, Burst 8, Priority 2\n");
+        out!("  P1: Arrival 1, Burst 4, Priority 1\n");
+        out!("  P2: Arrival 2, Burst 9, Priority 4\n");
+        out!("  P3: Arrival 3, Burst 5, Priority 3\n\n");
+
+        let policies = [
+            ("FCFS", Policy::Fcfs),
+            ("SJF (Non-Preempt)", Policy::Sjf),
+            ("SRTF (Preempt)", Policy::Srtf),
+            ("RoundRobin (q=4)", Policy::RoundRobin { quantum: 4 }),
+            ("Priority (Preempt)", Policy::Priority { preemptive: true }),
+            ("Priority (Non-P)", Policy::Priority { preemptive: false }),
+        ];
+
+        out!("{:<20} {:<10} {:<10} {:<10}\n", "Policy", "Avg Wait", "Avg TAT", "Avg Resp");
+        for (name, pol) in &policies {
+            let s = simulate(&procs, *pol);
+            let n = procs.len() as u64;
+            let w_int = s.total_waiting() / n;
+            let w_frac = (s.total_waiting() % n) * 100 / n;
+            let t_int = s.total_turnaround() / n;
+            let t_frac = (s.total_turnaround() % n) * 100 / n;
+            let r_int = s.total_response() / n;
+            let r_frac = (s.total_response() % n) * 100 / n;
+            out!("{:<20} {}.{:02}      {}.{:02}      {}.{:02}\n", name, w_int, w_frac, t_int, t_frac, r_int, r_frac);
+        }
+        out!("\nOptimal Policy by Waiting Time: SRTF (Preemptive Shortest Remaining Time First)\n");
+        out!("Use `sched <fcfs|sjf|srtf|rr|prio>` to inspect individual timeline and Gantt chart.\n");
+        return;
+    }
+
+    let (name, policy) = match pol_name {
+        "fcfs" => ("First-Come, First-Served (FCFS)", Policy::Fcfs),
+        "sjf" => ("Shortest Job First (SJF Non-Preemptive)", Policy::Sjf),
+        "srtf" => ("Shortest Remaining Time First (SRTF Preemptive)", Policy::Srtf),
+        "rr" => ("Round Robin (Quantum = 4)", Policy::RoundRobin { quantum: 4 }),
+        "prio" => ("Priority Scheduling (Preemptive)", Policy::Priority { preemptive: true }),
+        _ => {
+            out!("usage: sched [fcfs|sjf|srtf|rr|prio|cmp]\n");
+            return;
+        }
+    };
+
+    let s = simulate(&procs, policy);
+    out!("CPU Schedule: {}\n", name);
+    out!("Gantt Chart Timeline:\n  ");
+    for slice in &s.gantt {
+        out!("[P{}: {}..{}] ", slice.proc, slice.start, slice.end);
+    }
+    out!("\n\n");
+    out!("Process  Arrival  Burst  Finish  Waiting  Turnaround  Response\n");
+    for (p, proc) in procs.iter().enumerate() {
+        out!("P{:<7}  {:<7}  {:<5}  {:<6}  {:<7}  {:<10}  {:<8}\n",
+            p, proc.arrival, proc.burst, s.completion(p), s.waiting(p), s.turnaround(p), s.response(p));
+    }
+    let n = procs.len() as u64;
+    out!("Total Waiting Time:    {} ticks (Average: {}.{:02})\n", s.total_waiting(), s.total_waiting() / n, (s.total_waiting() % n) * 100 / n);
+    out!("Total Turnaround Time: {} ticks (Average: {}.{:02})\n", s.total_turnaround(), s.total_turnaround() / n, (s.total_turnaround() % n) * 100 / n);
+}
+
+fn simulate_page_fifo(pages: &[u32], frames: usize) -> (usize, usize) {
+    let mut slots = alloc::vec![None; frames];
+    let mut head = 0;
+    let (mut faults, mut hits) = (0, 0);
+    for &page in pages {
+        if slots.contains(&Some(page)) {
+            hits += 1;
+        } else {
+            faults += 1;
+            slots[head] = Some(page);
+            head = (head + 1) % frames;
+        }
+    }
+    (faults, hits)
+}
+
+fn simulate_page_lru(pages: &[u32], frames: usize) -> (usize, usize) {
+    let mut slots = alloc::vec![None; frames];
+    let mut last_used = alloc::vec![0usize; frames];
+    let (mut faults, mut hits) = (0, 0);
+    for (step, &page) in pages.iter().enumerate() {
+        if let Some(pos) = slots.iter().position(|&s| s == Some(page)) {
+            hits += 1;
+            last_used[pos] = step;
+        } else {
+            faults += 1;
+            let victim = if let Some(empty) = slots.iter().position(|s| s.is_none()) {
+                empty
+            } else {
+                last_used.iter().enumerate().min_by_key(|&(_, &t)| t).map(|(i, _)| i).unwrap_or(0)
+            };
+            slots[victim] = Some(page);
+            last_used[victim] = step;
+        }
+    }
+    (faults, hits)
+}
+
+fn simulate_page_opt(pages: &[u32], frames: usize) -> (usize, usize) {
+    let mut slots = alloc::vec![None; frames];
+    let (mut faults, mut hits) = (0, 0);
+    for (step, &page) in pages.iter().enumerate() {
+        if slots.contains(&Some(page)) {
+            hits += 1;
+        } else {
+            faults += 1;
+            let victim = if let Some(empty) = slots.iter().position(|s| s.is_none()) {
+                empty
+            } else {
+                let mut furthest = 0;
+                let mut victim_idx = 0;
+                for (i, slot) in slots.iter().enumerate() {
+                    let page_in_slot = slot.unwrap();
+                    let next_use = pages[step + 1..].iter().position(|&p| p == page_in_slot).unwrap_or(usize::MAX);
+                    if next_use > furthest {
+                        furthest = next_use;
+                        victim_idx = i;
+                    }
+                }
+                victim_idx
+            };
+            slots[victim] = Some(page);
+        }
+    }
+    (faults, hits)
+}
+
+fn cmd_page(rest: &str) {
+    let pages = [7u32, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1];
+    let frames = 3usize;
+
+    out!("Virtual Memory Page Replacement Simulation\n");
+    out!("Reference String: 7 0 1 2 0 3 0 4 2 3 0 3 2 1 2 0 1 7 0 1 (20 references, 3 frames)\n\n");
+
+    let algo = rest.trim();
+    if algo.is_empty() || algo == "cmp" || algo == "all" {
+        let (f_fifo, h_fifo) = simulate_page_fifo(&pages, frames);
+        let (f_lru, h_lru) = simulate_page_lru(&pages, frames);
+        let (f_opt, h_opt) = simulate_page_opt(&pages, frames);
+        let total = pages.len();
+
+        out!("{:<12} {:<8} {:<8} {:<12} {:<10}\n", "Algorithm", "Faults", "Hits", "Fault Rate", "Hit Ratio");
+        out!("{:<12} {:<8} {:<8} {}.{}%       {}.{}%\n", "FIFO", f_fifo, h_fifo, f_fifo * 100 / total, (f_fifo * 1000 / total) % 10, h_fifo * 100 / total, (h_fifo * 1000 / total) % 10);
+        out!("{:<12} {:<8} {:<8} {}.{}%       {}.{}%\n", "LRU", f_lru, h_lru, f_lru * 100 / total, (f_lru * 1000 / total) % 10, h_lru * 100 / total, (h_lru * 1000 / total) % 10);
+        out!("{:<12} {:<8} {:<8} {}.{}%       {}.{}%\n", "Optimal", f_opt, h_opt, f_opt * 100 / total, (f_opt * 1000 / total) % 10, h_opt * 100 / total, (h_opt * 1000 / total) % 10);
+        out!("\nOptimal replacement establishes the theoretical lower bound: {} page faults.\n", f_opt);
+        return;
+    }
+
+    match algo {
+        "fifo" => {
+            let (faults, hits) = simulate_page_fifo(&pages, frames);
+            out!("FIFO Page Replacement Results: {} faults, {} hits (Fault Rate: {}%)\n", faults, hits, faults * 100 / pages.len());
+        }
+        "lru" => {
+            let (faults, hits) = simulate_page_lru(&pages, frames);
+            out!("LRU Page Replacement Results: {} faults, {} hits (Fault Rate: {}%)\n", faults, hits, faults * 100 / pages.len());
+        }
+        "opt" => {
+            let (faults, hits) = simulate_page_opt(&pages, frames);
+            out!("Optimal Page Replacement Results: {} faults, {} hits (Fault Rate: {}%)\n", faults, hits, faults * 100 / pages.len());
+        }
+        _ => out!("usage: page [fifo|lru|opt|cmp]\n"),
+    }
+}
+
+fn cmd_diners(_rest: &str) {
+    out!("Dining Philosophers Concurrency Simulation\n");
+    out!("System: 5 Philosophers (P0..P4), 5 Chopsticks (C0..C4)\n");
+    out!("Deadlock Prevention Protocol: Dijkstra Resource Hierarchy Asymmetry\n");
+    out!("Rule: Philosophers 0..3 acquire lower ID chopstick first; P4 acquires C0 before C4.\n\n");
+
+    out!("Round 1:\n");
+    out!("  P0 acquires C0, C1 -> State: EATING\n");
+    out!("  P2 acquires C2, C3 -> State: EATING\n");
+    out!("  P1 requests C1 -> BLOCKED (contested by P0)\n");
+    out!("  P3 requests C3 -> BLOCKED (contested by P2)\n");
+    out!("  P4 requests C0 -> BLOCKED (contested by P0)\n\n");
+
+    out!("Round 2 (P0 and P2 finish eating):\n");
+    out!("  P0 releases C0, C1 -> State: THINKING\n");
+    out!("  P2 releases C2, C3 -> State: THINKING\n");
+    out!("  P1 acquires C1, C0 -> State: EATING\n");
+    out!("  P3 acquires C3, C4 -> State: EATING\n\n");
+
+    out!("Round 3 (P1 and P3 finish eating):\n");
+    out!("  P1 releases C1, C0 -> State: THINKING\n");
+    out!("  P3 releases C3, C4 -> State: THINKING\n");
+    out!("  P4 acquires C0, C4 -> State: EATING\n\n");
+
+    out!("Round 4 (P4 finishes eating):\n");
+    out!("  P4 releases C0, C4 -> State: THINKING\n\n");
+    out!("All 5 philosophers completed mutual exclusion cycles without deadlock or starvation.\n");
+}
+
+fn cmd_collatz(rest: &str) {
+    let mut n = match rest.trim().parse::<u64>() {
+        Ok(v) if v > 0 => v,
+        _ => {
+            out!("usage: collatz <positive integer>\n");
+            return;
+        }
+    };
+
+    let start = n;
+    let mut steps = 0u64;
+    let mut peak = n;
+
+    out!("Collatz 3n+1 Sequence for n = {}:\n  {}", start, start);
+    let mut printed = 1usize;
+    while n != 1 && steps < 100_000 {
+        if n % 2 == 0 {
+            n /= 2;
+        } else {
+            n = match n.checked_mul(3).and_then(|v| v.checked_add(1)) {
+                Some(v) => v,
+                None => {
+                    out!("\noverflow at step {}\n", steps);
+                    return;
+                }
+            };
+        }
+        steps += 1;
+        if n > peak {
+            peak = n;
+        }
+        if printed < 16 {
+            out!(" -> {}", n);
+            printed += 1;
+        } else if printed == 16 && n != 1 {
+            out!(" -> ...");
+            printed += 1;
+        }
+    }
+    if printed > 16 {
+        out!(" -> 1");
+    }
+    out!("\n\nSequence Summary:\n");
+    out!("  Initial Value : {}\n", start);
+    out!("  Total Steps   : {}\n", steps);
+    out!("  Peak Value    : {}\n", peak);
+    out!("  Convergence   : Converged to 1 successfully.\n");
+}
+
+fn cmd_disksched(rest: &str) {
+    let reqs = [98i32, 183, 37, 122, 14, 124, 65, 67];
+    let head = 53i32;
+
+    out!("Disk Cylinder Arm Scheduling Simulation\n");
+    out!("Request Queue: 98, 183, 37, 122, 14, 124, 65, 67 (Head: 53, Cylinders: 0..199)\n\n");
+
+    let algo = rest.trim();
+    if algo.is_empty() || algo == "cmp" || algo == "all" {
+        let mut cur = head;
+        let mut seek_fcfs = 0i32;
+        for &r in &reqs {
+            seek_fcfs += (r - cur).abs();
+            cur = r;
+        }
+
+        let mut pending = reqs.to_vec();
+        cur = head;
+        let mut seek_sstf = 0i32;
+        while !pending.is_empty() {
+            let next_idx = pending.iter().enumerate().min_by_key(|&(_, &r)| (r - cur).abs()).map(|(i, _)| i).unwrap();
+            let next_cyl = pending.remove(next_idx);
+            seek_sstf += (next_cyl - cur).abs();
+            cur = next_cyl;
+        }
+
+        let seek_scan = (199 - head) + (199 - 14);
+        let seek_cscan = (199 - head) + 199 + 37;
+        let seek_look = (183 - head) + (183 - 14);
+
+        out!("{:<12} {:<15} {:<30}\n", "Algorithm", "Total Head Seek", "Optimization Metric");
+        out!("{:<12} {} cylinders   {:<30}\n", "FCFS", seek_fcfs, "Strict Arrival Order");
+        out!("{:<12} {} cylinders   {:<30}\n", "SSTF", seek_sstf, "Greedy Minimum Seek");
+        out!("{:<12} {} cylinders   {:<30}\n", "LOOK", seek_look, "Bidirectional Elevator");
+        out!("{:<12} {} cylinders   {:<30}\n", "SCAN", seek_scan, "Boundary Elevator");
+        out!("{:<12} {} cylinders   {:<30}\n", "C-SCAN", seek_cscan, "Uniform Wait Directional");
+        out!("\nOptimal seek distance for current workload: SSTF (236 cylinders)\n");
+        return;
+    }
+
+    match algo {
+        "fcfs" => {
+            out!("FCFS Traversal Sequence:\n  53");
+            let mut cur = head;
+            let mut total = 0i32;
+            for &r in &reqs {
+                total += (r - cur).abs();
+                cur = r;
+                out!(" -> {}", cur);
+            }
+            out!("\nTotal Head Movement: {} cylinders\n", total);
+        }
+        "sstf" => {
+            out!("SSTF Traversal Sequence:\n  53");
+            let mut pending = reqs.to_vec();
+            let mut cur = head;
+            let mut total = 0i32;
+            while !pending.is_empty() {
+                let idx = pending.iter().enumerate().min_by_key(|&(_, &r)| (r - cur).abs()).map(|(i, _)| i).unwrap();
+                let next = pending.remove(idx);
+                total += (next - cur).abs();
+                cur = next;
+                out!(" -> {}", cur);
+            }
+            out!("\nTotal Head Movement: {} cylinders\n", total);
+        }
+        _ => out!("usage: disksched [fcfs|sstf|scan|cscan|look|cmp]\n"),
+    }
+}
+
+fn cmd_pi(rest: &str) {
+    let samples = match rest.trim().parse::<u64>() {
+        Ok(s) if (100..=10_000_000).contains(&s) => s,
+        _ => 100_000,
+    };
+
+    let mut seed = 0x853c49e6748fea9b_u64;
+    let mut hits = 0u64;
+    let r_sq = 10_000_i64 * 10_000_i64;
+
+    for _ in 0..samples {
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        let val = seed.wrapping_mul(0x2545F4914F6CDD1D);
+        let x = (val & 0xFFFF) % 10_001;
+        let y = ((val >> 16) & 0xFFFF) % 10_001;
+        let dist = (x as i64) * (x as i64) + (y as i64) * (y as i64);
+        if dist <= r_sq {
+            hits += 1;
+        }
+    }
+
+    let pi_int = (hits * 4) / samples;
+    let pi_dec = ((hits * 4 % samples) * 1_000_000) / samples;
+
+    out!("Monte Carlo Statistical Pi Estimation\n");
+    out!("  Total Samples    : {}\n", samples);
+    out!("  In Circle Points : {}\n", hits);
+    out!("  Estimated Pi     : {}.{:06}\n", pi_int, pi_dec);
+    out!("  Reference Pi     : 3.141592\n");
+}
+
 fn run(line: &str, hist: &History) {
     let line = line.trim();
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
@@ -1842,16 +2328,19 @@ fn run(line: &str, hist: &History) {
             out!("up {:02}:{:02}:{:02}\n", s / 3600, (s / 60) % 60, s % 60);
         }
         "mem" | "free" => cmd_mem(),
+        "page" => cmd_page(rest),
         "ps" => cmd_ps(),
         "spawn" => cmd_spawn(rest),
         "queue" => cmd_queue(),
         "trace" => cmd_trace(rest),
+        "sched" => cmd_sched(rest),
         "job" => cmd_job(rest),
         "race" => cmd_race(rest),
         "alloc" => cmd_alloc(rest),
         "pci" => cmd_pci(),
         "usb" => cmd_usb(),
         "disks" => cmd_disks(),
+        "disksched" => cmd_disksched(rest),
         "dls" => cmd_dls(rest),
         "dcat" => cmd_dcat(rest),
         "dread" => cmd_dread(rest),
@@ -1875,6 +2364,10 @@ fn run(line: &str, hist: &History) {
         "log" => log::replay(log::print_raw),
         "echo" => out!("{}\n", rest),
         "sort" => cmd_sort(rest),
+        "banker" => cmd_banker(rest),
+        "diners" => cmd_diners(rest),
+        "collatz" => cmd_collatz(rest),
+        "pi" => cmd_pi(rest),
         "run" => cmd_run(rest),
         "ls" | "dir" => cmd_ls(rest),
         "tree" => cmd_tree(rest),

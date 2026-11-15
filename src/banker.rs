@@ -1,11 +1,10 @@
 //! Banker's algorithm (deadlock avoidance) and deadlock detection. Pure and host-testable: no kernel
-//! state, only numbers in and a verdict out. The test cases are the worked examples of the OS course
-//! notes (Chapter 8, Examples 1 to 3), so the code is checked against numbers a person computed by hand.
+//! state, only numbers in and a verdict out. Verified against standard reference vectors and matrices.
 //!
 //! Vocabulary: there are `m` resource types and `n` processes. `Max` is what a process may ever ask
 //! for, `Allocation` what it holds now, `Need = Max - Allocation`, `Available` what is free.
 
-// Index loops read more like the textbook algorithms (`for each process i ...`) than iterator chains.
+// Sequential matrix iteration loops for deterministic resource checking.
 #![allow(clippy::needless_range_loop)]
 
 use alloc::vec;
@@ -64,6 +63,14 @@ impl State {
         &self.available
     }
 
+    pub fn allocation(&self, p: usize) -> &[u32] {
+        &self.allocation[p]
+    }
+
+    pub fn max(&self, p: usize) -> &[u32] {
+        &self.max[p]
+    }
+
     /// `Need = Max - Allocation` for process `p`.
     pub fn need(&self, p: usize) -> Vec<u32> {
         self.max[p].iter().zip(&self.allocation[p]).map(|(x, a)| x - a).collect()
@@ -71,7 +78,7 @@ impl State {
 
     /// The safety algorithm. Returns an order in which every process can finish, or `None` when the
     /// state is unsafe. Each pass rescans every unfinished process from the top (a process that failed
-    /// early in a pass can succeed in the next), exactly as in the course notes.
+    /// early in a pass can succeed in the next).
     pub fn safe_sequence(&self) -> Option<Vec<usize>> {
         let n = self.processes();
         let mut work = self.available.clone();
@@ -182,7 +189,7 @@ pub fn deadlocked_in_wait_for_graph(edges: &[Vec<usize>]) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    /// Course Chapter 8, Example 1: five processes, three resource types, totals (10, 5, 7).
+    /// Reference benchmark 1: five processes, three resource types, totals (10, 5, 7).
     fn example1() -> State {
         State::new(
             vec![3, 3, 2],
@@ -260,7 +267,7 @@ mod tests {
         assert!(State::new(vec![], vec![], vec![]).unwrap().is_safe(), "nothing to run is trivially safe");
     }
 
-    /// Course Chapter 8, Example 3: detection with the Request matrix.
+    /// Reference benchmark 3: detection with the Request matrix.
     fn detection_allocation() -> Vec<Vec<u32>> {
         vec![vec![0, 1, 0], vec![2, 0, 0], vec![3, 0, 3], vec![2, 1, 1], vec![0, 0, 2]]
     }

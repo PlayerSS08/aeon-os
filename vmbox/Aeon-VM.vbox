@@ -8,7 +8,7 @@
 ** Written by VirtualBox 7.2.22 (r175245)
 -->
 <VirtualBox xmlns="http://www.virtualbox.org/" version="1.19-windows">
-  <Machine uuid="{628c6af2-ef91-445d-a4f7-12d164895b8c}" name="Aeon-VM" OSType="Other_64" snapshotFolder="Snapshots" lastStateChange="2026-11-14T09:55:54Z">
+  <Machine uuid="{628c6af2-ef91-445d-a4f7-12d164895b8c}" name="Aeon-VM" OSType="Other_64" snapshotFolder="Snapshots" lastStateChange="2026-11-15T07:07:32Z">
     <MediaRegistry>
       <HardDisks>
         <HardDisk uuid="{3505efa3-ce2e-4b9c-8047-3fa6ff599e82}" location="Aeon-Boot.vdi" format="VDI" type="Normal"/>

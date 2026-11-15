@@ -49,6 +49,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("memory", "free", "free", "same as `mem`"),
     c("memory", "alloc", "alloc <KiB>", "allocate and free memory; shows a refusal too"),
     c("memory", "memmap", "memmap", "the firmware memory map"),
+    c("memory", "page", "page [fifo|lru|opt]", "page replacement simulation (fifo, lru)"),
     c("tasks", "ps", "ps", "list tasks"),
     c("tasks", "spawn", "spawn [coop]", "start 2 workers (coop: they yield themselves)"),
     c("tasks", "queue", "queue", "the ready queue: who runs next, in order"),
@@ -59,6 +60,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("tasks", "block", "block", "start a task that waits on a queue"),
     c("tasks", "wake", "wake", "wake the tasks waiting on that queue"),
     c("tasks", "kill", "kill <id>", "stop a task"),
+    c("tasks", "sched", "sched [policy]", "CPU scheduling policies (fcfs, sjf, rr)"),
     c("files", "ls", "ls [folder]", "list a folder in RAM (default: the current one)"),
     c("files", "dir", "dir [folder]", "same as `ls`"),
     c("files", "tree", "tree [folder]", "show a folder and everything inside it"),
@@ -84,6 +86,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("disk", "dls", "dls [path]", "list a directory on the disk (FAT16/FAT32)"),
     c("disk", "dcat", "dcat <path>", "print a file from the disk (first 64 KiB)"),
     c("disk", "sync", "sync", "flush USB cached writes to disk"),
+    c("disk", "disksched", "disksched [algo]", "disk arm scheduling (fcfs, sstf, scan)"),
     c("programs", "run", "run <program>", "ring 3 demo: hello linux fault gp spin badcall"),
     c("tools", "echo", "echo <text>", "print text"),
     c("tools", "sort", "sort <n> <n> ...", "sort numbers (uses the heap)"),
@@ -94,6 +97,10 @@ pub const COMMANDS: &[Cmd] = &[
     c("status", "date", "date", "says honestly that there is no clock yet"),
     c("tools", "clear", "clear", "clear the screen (or press Ctrl+L)"),
     c("tools", "cls", "cls", "same as `clear`"),
+    c("tools", "banker", "banker [run|detect]", "Banker's deadlock avoidance & detection"),
+    c("tools", "diners", "diners [steps]", "dining philosophers concurrency simulation"),
+    c("tools", "collatz", "collatz <n>", "compute Collatz 3n+1 sequence"),
+    c("tools", "pi", "pi [samples]", "Monte Carlo statistical Pi estimation"),
     c("power", "panic", "panic", "trigger a kernel panic, to see the stop screen"),
     c("power", "reboot", "reboot", "restart the machine"),
     c("power", "shutdown", "shutdown", "power off"),
@@ -198,7 +205,7 @@ mod tests {
 
     #[test]
     fn prefix_matching_and_completion() {
-        assert_eq!(matching("d").count(), 8); // dir dread dls dcat df disks date dhcp
+        assert_eq!(matching("d").count(), 10); // dir dread dls dcat df disks date dhcp disksched diners
         assert_eq!(common_prefix("d"), "d");
         assert_eq!(common_prefix("dc"), "dcat");
         assert_eq!(common_prefix("hel"), "help");

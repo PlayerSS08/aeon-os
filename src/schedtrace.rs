@@ -1,4 +1,4 @@
-//! Scheduler trace (CA-6 layers 5 and 6): a ring of the last context switches, each with the tick it
+//! Scheduler trace: a ring of the last context switches, each with the tick it
 //! happened at, which task left, which task came in, and WHY the task left. The reason is what lets
 //! cooperative switching (a task gives the CPU up: `Yield`, `Block`, `Sleep`, `Exit`) be told apart
 //! from timer-driven preemption (`Timer`). Pure and host-testable; the kernel keeps one ring.
