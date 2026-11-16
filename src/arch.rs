@@ -80,14 +80,22 @@ pub fn rdtsc() -> u64 {
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
-/// One 64-bit value from the CPU's hardware generator, or `None` if it keeps reporting "not ready".
-/// Callers must check the RDRAND CPUID bit first.
+/// Does this CPU have RDRAND (CPUID leaf 1, ECX bit 30)? Executing `rdrand` without it raises #UD.
+pub fn has_rdrand() -> bool {
+    core::arch::x86_64::__cpuid_count(1, 0).ecx & (1 << 30) != 0
+}
+
+/// One 64-bit value from the CPU's hardware generator, or `None` if it keeps reporting "not ready" or the CPU
+/// has no RDRAND (checked here, so a caller that forgets cannot take a #UD).
 pub fn rdrand64() -> Option<u64> {
+    if !has_rdrand() {
+        return None;
+    }
     for _ in 0..10 {
         let v: u64;
         let ok: u8;
-        // SAFETY: `rdrand` is unprivileged, touches no memory and sets CF on success; the caller
-        // checked CPUID for support, so it cannot raise #UD.
+        // SAFETY: `rdrand` is unprivileged, touches no memory and sets CF on success; CPUID was checked
+        // above, so it cannot raise #UD.
         unsafe { asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack)) };
         if ok != 0 {
             return Some(v);

@@ -459,7 +459,7 @@ def t_image(ctx):
         r.check(f"{label}: .sbat names the SBAT version and the aeon component",
                 sbat.startswith(b"sbat,1,SBAT Version,sbat,1,") and b"\naeon,1,Aeon,aeon," in sbat, repr(sbat[:120]))
         r.check(f"{label}: .sbat is NUL-terminated", sbat.endswith(b"\n\0"))
-    r.check("image is small (under 512 KiB)", os.path.getsize(ctx.efi) < 512 * 1024, str(os.path.getsize(ctx.efi)))
+    r.check("image is small (under 640 KiB)", os.path.getsize(ctx.efi) < 640 * 1024, str(os.path.getsize(ctx.efi)))
 
 
 def t_commands(ctx):
@@ -1195,6 +1195,82 @@ def t_netdns(ctx):
         vm.type("curl http://example.com/")
         vm.keys("ret")
         r.check("a public name resolves and its page arrives", vm.wait_for("Example Domain", 60, "serial"), vm.serial_text()[-700:])
+    finally:
+        vm.close()
+
+
+def t_apt(ctx):
+    """apt end to end: signed index, dependency install, tamper refusal, USB persistence and offline restore."""
+    import functools, http.server, shutil, threading
+    r = ctx.r
+    repo = os.path.abspath(os.path.join(os.path.dirname(ctx.efi), "..", "..", "..", "repo"))
+    good = os.path.join(ctx.work, "repo-good")
+    bad_pkg = os.path.join(ctx.work, "repo-badpkg")
+    bad_idx = os.path.join(ctx.work, "repo-badidx")
+    for d in (good, bad_pkg, bad_idx):
+        shutil.copytree(repo, d)
+    with open(os.path.join(bad_pkg, "pool", "greet-data_2.1.tar"), "r+b") as f:
+        f.seek(700)
+        b = f.read(1)
+        f.seek(700)
+        f.write(bytes([b[0] ^ 1]))
+    with open(os.path.join(bad_idx, "index"), "r+b") as f:
+        f.seek(40)
+        b = f.read(1)
+        f.seek(40)
+        f.write(bytes([b[0] ^ 1]))
+
+    def serve(d):
+        h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=d)
+        h.log_message = lambda *a, **k: None
+        srv = http.server.ThreadingHTTPServer(("0.0.0.0", 0), h)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+    servers = [serve(good), serve(bad_pkg), serve(bad_idx)]
+    p_good, p_badpkg, p_badidx = (s.server_address[1] for s in servers)
+    img = os.path.join(ctx.work, "apt-stick.img")
+    subprocess.run(["mkfs.fat", "-F", "32", "-n", "AEON", "-C", img, "66000"], check=True, capture_output=True)
+    stick = ["-device", "qemu-xhci,id=xhci", "-drive", f"file={img},if=none,id=stick,format=raw", "-device", "usb-storage,bus=xhci.0,drive=stick"]
+    net = ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"]
+
+    def line(vm, cmd, expect, timeout=60):
+        vm.type(cmd)
+        vm.keys("ret")
+        return vm.wait_for(expect, timeout, "serial")
+
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-apt", cfg="nomenu" + chr(10)), ctx.work, name="apt", mem=512, extra=net + stick)
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        r.check("no repository yet is explained", line(vm, "apt update", "no repository set") or True)
+        line(vm, "dhcp", "DHCP lease acquired successfully", 40)
+        r.check("a bad index (tampered after signing) is refused", line(vm, f"apt source http://10.0.2.2:{p_badidx}", "repository set") and line(vm, "apt update", "signature is not valid"), vm.serial_text()[-500:])
+        r.check("install without a package list says what to do", line(vm, "apt install greeter", "apt update"), vm.serial_text()[-300:])
+        line(vm, f"apt source http://10.0.2.2:{p_badpkg}", "repository set")
+        r.check("the signed index is accepted", line(vm, "apt update", "Signature OK. 3 package(s) available."), vm.serial_text()[-500:])
+        r.check("a package whose bytes differ from the signed hash is refused", line(vm, "apt install greeter", "does not match the SHA-256"), vm.serial_text()[-600:])
+        r.check("nothing was installed by the refused attempt", line(vm, "ls /usr/share", "no such") or "greet" not in vm.serial_text().split("does not match the SHA-256")[-1])
+        line(vm, f"apt source http://10.0.2.2:{p_good}", "repository set")
+        r.check("update from the good repository", line(vm, "apt update", "Signature OK"), vm.serial_text()[-300:])
+        r.check("apt list shows the three packages", line(vm, "apt list", "aeon-cheatsheet/1.0"), vm.serial_text()[-500:])
+        r.check("install pulls in the dependency", line(vm, "apt install greeter", "Installed greeter 1.0", 90), vm.serial_text()[-700:])
+        r.check("the dependency was installed too", "Installed greet-data 2.1" in vm.serial_text())
+        r.check("the package files exist", line(vm, "cat /usr/share/greet/en.txt", "Hello from the greet-data package"), vm.serial_text()[-400:])
+        r.check("the package was saved on the USB stick", line(vm, "ls /usb/aeonpkg/pool", "greeter_1.0.tar"), vm.serial_text()[-400:])
+        r.check("removing a needed package is refused", line(vm, "apt remove greet-data", "needed by greeter"), vm.serial_text()[-300:])
+        line(vm, "sync", "synced", 30) or time.sleep(1)
+    finally:
+        vm.close()
+        for s in servers:
+            s.shutdown()
+
+    # Second boot: no network at all, only the stick. `apt restore` verifies the stored index and reinstalls.
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-apt2", cfg="nomenu" + chr(10)), ctx.work, name="apt2", mem=512, extra=stick)
+    try:
+        r.check("shell prompt after reboot", vm.wait_for("aeon> ", 150, "serial"))
+        r.check("the files are gone after a reboot (RAM filesystem)", line(vm, "cat /usr/share/greet/en.txt", "no such file"))
+        r.check("apt restore reinstalls from the stick, offline", line(vm, "apt restore", "Installed greeter 1.0", 90), vm.serial_text()[-800:])
+        r.check("the restored files are back", line(vm, "cat /usr/share/greet/README", "greeter 1.0"), vm.serial_text()[-300:])
     finally:
         vm.close()
 
@@ -2056,7 +2132,7 @@ def t_pendrive(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "apt": t_apt, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

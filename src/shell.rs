@@ -801,311 +801,150 @@ fn cmd_netstat() {
     out!("udp        0      0 {}:68             0.0.0.0:*               CONNECTED\n", ip);
 }
 
+/// Copies a package file to the AEON USB stick (`aeonpkg/...`) so it survives power off. Quietly skipped when
+/// there is no writable AEON volume; says why once.
+fn usb_persist(warned: &mut bool, rel: &str, data: &[u8]) {
+    if !crate::xhci::has_storage() {
+        return;
+    }
+    let path = alloc::format!("aeonpkg/{rel}");
+    let _ = usbfs::hw_mkdir("aeonpkg");
+    if rel.contains('/') {
+        let _ = usbfs::hw_mkdir("aeonpkg/pool");
+    }
+    if let Err(why) = usbfs::hw_write(&path, data, true) {
+        if !*warned {
+            *warned = true;
+            out!("(not saved to the USB stick: {})\n", why);
+        }
+    }
+}
+
+/// Serves repository files from the stick (`apt restore`).
+struct UsbFetcher;
+
+impl crate::apt::Fetcher for UsbFetcher {
+    fn get(&mut self, rel: &str, max: usize) -> Result<alloc::vec::Vec<u8>, String> {
+        usbfs::hw_read(&alloc::format!("aeonpkg/{rel}"), max).map_err(|why| alloc::format!("aeonpkg/{rel} on the USB stick: {why}"))
+    }
+}
+
+const APT_HELP: &str = "apt: signed packages over plain HTTP (not Debian's apt: no .deb, no Linux programs)\n  apt source <http://host[:port]/path/>   set the repository (needs a PC running tools/aeon_repo.py serve)\n  apt update                              download and verify the package list\n  apt list [--installed] | search <text> | show <pkg> | files <pkg>\n  apt install <pkg>...                    install with dependencies (SHA-256 + signature checked)\n  apt remove <pkg>... | autoremove\n  apt restore                             reinstall what was saved on the AEON stick (works offline)\n";
+
 fn cmd_apt(rest: &str) {
     let mut parts = rest.split_whitespace();
     let sub = parts.next().unwrap_or("help");
-
+    let args: alloc::vec::Vec<&str> = parts.collect();
+    let keys = &crate::pkgkey::REPO_KEYS;
     let fs = fs();
-    crate::apt::ensure_initialized(fs);
+    let mut say = |s: &str| out!("{}\n", s);
+    let mut warned = false;
+
+    // Everything that downloads needs a link and a repository.
+    let net_fetcher = |fs: &RamFs| -> Option<crate::apt::NetFetcher> {
+        if !crate::netdev::link_up() {
+            out!("apt: no network link (plug in the cable and run `dhcp`; Wi-Fi has no driver yet)\n");
+            return None;
+        }
+        match crate::apt::get_source(fs) {
+            Some(base) => Some(crate::apt::NetFetcher { base }),
+            None => {
+                out!("apt: no repository set. Run: apt source http://<address>:<port>/\n");
+                None
+            }
+        }
+    };
 
     match sub {
+        "source" => match args.first() {
+            Some(url) => match crate::apt::set_source(fs, url) {
+                Ok(n) => out!("repository set to {}\n", n),
+                Err(e) => out!("apt: {}\n", e),
+            },
+            None => match crate::apt::get_source(fs) {
+                Some(s) => out!("{}\n", s),
+                None => out!("no repository set. Run: apt source http://<address>:<port>/\n"),
+            },
+        },
         "update" => {
-            out!("Hit:1 http://archive.ubuntu.com/ubuntu resolute InRelease\n");
-            out!("Get:2 http://archive.ubuntu.com/ubuntu resolute/main amd64 Packages [9,418 kB]\n");
-            out!("Get:3 http://archive.ubuntu.com/ubuntu resolute-updates InRelease [128 kB]\n");
-            out!("Fetched 9,546 kB in 1s (8,230 kB/s)\n");
-            out!("Reading package lists... Done\n");
-            out!("Building dependency tree... Done\n");
-            out!("All packages are up to date.\n");
-        }
-        "install" => {
-            let pkg = match parts.next() {
-                Some(p) => p,
-                None => {
-                    out!("usage: apt install <package>\n");
-                    return;
-                }
-            };
-            out!("Reading package lists... Done\n");
-            out!("Building dependency tree... Done\n");
-            out!("The following NEW packages will be installed:\n  {}\n", pkg);
-            out!("0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n");
-            match crate::apt::install_package(fs, pkg) {
-                Ok(msg) => out!("{}\n", msg),
-                Err(err) => out!("E: {}\n", err),
+            let Some(mut f) = net_fetcher(fs) else { return };
+            let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
+            if let Err(e) = crate::apt::update(fs, &mut f, keys, &mut say, &mut persist) {
+                out!("apt: {}\n", e);
             }
         }
-        "remove" => {
-            let pkg = match parts.next() {
-                Some(p) => p,
-                None => {
-                    out!("usage: apt remove <package>\n");
-                    return;
-                }
-            };
-            match crate::apt::remove_package(fs, pkg, false) {
-                Ok(msg) => out!("{}\n", msg),
-                Err(err) => out!("E: {}\n", err),
+        "install" | "add" => {
+            if args.is_empty() {
+                out!("usage: apt install <package>...\n");
+                return;
+            }
+            let Some(mut f) = net_fetcher(fs) else { return };
+            let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
+            if let Err(e) = crate::apt::install(fs, &mut f, keys, &args, &mut say, &mut persist) {
+                out!("apt: {}\n", e);
             }
         }
-        "purge" => {
-            let pkg = match parts.next() {
-                Some(p) => p,
-                None => {
-                    out!("usage: apt purge <package>\n");
-                    return;
-                }
-            };
-            match crate::apt::remove_package(fs, pkg, true) {
-                Ok(msg) => out!("{}\n", msg),
-                Err(err) => out!("E: {}\n", err),
+        "remove" | "purge" | "uninstall" => {
+            if args.is_empty() {
+                out!("usage: apt remove <package>...\n");
+                return;
+            }
+            if let Err(e) = crate::apt::remove(fs, &args, &mut say) {
+                out!("apt: {}\n", e);
             }
         }
         "autoremove" => {
-            out!("Reading package lists... Done\nBuilding dependency tree... Done\n");
-            let (count, pkgs) = crate::apt::autoremove_packages(fs);
-            if count == 0 {
-                out!("0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n");
-            } else {
-                out!("The following packages will be REMOVED:\n");
-                for p in &pkgs {
-                    out!("  {}\n", p);
-                }
-                out!("0 upgraded, 0 newly installed, {} to remove and 0 not upgraded.\n", count);
-                out!("After this operation, {} KB of disk space will be freed.\n", count * 4);
+            if let Err(e) = crate::apt::autoremove(fs, &mut say) {
+                out!("apt: {}\n", e);
             }
         }
-        "clean" | "autoclean" => {
-            let freed = crate::apt::clean_cache(fs);
-            out!("Cleared {} package archive(s) from /var/cache/apt/archives.\n", freed);
-        }
-        "list" => {
-            let mut installed_only = false;
-            let mut pattern = "";
-            for arg in parts {
-                if arg == "--installed" {
-                    installed_only = true;
-                } else if !arg.starts_with('-') {
-                    pattern = arg;
-                }
-            }
-
-            out!("Listing... Done\n");
-
-            if installed_only {
-                let inst = crate::apt::list_installed(fs);
-                for (p, v) in inst {
-                    if pattern.is_empty() || crate::apt::matches_glob(&p, pattern) {
-                        let (_, auto) = crate::apt::is_installed_automatic(fs, &p);
-                        let suite = crate::apt::suite_for(&p);
-                        let arch = crate::apt::arch_for(&p);
-                        out!("{}\n", crate::apt::format_apt_list_entry(&p, suite, &v, arch, true, auto));
-                    }
-                }
-            } else {
-                for p in crate::apt::BUILTIN_PACKAGES {
-                    if pattern.is_empty() || crate::apt::matches_glob(p.name, pattern) {
-                        let (inst, auto) = crate::apt::is_installed_automatic(fs, p.name);
-                        out!("{}\n", crate::apt::format_apt_list_entry(p.name, p.suite, p.version, p.arch, inst, auto));
-                    }
-                }
-                let inst = crate::apt::list_installed(fs);
-                for (p, v) in inst {
-                    if !crate::apt::BUILTIN_PACKAGES.iter().any(|b| b.name == p.as_str())
-                        && (pattern.is_empty() || crate::apt::matches_glob(&p, pattern))
-                    {
-                        let (_, auto) = crate::apt::is_installed_automatic(fs, &p);
-                        out!("{}\n", crate::apt::format_apt_list_entry(&p, "resolute", &v, "amd64", true, auto));
-                    }
-                }
+        "list" | "search" => {
+            let installed_only = args.contains(&"--installed") || args.contains(&"-i");
+            let filter = args.iter().find(|a| !a.starts_with('-')).copied();
+            if let Err(e) = crate::apt::list(fs, keys, filter, installed_only, &mut say) {
+                out!("apt: {}\n", e);
             }
         }
-        "show" => {
-            let pkg = match parts.next() {
-                Some(p) => p,
-                None => {
-                    out!("usage: apt show <package>\n");
+        "show" | "info" => match args.first() {
+            Some(n) => {
+                if let Err(e) = crate::apt::show(fs, keys, n, &mut say) {
+                    out!("apt: {}\n", e);
+                }
+            }
+            None => out!("usage: apt show <package>\n"),
+        },
+        "files" => match args.first().and_then(|n| crate::apt::files_of(fs, n)) {
+            Some(files) => {
+                for f in files {
+                    out!("{}\n", f);
+                }
+            }
+            None => out!("usage: apt files <installed package>\n"),
+        },
+        "restore" => {
+            if !crate::xhci::has_storage() {
+                out!("apt: no USB stick found\n");
+                return;
+            }
+            let mut f = UsbFetcher;
+            if let Err(e) = crate::apt::update(fs, &mut f, keys, &mut say, &mut |_, _| {}) {
+                out!("apt: {}\n", e);
+                return;
+            }
+            let names = match usbfs::hw_read("aeonpkg/installed", 64 * 1024) {
+                Ok(d) => String::from_utf8_lossy(&d).into_owned(),
+                Err(_) => {
+                    out!("apt: nothing saved on the stick yet (install something with the stick plugged in first)\n");
                     return;
                 }
             };
-            match crate::apt::show_package(pkg) {
-                Some(info) => out!("{}\n", info),
-                None => out!("N: Unable to locate package {}\n", pkg),
+            let wanted: alloc::vec::Vec<&str> = names.lines().filter(|l| !l.trim().is_empty()).collect();
+            if let Err(e) = crate::apt::install(fs, &mut f, keys, &wanted, &mut say, &mut |_, _| {}) {
+                out!("apt: {}\n", e);
             }
         }
-        "search" => {
-            let pattern = match parts.next() {
-                Some(p) => p,
-                None => {
-                    out!("usage: apt search <pattern>\n");
-                    return;
-                }
-            };
-            out!("Sorting... Done\nFull Text Search... Done\n");
-            let mut found = false;
-            for p in crate::apt::BUILTIN_PACKAGES {
-                if p.name.contains(pattern) || p.description.contains(pattern) {
-                    out!("{}/{} {} {}\n  {}\n", p.name, p.suite, p.version, p.arch, p.description);
-                    found = true;
-                }
-            }
-            if !found {
-                out!("{}/resolute 1.0.0-1 amd64\n  Package available from remote repository\n", pattern);
-            }
-        }
-        _ => {
-            out!("apt 2.6.1 (amd64) - Debian / Ubuntu Package Manager for Aeon OS\n");
-            out!("Usage: apt <command> [arguments]\n\n");
-            out!("Commands:\n");
-            out!("  update      - Retrieve new lists of packages\n");
-            out!("  install     - Install new packages (e.g. apt install coreutils)\n");
-            out!("  remove      - Remove packages (e.g. apt remove tree)\n");
-            out!("  purge       - Remove packages and configuration files\n");
-            out!("  autoremove  - Remove automatically installed orphan packages\n");
-            out!("  clean       - Clear out downloaded package archive cache\n");
-            out!("  list        - List packages based on package names (--installed)\n");
-            out!("  show        - Show package details and RFC 822 control metadata\n");
-            out!("  search      - Search in package descriptions\n");
-        }
+        _ => out!("{}", APT_HELP),
     }
-}
-
-fn cmd_apt_cache(rest: &str) {
-    let mut parts = rest.split_whitespace();
-    let sub = parts.next().unwrap_or("help");
-    let fs = fs();
-    crate::apt::ensure_initialized(fs);
-
-    match sub {
-        "policy" => {
-            let pkg = parts.next().unwrap_or("");
-            if pkg.is_empty() {
-                out!("usage: apt-cache policy <package>\n");
-            } else {
-                out!("{}", crate::apt::apt_cache_policy(fs, pkg));
-            }
-        }
-        "depends" => {
-            let pkg = parts.next().unwrap_or("");
-            if pkg.is_empty() {
-                out!("usage: apt-cache depends <package>\n");
-            } else {
-                out!("{}", crate::apt::apt_cache_depends(pkg));
-            }
-        }
-        "search" => {
-            let term = parts.next().unwrap_or("");
-            cmd_apt(&alloc::format!("search {}", term));
-        }
-        "show" => {
-            let pkg = parts.next().unwrap_or("");
-            cmd_apt(&alloc::format!("show {}", pkg));
-        }
-        _ => {
-            out!("apt-cache 2.6.1 (amd64)\nUsage: apt-cache [policy|depends|search|show] <package>\n");
-        }
-    }
-}
-
-fn cmd_dpkg(rest: &str) {
-    let mut parts = rest.split_whitespace();
-    let flag = parts.next().unwrap_or("-l");
-    let fs = fs();
-    crate::apt::ensure_initialized(fs);
-
-    match flag {
-        "-l" | "--list" => {
-            let pattern = parts.next().unwrap_or("");
-            out!("{}", crate::apt::dpkg_list(fs, pattern));
-        }
-        "-s" | "--status" => {
-            let pkg = parts.next().unwrap_or("");
-            if pkg.is_empty() {
-                out!("dpkg: error: --status needs a valid package name but none was provided\n");
-            } else {
-                match crate::apt::dpkg_status(fs, pkg) {
-                    Some(st) => out!("{}", st),
-                    None => out!("dpkg-query: package '{}' is not installed and no information is available\n", pkg),
-                }
-            }
-        }
-        "-L" | "--listfiles" => {
-            let pkg = parts.next().unwrap_or("");
-            if pkg.is_empty() {
-                out!("dpkg: error: --listfiles needs a valid package name\n");
-            } else {
-                match crate::apt::dpkg_list_files(fs, pkg) {
-                    Some(files) => out!("{}", files),
-                    None => out!("dpkg-query: package '{}' is not installed\n", pkg),
-                }
-            }
-        }
-        "-S" | "--search" => {
-            let query = parts.next().unwrap_or("");
-            if query.is_empty() {
-                out!("dpkg: error: --search needs a search pattern\n");
-            } else {
-                let matches = crate::apt::dpkg_search(fs, query);
-                if matches.is_empty() {
-                    out!("dpkg-query: no path found matching pattern {}\n", query);
-                } else {
-                    for m in matches {
-                        out!("{}\n", m);
-                    }
-                }
-            }
-        }
-        "-i" | "--install" => {
-            let path = parts.next().unwrap_or("");
-            if path.is_empty() {
-                out!("dpkg: error: --install needs a file name\n");
-            } else {
-                match crate::apt::dpkg_install_file(fs, path) {
-                    Ok(msg) => out!("{}\n", msg),
-                    Err(err) => out!("dpkg: error processing archive {}: {}\n", path, err),
-                }
-            }
-        }
-        "-r" | "--remove" => {
-            let pkg = parts.next().unwrap_or("");
-            if pkg.is_empty() {
-                out!("dpkg: error: --remove needs a package name\n");
-            } else {
-                match crate::apt::remove_package(fs, pkg, false) {
-                    Ok(msg) => out!("{}\n", msg),
-                    Err(err) => out!("dpkg: error: {}\n", err),
-                }
-            }
-        }
-        "-P" | "--purge" => {
-            let pkg = parts.next().unwrap_or("");
-            if pkg.is_empty() {
-                out!("dpkg: error: --purge needs a package name\n");
-            } else {
-                match crate::apt::remove_package(fs, pkg, true) {
-                    Ok(msg) => out!("{}\n", msg),
-                    Err(err) => out!("dpkg: error: {}\n", err),
-                }
-            }
-        }
-        _ => {
-            out!("Debian `dpkg' package management program version 1.22.6 (amd64).\n");
-            out!("Usage: dpkg [options] <command>\n\n");
-            out!("Commands:\n");
-            out!("  -i, --install <.deb file>  Install package archive\n");
-            out!("  -r, --remove <package>     Remove package (keep configs)\n");
-            out!("  -P, --purge <package>      Purge package completely\n");
-            out!("  -l, --list [pattern]       List installed packages matching pattern\n");
-            out!("  -s, --status <package>     Display package status details\n");
-            out!("  -L, --listfiles <package>  List files installed by package\n");
-            out!("  -S, --search <pattern>     Find package owning file\n");
-        }
-    }
-}
-fn cmd_aptitude() {
-    let fs = fs();
-    let dashboard = crate::apt::aptitude_dashboard(fs);
-    out!("{}\n", dashboard);
 }
 
 static DEMO_QUEUE: sched::WaitQueue = sched::WaitQueue::new();
@@ -2688,11 +2527,7 @@ fn run(line: &str, hist: &History) {
         return;
     }
     if cmd == "apt-cache" {
-        cmd_apt_cache(rest);
-        return;
-    }
-    if cmd == "dpkg" {
-        cmd_dpkg(rest);
+        cmd_apt(&alloc::format!("list {rest}"));
         return;
     }
     match cmd {
@@ -2741,7 +2576,6 @@ fn run(line: &str, hist: &History) {
         "curl" | "http" => cmd_curl(rest),
         "netstat" => cmd_netstat(),
         "apt" => cmd_apt(rest),
-        "aptitude" => cmd_aptitude(),
         "block" => cmd_block(),
         "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),

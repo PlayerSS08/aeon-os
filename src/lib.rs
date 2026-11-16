@@ -55,6 +55,8 @@ pub mod netdev;
 pub mod netstack;
 pub mod pci;
 pub mod pixel;
+pub mod pkg;
+pub mod pkgkey;
 pub mod pointer;
 pub mod readyq;
 pub mod rtl8168;

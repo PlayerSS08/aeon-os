@@ -10,3 +10,6 @@ vmbox/*.vbox-prev
 vmbox/Logs/
 vmbox/*.png
 
+
+# package repository signing key (never commit)
+.secrets/

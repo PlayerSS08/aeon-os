@@ -4,3 +4,7 @@
 usb/SHA256.txt text eol=lf
 *.EFI binary
 *.cer binary
+
+# signed package repositories: byte-exact, never convert line endings (the signature covers the bytes)
+repo/** -text
+tests/fixtures/repo/** -text
