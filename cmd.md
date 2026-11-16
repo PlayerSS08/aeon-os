@@ -55,7 +55,29 @@ The bare-metal Intel e1000 Gigabit NIC (`82540EM` / `82545EM` / `82574L`) and Vi
 - **What happens today:** they report the Wi-Fi chip found on the PCI bus (on the HP OMEN 16: Realtek RTL8852BE, `10EC:B520`) and refuse to scan or join, because **no driver for that chip exists yet**.
 - **What is built and tested:** everything above the radio. WPA2-Personal key derivation (PBKDF2-SHA1), the 4-way EAPOL handshake, AES-CCMP encryption, 802.11 scan/auth/association frames and the station state machine (`src/wpa.rs`, `src/ieee80211.rs`, `src/wifi.rs`). They are tested against RFC vectors, an independent Python implementation and a simulated access point, **not** against real Wi-Fi hardware.
 - **What is missing:** the chip driver. The RTL8852BE needs Realtek's closed firmware, MAC/baseband setup tables and DMA rings; Linux's `rtw89` driver is large and its firmware has had version and crash problems (the OMEN's chip is the `-VT` variant, `rtw8852bt` in Linux). It can only be developed with the laptop in the loop.
-- **Use instead:** the wired port (Realtek RTL8168, driver included, *untested on hardware*: run `dhcp`) or any USB Ethernet bridge that the firmware exposes.
+- **Use instead:** USB tethering from a phone (next section), the wired port (Realtek RTL8168, driver included, *untested on hardware*: run `dhcp`) or a USB Ethernet adapter.
+
+---
+
+### Internet through a phone (USB tethering)
+
+This is the route to the internet on the OMEN today, without a Wi-Fi chip driver: the phone does the Wi-Fi or mobile data, Aeon talks to the phone over USB.
+
+1. Plug the phone into a USB port of the laptop (before or after boot).
+2. On the phone: *Settings, Network, Hotspot and tethering, **USB tethering*** on (Android). It shows up as an RNDIS network function. CDC-ECM adapters (most USB Ethernet dongles, some phones) work too.
+3. In Aeon run `dhcp`. It looks for a newly plugged USB network function, brings it up, and asks the phone for an address. Then `curl http://...` and `apt update` work.
+4. Boot log lines to look for: `USB network function found`, `USB network ready ... MAC ...`. `usb` shows the ports.
+
+Tested: DHCP and an HTTP download through QEMU's RNDIS device (`python3 tests/boot_test.py -k usbnet`). **Not yet tested with a real phone**: send the `log` output if it does not come up. iPhone tethering is a different protocol (not supported).
+
+### Touchpad (I2C)
+
+The OMEN's touchpad is not USB: it is an ELAN device on an Intel serial-bus (I2C) controller. Aeon has a driver stack for it (`src/dwi2c.rs`, `src/i2chid.rs`, `src/hidparse.rs`, `src/touchpad.rs`, `src/touchpad_hw.rs`): a DesignWare I2C master, the HID-over-I2C protocol, a HID report-descriptor parser and a Precision Touchpad decoder.
+
+- One finger moves the pointer, a quick light tap is a left click, the pad's own button clicks (right button with two fingers down), two fingers moving up/down scroll the log.
+- Without ACPI the controller and address are searched for: Intel serial-bus controllers on PCI (the OMEN's `8086:7A4C` first), addresses `0x15 0x2C 0x10 0x20 0x38 0x2A`, descriptor registers `0x0001 0x0020`. Input is polled (the touchpad's interrupt GPIO is not driven).
+- `touchpad` prints what the probe did, step by step. `touchpad scan` lists every I2C address that answers on each controller. `touchpad dump` prints the device's report descriptor in hex. `touchpad rescan` probes again.
+- **Tested on the host** against a fake controller and a fake touchpad (protocol, FIFO flow control, NACK handling, finger tracking, taps, scrolling). **Not tested on the real laptop**: if the pointer does not move, run `touchpad` and `touchpad scan` and send the text.
 
 ---
 
@@ -224,14 +246,15 @@ A package source is a folder with `PKGINFO` (Package, Version, Depends, Descript
 | `rm` | `rm <file>` | Delete file. |
 | `touch` | `touch <file>` | Create empty file or update timestamp. |
 | `df` | `df` | Disk filesystem space utilization. |
-| `mouse` | `mouse` | USB mouse pointer position and buttons (wheel scrolls the log). |
+| `mouse` | `mouse` | Pointer position and buttons (USB mouse or touchpad; wheel scrolls the log). |
+| `touchpad` | `touchpad [scan\|rescan\|dump]` | The laptop's I2C touchpad: what the probe found, I2C bus scan, report descriptor. |
 
 ### Networking Subsystem
 | Command | Usage | Description |
 |:---|:---|:---|
 | `connect` | `connect [eth\|wifi <ssid> <pwd>]` | Ethernet runs DHCP; Wi-Fi reports that there is no chip driver yet. |
 | `wifi` | `wifi [status\|scan\|connect]` | Detects the Wi-Fi chip; no driver yet (see section 1). |
-| `dhcp` | `dhcp [renew\|status]` | Auto-acquire IPv4 lease from gateway router. |
+| `dhcp` | `dhcp [renew\|status]` | Auto-acquire IPv4 lease from gateway router (also brings up a newly plugged USB-tethered phone). |
 | `ifconfig` | `ifconfig [if] [ip]` | Inspect or assign network interface IP configurations. |
 | `ip` | `ip [a\|r\|l\|n]` | Linux-compatible IP address, route, and link viewer. |
 | `ping` | `ping <target> [-c N]` | Transmit ICMP Echo Requests and measure round-trip latency. |
