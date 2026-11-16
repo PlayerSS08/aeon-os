@@ -129,6 +129,8 @@ struct Net {
 /// Size of the bulk IN buffer: an RNDIS transfer may bundle several frames (we asked for up to 16 KiB).
 const NET_IN_BUF: u32 = 16 * 1024;
 const NET_OUT_BUF: usize = 4096;
+/// A USB network function with this many errors in a row (or a send that never finished) is not used any more.
+const NET_MAX_ERRORS: u8 = 16;
 
 struct Mouse {
     port: u8,
@@ -982,7 +984,7 @@ impl Xhci {
             }
             _ => n.errors = n.errors.saturating_add(1),
         }
-        if n.errors < 16 && n.in_ring.enqueue(Trb::normal(n.in_buf, NET_IN_BUF)).is_some() {
+        if n.errors < NET_MAX_ERRORS && n.in_ring.enqueue(Trb::normal(n.in_buf, NET_IN_BUF)).is_some() {
             wr32(db + 4 * u64::from(n.slot), u32::from(n.dci_in));
         }
     }
@@ -1013,7 +1015,8 @@ impl Xhci {
                 // SAFETY: the transfer has finished.
                 let b = unsafe { page_bytes(dev.buf) };
                 let len = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
-                if (12..=1024).contains(&len) && u32::from_le_bytes([b[0], b[1], b[2], b[3]]) == want && u32::from_le_bytes([b[8], b[9], b[10], b[11]]) == req {
+                // Every completion carries its status at offset 12, so anything shorter than 16 bytes is malformed.
+                if (16..=1024).contains(&len) && u32::from_le_bytes([b[0], b[1], b[2], b[3]]) == want && u32::from_le_bytes([b[8], b[9], b[10], b[11]]) == req {
                     return Ok(b[..len].to_vec());
                 }
             }
@@ -1038,6 +1041,10 @@ impl Xhci {
             self.control(dev, [0x01, 0x0B, un.data_alt, 0, un.data_interface, 0, 0, 0], None).map_err(|_| "SET_INTERFACE (data alternate) failed")?;
         }
 
+        // Endpoint 0 is the control pipe: its device context index would overwrite the slot's own entries.
+        if !(1..=15).contains(&un.ep_in) || !(1..=15).contains(&un.ep_out) || un.max_packet_in == 0 || un.max_packet_out == 0 {
+            return Err("the descriptor gives unusable bulk endpoints");
+        }
         let dci_out = xhcictx::dci_out(un.ep_out);
         let dci_in = xhcictx::dci_in(un.ep_in);
         let (out_phys, out_ring) = new_ring(ac64)?;
@@ -1062,8 +1069,10 @@ impl Xhci {
             usbnet::Kind::Rndis => {
                 let iface = u16::from(un.ctrl_interface);
                 let r = self.rndis_command(dev, iface, &usbnet::initialize(1), usbnet::MSG_INITIALIZE | usbnet::COMPLETE, 1)?;
-                if u32::from_le_bytes([r[12], r[13], r[14], r[15]]) != 0 {
-                    return Err("RNDIS initialisation was refused");
+                match r.get(12..16) {
+                    Some(s) if u32::from_le_bytes([s[0], s[1], s[2], s[3]]) == 0 => {}
+                    Some(_) => return Err("RNDIS initialisation was refused"),
+                    None => return Err("RNDIS initialisation answer too short"),
                 }
                 let r = self.rndis_command(dev, iface, &usbnet::query(2, usbnet::OID_PERMANENT_ADDRESS), usbnet::MSG_QUERY | usbnet::COMPLETE, 2)?;
                 let c = usbnet::parse_completion(&r).ok_or("bad RNDIS query answer")?;
@@ -1326,7 +1335,7 @@ pub fn disk_info() -> Option<StorageInfo> {
 /// Is a USB network function (RNDIS or CDC-ECM) up?
 pub fn net_present() -> bool {
     // SAFETY: rule A: only the shell task and boot code reach XHCI.
-    unsafe { XHCI.get() }.as_ref().is_some_and(|x| x.net.is_some())
+    unsafe { XHCI.get() }.as_ref().is_some_and(|x| x.net.as_ref().is_some_and(|n| n.errors < NET_MAX_ERRORS))
 }
 
 pub fn net_mac() -> [u8; 6] {
@@ -1350,6 +1359,11 @@ pub fn net_send(frame: &[u8]) -> Result<(), crate::netdev::NetError> {
     let x = unsafe { XHCI.get() }.as_mut().ok_or(NetError::DeviceNotFound)?;
     let (slot, dci, out_buf, kind, maxp) = {
         let n = x.net.as_ref().ok_or(NetError::DeviceNotFound)?;
+        // A failed device (too many errors, or a send that never finished) is not touched again: its ring
+        // and buffer may still belong to the controller.
+        if n.errors >= NET_MAX_ERRORS {
+            return Err(NetError::HardwareError);
+        }
         (n.slot, n.dci_out, n.out_buf, n.kind, n.max_packet_out)
     };
     if frame.len() > 1514 {
@@ -1372,7 +1386,13 @@ pub fn net_send(frame: &[u8]) -> Result<(), crate::netdev::NetError> {
     wr32(x.db + 4 * u64::from(slot), u32::from(dci));
     let ev = x.wait_for(TRB_TRANSFER_EVENT, slot, dci, 1000);
     if let Some(n) = x.net.as_mut() {
-        n.out_ring.retire();
+        if ev.is_some() {
+            n.out_ring.retire();
+        } else {
+            // The TRB may still be owned by the controller: never reuse the ring slot or `out_buf`.
+            n.errors = u8::MAX;
+            warn!("xhci", "USB network send timed out; the device is switched off");
+        }
     }
     match ev.map(|e| e.completion_code()) {
         Some(CC_SUCCESS | CC_SHORT_PACKET) => Ok(()),

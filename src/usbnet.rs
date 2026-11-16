@@ -93,7 +93,9 @@ pub fn find_usb_net(d: &[u8]) -> Option<UsbNet> {
                     }
                 }
             }
-            DESC_ENDPOINT if len >= 7 && e[3] & 0b11 == 0b10 => {
+            // Endpoint 0 is the control pipe and a zero packet size cannot carry anything: a descriptor that
+            // claims either as a bulk endpoint is lying (or hostile), so such an entry is ignored.
+            DESC_ENDPOINT if len >= 7 && e[3] & 0b11 == 0b10 && e[2] & 0x0F != 0 && u16::from_le_bytes([e[4], e[5]]) & 0x07FF != 0 => {
                 let mp = u16::from_le_bytes([e[4], e[5]]) & 0x07FF;
                 if e[2] & 0x80 != 0 {
                     bulk_in = Some((e[2] & 0x0F, mp));
@@ -318,6 +320,21 @@ mod tests {
             let _ = find_usb_net(&rndis_desc()[..n]);
             let _ = find_usb_net(&ecm_desc()[..n]);
         }
+    }
+
+    #[test]
+    fn bulk_endpoints_that_are_endpoint_zero_or_zero_sized_are_ignored() {
+        // The bulk IN endpoint of the data interface claims number 0 (the control pipe's index in a context).
+        let mut d = rndis_desc();
+        let at = d.len() - 14; // the bulk IN descriptor
+        d[at + 2] = 0x80;
+        assert!(find_usb_net(&d).is_none());
+        // The bulk OUT endpoint has a packet size of zero.
+        let mut d = rndis_desc();
+        let n = d.len();
+        d[n - 3] = 0;
+        d[n - 2] = 0;
+        assert!(find_usb_net(&d).is_none());
     }
 
     #[test]
