@@ -215,6 +215,17 @@ pub fn link_up() -> bool {
     }
 }
 
+/// What the active network device is and, for the Realtek chip, the registers that explain a dead link.
+#[cfg(target_os = "uefi")]
+pub fn diagnostics() -> alloc::string::String {
+    let mac = mac_address();
+    let mut s = alloc::format!("network device: {} mac {:02x?} link {}\n", device_name(), mac, if link_up() { "up" } else { "down" });
+    if let ActiveNetDev::Rtl8168(d) = &*ACTIVE_DEV.lock() {
+        s.push_str(&d.diag());
+    }
+    s
+}
+
 pub fn send_packet(packet: &[u8]) -> Result<(), NetError> {
     let mut dev = ACTIVE_DEV.lock();
     let res = match &mut *dev {

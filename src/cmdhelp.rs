@@ -46,6 +46,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("network", "wifi", "wifi [scan|connect]", "Wi-Fi wireless networking"),
     c("network", "curl", "curl <url> [-o file]", "download over http (names work; no https)"),
     c("status", "speedtest", "speedtest [url]", "measured download speed"),
+    c("hardware", "report", "report", "save a diagnostic report to the USB stick"),
     c("network", "http", "http <url>", "same as `curl`"),
     c("network", "netstat", "netstat", "interfaces, routes, ARP cache, sockets"),
     c("packaging", "apt", "apt <cmd> [pkg]", "signed package manager (apt help)"),

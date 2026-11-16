@@ -117,6 +117,14 @@ pub const MII_ADVERTISE: u8 = 4;
 pub const MII_CTRL1000: u8 = 9;
 /// BMCR: auto-negotiation enable + restart.
 pub const BMCR_ANRESTART: u16 = 0x1200;
+/// BMCR: auto-negotiation enable alone (also clears the power-down bit, which firmware may have left set).
+pub const BMCR_ANENABLE: u16 = 0x1000;
+/// BMCR: PHY reset; the bit clears itself when the reset is done.
+pub const BMCR_RESET: u16 = 0x8000;
+/// Realtek PHYs have register pages; page 0 holds the standard registers above.
+pub const MII_PAGE: u8 = 0x1F;
+pub const MII_LPA: u8 = 5;
+pub const MII_STAT1000: u8 = 10;
 /// Advertise 10/100 half and full, pause.
 pub const ADV_ALL_10_100: u16 = 0x01E1;
 /// Advertise 1000BASE-T full and half.
@@ -404,11 +412,41 @@ mod hw {
         wr16(base + REG_ISR, 0xFFFF);
         wr8(base + REG_CFG9346, CFG9346_LOCK);
 
-        // Start auto-negotiation on the PHY.
+        // The PHY: firmware may have left it powered down or on another register page, and a link that never
+        // comes up is the classic failure of a first driver. So: page 0, power up, reset and wait, then negotiate.
+        d.phy_write(MII_PAGE, 0);
+        d.phy_write(MII_BMCR, BMCR_ANENABLE);
+        d.phy_write(MII_BMCR, BMCR_RESET | BMCR_ANENABLE);
+        wait_until(500, || d.phy_read(MII_BMCR) & BMCR_RESET == 0);
         d.phy_write(MII_ADVERTISE, ADV_ALL_10_100);
         d.phy_write(MII_CTRL1000, ADV_1000);
         d.phy_write(MII_BMCR, BMCR_ANRESTART);
         let _ = d.phy_read(MII_BMSR);
         Ok(d)
+    }
+
+    impl Rtl8168 {
+        /// Registers that explain a link that does not come up, for the `report` command.
+        pub fn diag(&self) -> alloc::string::String {
+            use alloc::format;
+            let b = self.base;
+            format!(
+                "RTL8168 xid {:#010x} mac {:02x?} base {:#x}\n  CHIPCMD {:02x} PHYSTATUS {:02x} (bit1 = link) ISR {:04x} TXCONFIG {:08x} RXCONFIG {:08x}\n  PHY BMCR {:04x} BMSR {:04x} ANAR {:04x} LPA {:04x} CTRL1000 {:04x} STAT1000 {:04x}\n",
+                self.xid,
+                self.mac,
+                b,
+                rd8(b + REG_CHIPCMD),
+                rd8(b + REG_PHYSTATUS),
+                rd16(b + REG_ISR),
+                rd32(b + REG_TXCONFIG),
+                rd32(b + REG_RXCONFIG),
+                self.phy_read(MII_BMCR),
+                self.phy_read(MII_BMSR),
+                self.phy_read(MII_ADVERTISE),
+                self.phy_read(MII_LPA),
+                self.phy_read(MII_CTRL1000),
+                self.phy_read(MII_STAT1000),
+            )
+        }
     }
 }

@@ -666,34 +666,72 @@ fn find_wifi_hw() -> Option<(u16, u16, u8, u8, u8)> {
 /// space bit (what every driver does first). It exists so the real driver can be written from what this machine
 /// answers: a chip that is asleep or unmapped reads all ones.
 fn wifi_diag() {
+    out!("{}", wifi_diag_text());
+}
+
+fn wifi_diag_text() -> String {
+    use core::fmt::Write;
+    let mut s = String::new();
     let Some((v, d, bus, dev, func)) = find_wifi_hw() else {
-        out!("wifi diag: no wireless controller on the PCI bus\n");
-        return;
+        return String::from("wifi diag: no wireless controller on the PCI bus\n");
     };
-    out!("PCI {:02x}:{:02x}.{}  id {:04x}:{:04x}\n", bus, dev, func, v, d);
+    let _ = writeln!(s, "PCI {:02x}:{:02x}.{}  id {:04x}:{:04x}", bus, dev, func, v, d);
     for row in 0..4u8 {
         let o = row * 16;
         let w: [u32; 4] = core::array::from_fn(|i| crate::pci::config_read(bus, dev, func, o + 4 * i as u8));
-        out!("  cfg {:02x}: {:08x} {:08x} {:08x} {:08x}\n", o, w[0], w[1], w[2], w[3]);
+        let _ = writeln!(s, "  cfg {:02x}: {:08x} {:08x} {:08x} {:08x}", o, w[0], w[1], w[2], w[3]);
     }
     let sub = crate::pci::config_read(bus, dev, func, 0x2C);
-    out!("  subsystem {:04x}:{:04x}\n", sub & 0xFFFF, sub >> 16);
-    let Some(pd) = crate::pci::find(v, d) else { return };
+    let _ = writeln!(s, "  subsystem {:04x}:{:04x}", sub & 0xFFFF, sub >> 16);
+    let Some(pd) = crate::pci::find(v, d) else { return s };
     let Some(base) = crate::pci::memory_bar(&pd, 0) else {
-        out!("  BAR 0: not a memory BAR or not assigned by the firmware\n");
-        return;
+        s.push_str("  BAR 0: not a memory BAR or not assigned by the firmware\n");
+        return s;
     };
     let cmd = crate::pci::config_read(bus, dev, func, 4);
     crate::pci::config_write(bus, dev, func, 4, (cmd & 0xFFFF) | 0x2);
-    out!("  BAR 0 at {:#x}\n", base);
+    let _ = writeln!(s, "  BAR 0 at {:#x}", base);
     if !(crate::paging::map_mmio_uc(base) && crate::paging::map_mmio_uc(base + 0xFFF)) {
-        out!("  cannot map BAR 0\n");
-        return;
+        s.push_str("  cannot map BAR 0\n");
+        return s;
     }
     for off in [0x0000u64, 0x0004, 0x0008, 0x00F0, 0x00FC, 0x0100] {
-        out!("  reg {:#06x} = {:08x}\n", off, crate::mmio::rd32(base + off));
+        let _ = writeln!(s, "  reg {:#06x} = {:08x}", off, crate::mmio::rd32(base + off));
     }
-    out!("  (all ones means the chip is powered down or not answering; send this text so the driver can be written from it)\n");
+    s.push_str("  (all ones means the chip is powered down or not answering)\n");
+    s
+}
+
+/// `report`: gathers everything a developer needs to fix a driver (hardware list, boot log, network and Wi-Fi
+/// state, touchpad state) into one text file on the USB stick, because the screen is hard to read and to copy.
+fn cmd_report() {
+    use core::fmt::Write;
+    let mut r = String::new();
+    let _ = writeln!(r, "Aeon {} report", crate::VERSION);
+    let _ = writeln!(r, "\n== network ==");
+    r.push_str(&crate::netdev::diagnostics());
+    let _ = writeln!(r, "\n== wifi ==");
+    r.push_str(&wifi_diag_text());
+    let _ = writeln!(r, "\n== touchpad ==");
+    for l in crate::touchpad_hw::report() {
+        let _ = writeln!(r, "{l}");
+    }
+    let _ = writeln!(r, "\n== pci ==");
+    crate::pci::for_each(|d| {
+        let _ = writeln!(r, "{:02x}:{:02x}.{} {:04x}:{:04x} {}", d.bus, d.dev, d.func, d.header.vendor, d.header.device, crate::pci::class_name(d.header.class, d.header.subclass));
+    });
+    let _ = writeln!(r, "\n== boot log ==");
+    let mut raw: Vec<u8> = Vec::new();
+    log::replay(|b| raw.extend_from_slice(b));
+    r.push_str(&String::from_utf8_lossy(&raw));
+    // Plain 8.3 name on the AEON stick; if the stick cannot be written the text stays in memory and is shown.
+    match save_bytes("/usb/REPORT.TXT", r.as_bytes()) {
+        Ok(where_) => out!("report written: {} ({} bytes). Shut down, plug the stick into another PC and open REPORT.TXT.\n", where_, r.len()),
+        Err(e) => {
+            out!("could not write to the USB stick ({e}); showing the report here instead:\n");
+            out!("{}", r);
+        }
+    }
 }
 
 fn wifi_report() {
@@ -2789,6 +2827,7 @@ fn run(line: &str, hist: &History) {
         "mouse" => cmd_mouse(),
         "touchpad" => cmd_touchpad(rest),
         "speedtest" => cmd_speedtest(rest),
+        "report" => cmd_report(),
         "disks" => cmd_disks(),
         "disksched" => cmd_disksched(rest),
         "dls" => cmd_dls(rest),
