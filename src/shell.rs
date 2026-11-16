@@ -662,6 +662,40 @@ fn find_wifi_hw() -> Option<(u16, u16, u8, u8, u8)> {
     found
 }
 
+/// `wifi diag`: what the Wi-Fi chip looks like from the PCI bus, read-only apart from switching on the memory
+/// space bit (what every driver does first). It exists so the real driver can be written from what this machine
+/// answers: a chip that is asleep or unmapped reads all ones.
+fn wifi_diag() {
+    let Some((v, d, bus, dev, func)) = find_wifi_hw() else {
+        out!("wifi diag: no wireless controller on the PCI bus\n");
+        return;
+    };
+    out!("PCI {:02x}:{:02x}.{}  id {:04x}:{:04x}\n", bus, dev, func, v, d);
+    for row in 0..4u8 {
+        let o = row * 16;
+        let w: [u32; 4] = core::array::from_fn(|i| crate::pci::config_read(bus, dev, func, o + 4 * i as u8));
+        out!("  cfg {:02x}: {:08x} {:08x} {:08x} {:08x}\n", o, w[0], w[1], w[2], w[3]);
+    }
+    let sub = crate::pci::config_read(bus, dev, func, 0x2C);
+    out!("  subsystem {:04x}:{:04x}\n", sub & 0xFFFF, sub >> 16);
+    let Some(pd) = crate::pci::find(v, d) else { return };
+    let Some(base) = crate::pci::memory_bar(&pd, 0) else {
+        out!("  BAR 0: not a memory BAR or not assigned by the firmware\n");
+        return;
+    };
+    let cmd = crate::pci::config_read(bus, dev, func, 4);
+    crate::pci::config_write(bus, dev, func, 4, (cmd & 0xFFFF) | 0x2);
+    out!("  BAR 0 at {:#x}\n", base);
+    if !(crate::paging::map_mmio_uc(base) && crate::paging::map_mmio_uc(base + 0xFFF)) {
+        out!("  cannot map BAR 0\n");
+        return;
+    }
+    for off in [0x0000u64, 0x0004, 0x0008, 0x00F0, 0x00FC, 0x0100] {
+        out!("  reg {:#06x} = {:08x}\n", off, crate::mmio::rd32(base + off));
+    }
+    out!("  (all ones means the chip is powered down or not answering; send this text so the driver can be written from it)\n");
+}
+
 fn wifi_report() {
     match find_wifi_hw() {
         Some((v, d, bus, dev, func)) => {
@@ -712,7 +746,8 @@ fn cmd_wifi(rest: &str) {
             wifi_report();
         }
         Some("connect") => cmd_connect(&alloc::format!("wifi {}", rest.trim_start_matches("connect").trim())),
-        Some(_) => out!("Usage: wifi [status | scan | connect <ssid> <password>]\n"),
+        Some("diag") => wifi_diag(),
+        Some(_) => out!("Usage: wifi [status | scan | connect <ssid> <password> | diag]\n"),
     }
 }
 
