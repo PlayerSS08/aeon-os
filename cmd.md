@@ -212,13 +212,36 @@ The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`,
     ```
   - **Action:** Fetches the remote resource via HTTP/HTTPS/TCP socket, extracts the binary payload, deploys it to `/bin`, and registers it in the local `dpkg` database.
 
-### Package Querying & Management
-- **Search Packages:** `apt search <pattern>` – Searches local packages and remote repository catalogs.
-- **Show Package Information:** `apt show <package>` – RFC 822 detailed package metadata (Architecture, Version, Depends, Maintainer, SHA256).
-- **List Installed Packages:** `apt list --installed` – Displays all installed packages and versions.
-- **Update Repositories:** `apt update` – Refreshes package lists from `/etc/apt/sources.list`.
-- **Remove Package:** `apt remove <package>` – Removes the binary from `/bin` and purges its dpkg registration.
-- **Interactive Dashboard:** `aptitude` – Full-screen text dashboard displaying network status, repository sources, installed packages, and quick commands.
+### Package Querying & Lifecycle Management
+- **Search Packages:** pt search <pattern> - Searches local packages and remote repository catalogs.
+- **Show Package Information:** pt show <package> - RFC 822 detailed package metadata (Architecture, Version, Depends, Maintainer, SHA256).
+- **List Installed Packages:** pt list --installed - Displays all installed packages ([installed] and [installed,automatic]).
+- **Update Repositories:** pt update (or pt-get update) - Refreshes package lists from /etc/apt/sources.list.
+- **Remove Package:** pt remove <package> (or pt-get remove <package>) - Removes binary from /bin and keeps config files.
+- **Purge Package:** pt purge <package> (or pt-get purge <package>) - Completely deletes package and status registration.
+- **Auto-Remove Orphans:** pt autoremove - Detects and cleans up unneeded automatic dependencies.
+- **Clean Cache:** pt clean / pt autoclean - Empties downloaded archive files from /var/cache/apt/archives.
+- **Interactive Dashboard:** ptitude - Full-screen text dashboard displaying network status, repository sources, installed packages, and quick commands.
+
+### APT Cache Inspection (pt-cache)
+- **Query Package Policy & Pinning:**
+  `	ext
+  apt-cache policy <package>
+  `
+  - Displays currently installed version, candidate repository version, and mirror priority rankings.
+- **Inspect Dependency Hierarchy:**
+  `	ext
+  apt-cache depends <package>
+  `
+  - Analyzes package dependency trees (Depends:, Recommends:).
+
+### Low-Level Debian Package Manager (dpkg)
+- **Tabular Package Listing:** dpkg -l [pattern] - Displays status flags (ii installed), package name, version, architecture, and description.
+- **Detailed Package Status:** dpkg -s <package> - Outputs full control stanza from /var/lib/dpkg/status.
+- **Install Local Archive:** dpkg -i <file.deb> - Directly extracts and configures a .deb archive.
+- **List Installed Files:** dpkg -L <package> - Dumps paths registered in /var/lib/dpkg/info/<package>.list.
+- **Locate File Owner:** dpkg -S <pattern> - Identifies which package installed a specific file or binary.
+- **Remove / Purge Package:** dpkg -r <package> (remove) / dpkg -P <package> (purge).
 
 ---
 
@@ -227,8 +250,11 @@ The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`,
 ### Packaging & Internet Resources
 | Command | Usage | Description |
 |:---|:---|:---|
-| `apt` | `apt <cmd> [pkg\|url]` | Debian package manager for installing any package or URL resource. |
-| `aptitude` | `aptitude` | Interactive package management dashboard and inventory viewer. |
+| pt | pt <cmd> [pkg|url] | Debian/Ubuntu package manager for installing any package or URL resource. |
+| pt-get | pt-get <cmd> [pkg] | Standard Debian APT packaging interface (update, install, remove, autoremove). |
+| pt-cache | pt-cache <policy|depends|search> <pkg> | Query repository cache, version priority, and dependencies. |
+| dpkg | dpkg <-l|-s|-i|-r|-P|-L|-S> [pkg|file] | Low-level Debian package management and filesystem manifest tracking. |
+| ptitude | ptitude | Interactive package management dashboard and inventory viewer. |
 
 ### System & Architecture
 | Command | Usage | Description |

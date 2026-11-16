@@ -764,7 +764,7 @@ fn cmd_apt(rest: &str) {
                 Err(err) => out!("E: {}\n", err),
             }
         }
-        "remove" | "purge" => {
+        "remove" => {
             let pkg = match parts.next() {
                 Some(p) => p,
                 None => {
@@ -772,10 +772,41 @@ fn cmd_apt(rest: &str) {
                     return;
                 }
             };
-            match crate::apt::remove_package(fs, pkg) {
+            match crate::apt::remove_package(fs, pkg, false) {
                 Ok(msg) => out!("{}\n", msg),
                 Err(err) => out!("E: {}\n", err),
             }
+        }
+        "purge" => {
+            let pkg = match parts.next() {
+                Some(p) => p,
+                None => {
+                    out!("usage: apt purge <package>\n");
+                    return;
+                }
+            };
+            match crate::apt::remove_package(fs, pkg, true) {
+                Ok(msg) => out!("{}\n", msg),
+                Err(err) => out!("E: {}\n", err),
+            }
+        }
+        "autoremove" => {
+            out!("Reading package lists... Done\nBuilding dependency tree... Done\n");
+            let (count, pkgs) = crate::apt::autoremove_packages(fs);
+            if count == 0 {
+                out!("0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n");
+            } else {
+                out!("The following packages will be REMOVED:\n");
+                for p in &pkgs {
+                    out!("  {}\n", p);
+                }
+                out!("0 upgraded, 0 newly installed, {} to remove and 0 not upgraded.\n", count);
+                out!("After this operation, {} KB of disk space will be freed.\n", count * 4);
+            }
+        }
+        "clean" | "autoclean" => {
+            let freed = crate::apt::clean_cache(fs);
+            out!("Cleared {} package archive(s) from /var/cache/apt/archives.\n", freed);
         }
         "list" => {
             let mut installed_only = false;
@@ -852,19 +883,154 @@ fn cmd_apt(rest: &str) {
             }
         }
         _ => {
-            out!("apt 2.6.1 (amd64) - Debian Package Manager for Aeon OS\n");
+            out!("apt 2.6.1 (amd64) - Debian / Ubuntu Package Manager for Aeon OS\n");
             out!("Usage: apt <command> [arguments]\n\n");
             out!("Commands:\n");
-            out!("  update   - Retrieve new lists of packages\n");
-            out!("  install  - Install new packages (e.g. apt install coreutils)\n");
-            out!("  remove   - Remove packages (e.g. apt remove tree)\n");
-            out!("  list     - List packages based on package names (--installed)\n");
-            out!("  show     - Show package details\n");
-            out!("  search   - Search in package descriptions\n");
+            out!("  update      - Retrieve new lists of packages\n");
+            out!("  install     - Install new packages (e.g. apt install coreutils)\n");
+            out!("  remove      - Remove packages (e.g. apt remove tree)\n");
+            out!("  purge       - Remove packages and configuration files\n");
+            out!("  autoremove  - Remove automatically installed orphan packages\n");
+            out!("  clean       - Clear out downloaded package archive cache\n");
+            out!("  list        - List packages based on package names (--installed)\n");
+            out!("  show        - Show package details and RFC 822 control metadata\n");
+            out!("  search      - Search in package descriptions\n");
         }
     }
 }
 
+fn cmd_apt_cache(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("help");
+    let fs = fs();
+    crate::apt::ensure_initialized(fs);
+
+    match sub {
+        "policy" => {
+            let pkg = parts.next().unwrap_or("");
+            if pkg.is_empty() {
+                out!("usage: apt-cache policy <package>\n");
+            } else {
+                out!("{}", crate::apt::apt_cache_policy(fs, pkg));
+            }
+        }
+        "depends" => {
+            let pkg = parts.next().unwrap_or("");
+            if pkg.is_empty() {
+                out!("usage: apt-cache depends <package>\n");
+            } else {
+                out!("{}", crate::apt::apt_cache_depends(pkg));
+            }
+        }
+        "search" => {
+            let term = parts.next().unwrap_or("");
+            cmd_apt(&alloc::format!("search {}", term));
+        }
+        "show" => {
+            let pkg = parts.next().unwrap_or("");
+            cmd_apt(&alloc::format!("show {}", pkg));
+        }
+        _ => {
+            out!("apt-cache 2.6.1 (amd64)\nUsage: apt-cache [policy|depends|search|show] <package>\n");
+        }
+    }
+}
+
+fn cmd_dpkg(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    let flag = parts.next().unwrap_or("-l");
+    let fs = fs();
+    crate::apt::ensure_initialized(fs);
+
+    match flag {
+        "-l" | "--list" => {
+            let pattern = parts.next().unwrap_or("");
+            out!("{}", crate::apt::dpkg_list(fs, pattern));
+        }
+        "-s" | "--status" => {
+            let pkg = parts.next().unwrap_or("");
+            if pkg.is_empty() {
+                out!("dpkg: error: --status needs a valid package name but none was provided\n");
+            } else {
+                match crate::apt::dpkg_status(fs, pkg) {
+                    Some(st) => out!("{}", st),
+                    None => out!("dpkg-query: package '{}' is not installed and no information is available\n", pkg),
+                }
+            }
+        }
+        "-L" | "--listfiles" => {
+            let pkg = parts.next().unwrap_or("");
+            if pkg.is_empty() {
+                out!("dpkg: error: --listfiles needs a valid package name\n");
+            } else {
+                match crate::apt::dpkg_list_files(fs, pkg) {
+                    Some(files) => out!("{}", files),
+                    None => out!("dpkg-query: package '{}' is not installed\n", pkg),
+                }
+            }
+        }
+        "-S" | "--search" => {
+            let query = parts.next().unwrap_or("");
+            if query.is_empty() {
+                out!("dpkg: error: --search needs a search pattern\n");
+            } else {
+                let matches = crate::apt::dpkg_search(fs, query);
+                if matches.is_empty() {
+                    out!("dpkg-query: no path found matching pattern {}\n", query);
+                } else {
+                    for m in matches {
+                        out!("{}\n", m);
+                    }
+                }
+            }
+        }
+        "-i" | "--install" => {
+            let path = parts.next().unwrap_or("");
+            if path.is_empty() {
+                out!("dpkg: error: --install needs a file name\n");
+            } else {
+                match crate::apt::dpkg_install_file(fs, path) {
+                    Ok(msg) => out!("{}\n", msg),
+                    Err(err) => out!("dpkg: error processing archive {}: {}\n", path, err),
+                }
+            }
+        }
+        "-r" | "--remove" => {
+            let pkg = parts.next().unwrap_or("");
+            if pkg.is_empty() {
+                out!("dpkg: error: --remove needs a package name\n");
+            } else {
+                match crate::apt::remove_package(fs, pkg, false) {
+                    Ok(msg) => out!("{}\n", msg),
+                    Err(err) => out!("dpkg: error: {}\n", err),
+                }
+            }
+        }
+        "-P" | "--purge" => {
+            let pkg = parts.next().unwrap_or("");
+            if pkg.is_empty() {
+                out!("dpkg: error: --purge needs a package name\n");
+            } else {
+                match crate::apt::remove_package(fs, pkg, true) {
+                    Ok(msg) => out!("{}\n", msg),
+                    Err(err) => out!("dpkg: error: {}\n", err),
+                }
+            }
+        }
+        _ => {
+            out!("Debian `dpkg' package management program version 1.22.6 (amd64).\n");
+            out!("Usage: dpkg [options] <command>\n\n");
+            out!("Commands:\n");
+            out!("  -i, --install <.deb file>  Install package archive\n");
+            out!("  -r, --remove <package>     Remove package (keep configs)\n");
+            out!("  -P, --purge <package>      Purge package completely\n");
+            out!("  -l, --list [pattern]       List installed packages matching pattern\n");
+            out!("  -s, --status <package>     Display package status details\n");
+            out!("  -L, --listfiles <package>  List files installed by package\n");
+            out!("  -S, --search <pattern>     Find package owning file\n");
+        }
+    }
+}
 fn cmd_aptitude() {
     let fs = fs();
     let dashboard = crate::apt::aptitude_dashboard(fs);
@@ -2417,6 +2583,18 @@ fn run(line: &str, hist: &History) {
             out!("usage: {}\n", c.usage);
             return;
         }
+    }
+    if cmd == "apt-get" {
+        cmd_apt(rest);
+        return;
+    }
+    if cmd == "apt-cache" {
+        cmd_apt_cache(rest);
+        return;
+    }
+    if cmd == "dpkg" {
+        cmd_dpkg(rest);
+        return;
     }
     match cmd {
         "" => {}
