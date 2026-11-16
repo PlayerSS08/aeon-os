@@ -748,11 +748,11 @@ fn save_bytes(name: &str, data: &[u8]) -> Result<String, String> {
     Ok(alloc::format!("{name} (RAM filesystem, gone at power off)"))
 }
 
-/// Largest download `curl` keeps in memory. The heap is 32 MiB; this leaves room for everything else.
-const MAX_DOWNLOAD: usize = 12 * 1024 * 1024;
+/// Largest download kept in memory. The heap is 32 MiB and a growing buffer needs about twice its final size (a 12 MiB limit crashed the kernel), so 8 MiB.
+const MAX_DOWNLOAD: usize = 8 * 1024 * 1024;
 
 /// A plain-http file big enough to time. Any other URL can be given on the command line.
-const SPEEDTEST_URLS: [&str; 2] = ["http://ftp.debian.org/debian/dists/stable/main/binary-amd64/Packages.xz", "http://speedtest.tele2.net/10MB.zip"];
+const SPEEDTEST_URLS: [&str; 2] = ["http://ftp.debian.org/debian/dists/stable/main/binary-all/Packages.xz", "http://speedtest.tele2.net/10MB.zip"];
 
 /// `speedtest [url]`: downloads a real file over the active network link and reports what was measured.
 /// Nothing here is estimated: the figure is bytes received divided by the seconds the transfer took.

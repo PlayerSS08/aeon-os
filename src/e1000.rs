@@ -40,8 +40,8 @@ const STATUS_LU: u32 = 1 << 1;
 
 const RCTL_EN: u32 = 1 << 1;
 const _RCTL_SBP: u32 = 1 << 2;
-const RCTL_UPE: u32 = 1 << 3;
-const RCTL_MPE: u32 = 1 << 4;
+const _RCTL_UPE: u32 = 1 << 3;
+const _RCTL_MPE: u32 = 1 << 4;
 const RCTL_BAM: u32 = 1 << 15;
 const RCTL_BSIZE_2048: u32 = 0 << 16;
 const RCTL_SECRC: u32 = 1 << 26;
@@ -317,8 +317,8 @@ pub fn init(dev: &pci::Device) -> Result<E1000, NetError> {
     wr32(mmio_base + REG_RDT, (NUM_RX_DESCRIPTORS - 1) as u32);
     driver.rx_cur = 0;
 
-    // Configure RX Control (enable, broadcast accept, unicast/multicast promiscuous, 2048 buffer, strip CRC)
-    wr32(mmio_base + REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_UPE | RCTL_MPE | RCTL_BSIZE_2048 | RCTL_SECRC);
+    // Configure RX Control (enable, broadcast accept, 2048 buffer, strip CRC; no promiscuous mode: the address filter above does the job)
+    wr32(mmio_base + REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC);
 
     // Initialize TX ring descriptors
     for i in 0..NUM_TX_DESCRIPTORS {

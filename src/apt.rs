@@ -244,19 +244,33 @@ pub fn reinstall(
         pkg::verify_download(e, &data).map_err(|err| format!("{}: {err}", e.name))?;
         let plan = pkg::plan_install(e, &data).map_err(|err| format!("{}: {err}", e.name))?;
 
+        let old_pos = status.iter().position(|p| p.name == e.name).expect("checked above");
+        let old_pkg = status[old_pos].clone();
         for (path, _) in &plan.files {
             if let Some(owner) = status.iter().find(|p| p.name != e.name && p.files.contains(path)) {
                 return Err(pkg::PkgError::Conflict { path: path.clone(), owner: owner.name.clone() }.to_string());
             }
-        }
-
-        let old_pos = status.iter().position(|p| p.name == e.name).expect("checked above");
-        let old_pkg = status.remove(old_pos);
-        for old_file in &old_pkg.files {
-            if !plan.files.iter().any(|(p, _)| p == old_file) {
-                fs.remove(old_file);
+            // A path this package did not own before must be free: never overwrite a file or folder of the user's.
+            if !old_pkg.files.contains(path) && (fs.read(path).is_some() || fs.is_dir(path)) {
+                return Err(pkg::PkgError::Conflict { path: path.clone(), owner: "(a file you created)".to_string() }.to_string());
             }
         }
+
+        // Remember what every touched path holds now, so a failure puts the system back exactly as it was.
+        let touched: Vec<&String> = plan.files.iter().map(|(p, _)| p).chain(old_pkg.files.iter()).collect();
+        let backups: Vec<(String, Option<Vec<u8>>)> = touched.iter().map(|p| ((*p).clone(), fs.read(p).map(<[u8]>::to_vec))).collect();
+        let undo = |fs: &mut RamFs| {
+            for (path, old) in &backups {
+                match old {
+                    Some(data) => {
+                        let _ = write_file(fs, path, data);
+                    }
+                    None => {
+                        fs.remove(path);
+                    }
+                }
+            }
+        };
 
         let mut written: Vec<String> = Vec::new();
         let mut failure = None;
@@ -269,28 +283,27 @@ pub fn reinstall(
                 }
             }
         }
+        if let Some(err) = failure {
+            undo(fs);
+            return Err(format!("{}: {err}; nothing was changed", e.name));
+        }
         for dir in &plan.dirs {
             if !fs.is_dir(dir) {
                 let _ = fs.mkdir(dir);
             }
         }
-        if let Some(err) = failure {
-            for p in &written {
-                fs.remove(p);
+        // Only now, with the new files safely in place, drop files the new version no longer has.
+        for old_file in &old_pkg.files {
+            if !plan.files.iter().any(|(p, _)| p == old_file) {
+                fs.remove(old_file);
             }
-            return Err(format!("{}: {err}; reinstall failed", e.name));
         }
 
-        status.push(Installed {
-            name: e.name.clone(),
-            version: e.version.clone(),
-            depends: e.depends.clone(),
-            files: written,
-            auto: old_pkg.auto,
-        });
-
+        status[old_pos] = Installed { name: e.name.clone(), version: e.version.clone(), depends: e.depends.clone(), files: written, auto: old_pkg.auto };
         if let Err(err) = save_status(fs, &status) {
-            return Err(format!("{}: {err}; status update failed", e.name));
+            status[old_pos] = old_pkg;
+            undo(fs);
+            return Err(format!("{}: {err}; nothing was changed", e.name));
         }
         persist(&e.filename, &data);
         say(&format!("Reinstalled {} {} ({} file(s))", e.name, e.version, plan.files.len()));
@@ -613,6 +626,37 @@ mod tests {
         assert!(fs.read("/usr/share/greet/en.txt").is_none());
         assert!(load_status(&fs).is_empty());
         assert!(run(|say, _| remove(&mut fs, &["greeter"], say)).0.is_err());
+    }
+
+    #[test]
+    fn reinstall_never_overwrites_a_file_the_package_did_not_own() {
+        let (mut fs, mut f) = updated();
+        run(|say, persist| install(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist)).0.unwrap();
+        // The record says greeter does not own README (as if the new version were adding it) while a file is there.
+        let mut st = load_status(&fs);
+        st.iter_mut().find(|p| p.name == "greeter").unwrap().files.retain(|p| p != "/usr/share/greet/README");
+        save_status(&mut fs, &st).unwrap();
+        fs.write("/usr/share/greet/README", b"my own notes").unwrap();
+        let (r, _, _) = run(|say, persist| reinstall(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist));
+        assert!(r.is_err());
+        assert_eq!(fs.read("/usr/share/greet/README").unwrap(), b"my own notes");
+        assert_eq!(load_status(&fs), st, "a refused reinstall changes nothing");
+    }
+
+    #[test]
+    fn reinstall_drops_files_the_new_version_lacks_only_after_writing_the_new_ones() {
+        let (mut fs, mut f) = updated();
+        run(|say, persist| install(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist)).0.unwrap();
+        let mut st = load_status(&fs);
+        st.iter_mut().find(|p| p.name == "greeter").unwrap().files.push("/usr/share/greet/old.txt".to_string());
+        save_status(&mut fs, &st).unwrap();
+        fs.write("/usr/share/greet/old.txt", b"from an older version").unwrap();
+        run(|say, persist| reinstall(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist)).0.unwrap();
+        assert!(fs.read("/usr/share/greet/old.txt").is_none());
+        assert!(fs.read("/usr/share/greet/README").unwrap().starts_with(b"greeter 1.0"));
+        let after = load_status(&fs);
+        let owned = &after.iter().find(|p| p.name == "greeter").unwrap().files;
+        assert!(!owned.iter().any(|p| p.ends_with("old.txt")) && owned.iter().any(|p| p.ends_with("README")));
     }
 
     #[test]

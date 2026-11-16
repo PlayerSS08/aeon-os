@@ -254,7 +254,7 @@ A package source is a folder with `PKGINFO` (Package, Version, Depends, Descript
 |:---|:---|:---|
 | `connect` | `connect [eth\|wifi <ssid> <pwd>]` | Ethernet runs DHCP; Wi-Fi reports that there is no chip driver yet. |
 | `wifi` | `wifi [status\|scan\|connect]` | Detects the Wi-Fi chip; no driver yet (see section 1). |
-| `speedtest` | `speedtest [url]` | Downloads a real file (Debian's `Packages.xz`, ~9.7 MB, plain http) over the active link and prints bytes, seconds and the measured Mbit/s. Nothing is estimated. |
+| `speedtest` | `speedtest [url]` | Downloads a real file (Debian's `Packages.xz`, ~4.5 MB, plain http) over the active link and prints bytes, seconds and the measured Mbit/s. Nothing is estimated. |
 | `dhcp` | `dhcp [renew\|status]` | Auto-acquire IPv4 lease from gateway router (also brings up a newly plugged USB-tethered phone). |
 | `ifconfig` | `ifconfig [if] [ip]` | Inspect or assign network interface IP configurations. |
 | `ip` | `ip [a\|r\|l\|n]` | Linux-compatible IP address, route, and link viewer. |
