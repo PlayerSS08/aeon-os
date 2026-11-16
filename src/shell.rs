@@ -613,6 +613,40 @@ fn cmd_dhcp(_rest: &str) {
     }
 }
 
+/// The first wireless network controller on the PCI bus (class 02 "network", subclass 80 "other": that is how
+/// Wi-Fi cards identify themselves; or class 0D "wireless").
+fn find_wifi_hw() -> Option<(u16, u16, u8, u8, u8)> {
+    let mut found = None;
+    crate::pci::for_each(|d| {
+        let h = &d.header;
+        if found.is_none() && ((h.class == 0x02 && h.subclass == 0x80) || h.class == 0x0D) {
+            found = Some((h.vendor, h.device, d.bus, d.dev, d.func));
+        }
+    });
+    found
+}
+
+fn wifi_report() {
+    match find_wifi_hw() {
+        Some((v, d, bus, dev, func)) => {
+            match crate::wifi::chip_name(v, d) {
+                Some(name) => out!("Wi-Fi hardware : {} ({:04x}:{:04x}) at {:02x}:{:02x}.{}\n", name, v, d, bus, dev, func),
+                None => out!("Wi-Fi hardware : unknown wireless controller ({:04x}:{:04x}) at {:02x}:{:02x}.{}\n", v, d, bus, dev, func),
+            }
+            out!("Wi-Fi driver   : none. The chip needs a firmware upload, MAC/PHY setup and DMA rings that Aeon does not\n");
+            out!("                 have yet (they can only be developed with this very laptop and the vendor firmware).\n");
+            out!("Wi-Fi stack    : scan, WPA2-PSK handshake and encrypted data are implemented and tested against a\n");
+            out!("                 simulated access point, ready for a chip driver.\n");
+        }
+        None => out!("Wi-Fi hardware : none found on the PCI bus\n"),
+    }
+    out!(
+        "Network now    : {} ({})\n",
+        crate::netdev::device_name(),
+        if crate::netdev::link_up() { "link up" } else { "no link: plug in a cable and run `dhcp`" }
+    );
+}
+
 fn cmd_connect(rest: &str) {
     let mut parts = rest.split_whitespace();
     match parts.next() {
@@ -620,25 +654,13 @@ fn cmd_connect(rest: &str) {
             cmd_ethernet("connect");
         }
         Some("wifi") | Some("wlan") => {
-            let ssid = parts.next();
-            let password = parts.next();
-            match (ssid, password) {
-                (Some(s), Some(_pwd)) => {
-                    out!("Scanning for 802.11 wireless adapters...\n");
-                    out!("SSID specified: '{}'\n", s);
-                    out!("Authentication: WPA2-PSK (AES-CCMP passphrase verification)\n");
-                    out!("Hardware Status: No PCIe 802.11 wireless controller detected on PCI bus.\n");
-                    out!("Note: x86_64 bare-metal Wi-Fi requires proprietary microcode firmware blobs (e.g. iwlwifi / rtw88) and 802.11 WPA2 4-way handshake engine.\n");
-                    out!("Use 'connect ethernet' or 'dhcp' for active high-speed network access.\n");
-                }
-                (Some(s), None) => {
-                    out!("Error: Wi-Fi password required for SSID '{}'.\n", s);
-                    out!("Usage: connect wifi <ssid> <password>\n");
-                }
-                _ => {
-                    out!("Usage: connect wifi <ssid> <password>\n");
-                }
+            if parts.next().is_none() {
+                out!("Usage: connect wifi <ssid> <password>\n");
+                return;
             }
+            out!("cannot join a Wi-Fi network: there is no driver for this machine's Wi-Fi chip yet.\n");
+            wifi_report();
+            out!("Use the Ethernet cable (`dhcp`) for internet today.\n");
         }
         Some(other) => {
             out!("Unknown connection type: '{}'. Usage: connect [ethernet | wifi <ssid> <password>]\n", other);
@@ -647,33 +669,14 @@ fn cmd_connect(rest: &str) {
 }
 
 fn cmd_wifi(rest: &str) {
-    let mut parts = rest.split_whitespace();
-    match parts.next() {
-        Some("connect") => {
-            let ssid = parts.next();
-            let pwd = parts.next();
-            match (ssid, pwd) {
-                (Some(s), Some(_p)) => {
-                    out!("Initiating WPA2-PSK association with '{}'...\n", s);
-                    out!("Status: No supported 802.11 wireless radio detected (active NIC: eth0 Intel 82540EM).\n");
-                    out!("x86_64 wireless authentication requires closed-source firmware microcode.\n");
-                }
-                _ => out!("Usage: wifi connect <ssid> <password>\n"),
-            }
-        }
+    match rest.split_whitespace().next() {
+        Some("status") | None => wifi_report(),
         Some("scan") => {
-            out!("Scanning 2.4 GHz and 5 GHz channels for wireless access points...\n");
-            out!("Scan complete: 0 APs discovered (No physical wireless antenna/PCI controller attached).\n");
+            out!("cannot scan: there is no driver for this machine's Wi-Fi chip yet.\n");
+            wifi_report();
         }
-        Some("status") => {
-            out!("Wi-Fi Subsystem Status:\n");
-            out!("  Interface : wlan0 (unbound / no driver)\n");
-            out!("  State     : Disconnected\n");
-            out!("  Active NIC: eth0 (Intel e1000 Gigabit Ethernet, Link UP)\n");
-        }
-        _ => {
-            out!("Usage: wifi [scan | connect <ssid> <password> | status]\n");
-        }
+        Some("connect") => cmd_connect(&alloc::format!("wifi {}", rest.trim_start_matches("connect").trim())),
+        Some(_) => out!("Usage: wifi [status | scan | connect <ssid> <password>]\n"),
     }
 }
 
@@ -820,6 +823,14 @@ fn usb_persist(warned: &mut bool, rel: &str, data: &[u8]) {
     }
 }
 
+/// The highest package-list serial remembered on the stick (0 when there is none).
+fn usb_serial() -> u64 {
+    if !crate::xhci::has_storage() {
+        return 0;
+    }
+    usbfs::hw_read("aeonpkg/serial", 64).ok().and_then(|d| String::from_utf8(d).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+}
+
 /// Serves repository files from the stick (`apt restore`).
 struct UsbFetcher;
 
@@ -869,7 +880,7 @@ fn cmd_apt(rest: &str) {
         "update" => {
             let Some(mut f) = net_fetcher(fs) else { return };
             let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
-            if let Err(e) = crate::apt::update(fs, &mut f, keys, &mut say, &mut persist) {
+            if let Err(e) = crate::apt::update(fs, &mut f, keys, usb_serial(), &mut say, &mut persist) {
                 out!("apt: {}\n", e);
             }
         }
@@ -927,7 +938,7 @@ fn cmd_apt(rest: &str) {
                 return;
             }
             let mut f = UsbFetcher;
-            if let Err(e) = crate::apt::update(fs, &mut f, keys, &mut say, &mut |_, _| {}) {
+            if let Err(e) = crate::apt::update(fs, &mut f, keys, usb_serial(), &mut say, &mut |_, _| {}) {
                 out!("apt: {}\n", e);
                 return;
             }

@@ -18,6 +18,8 @@ pub const SOURCE_PATH: &str = "/etc/apt/source";
 pub const INDEX_PATH: &str = "/var/lib/aeonpkg/index";
 pub const SIG_PATH: &str = "/var/lib/aeonpkg/index.sig";
 pub const STATUS_PATH: &str = "/var/lib/aeonpkg/status";
+/// Highest index serial seen (also kept on the USB stick so it survives power off).
+pub const SERIAL_PATH: &str = "/var/lib/aeonpkg/serial";
 
 /// Largest index or package the downloader will keep.
 const MAX_INDEX: usize = 256 * 1024;
@@ -101,21 +103,40 @@ pub fn load_index(fs: &RamFs, keys: &[[u8; 32]]) -> Result<Vec<Entry>, String> {
     let (Some(index), Some(sig)) = (fs.read(INDEX_PATH), fs.read(SIG_PATH)) else {
         return Err("no package list yet: run `apt source <http://...>` and `apt update` first".to_string());
     };
-    pkg::parse_signed_index(keys, index, sig).map_err(|e| e.to_string())
+    pkg::parse_signed_index(keys, index, sig).map(|(_, entries)| entries).map_err(|e| e.to_string())
+}
+
+/// The highest serial remembered in RAM, or 0.
+pub fn stored_serial(fs: &RamFs) -> u64 {
+    fs.read(SERIAL_PATH).and_then(|d| core::str::from_utf8(d).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }
 
 /// Downloads the index and its signature, verifies them and stores them. Returns the number of packages.
-pub fn update(fs: &mut RamFs, f: &mut dyn Fetcher, keys: &[[u8; 32]], say: &mut dyn FnMut(&str), persist: &mut dyn FnMut(&str, &[u8])) -> Result<usize, String> {
+/// `floor` is the highest serial remembered elsewhere (the USB stick); the larger of it and the one in RAM must
+/// not be exceeded by an older list.
+pub fn update(
+    fs: &mut RamFs,
+    f: &mut dyn Fetcher,
+    keys: &[[u8; 32]],
+    floor: u64,
+    say: &mut dyn FnMut(&str),
+    persist: &mut dyn FnMut(&str, &[u8]),
+) -> Result<usize, String> {
     say("Get: index");
     let index = f.get("index", MAX_INDEX)?;
     let sig = f.get("index.sig", 1024)?;
-    // Nothing is stored unless the signature is valid: a bad index never replaces a good one.
-    let entries = pkg::parse_signed_index(keys, &index, &sig).map_err(|e| e.to_string())?;
+    // Nothing is stored unless the signature is valid and the list is not older than one already seen: a bad or
+    // replayed index never replaces a good one.
+    let (serial, entries) = pkg::parse_signed_index(keys, &index, &sig).map_err(|e| e.to_string())?;
+    pkg::check_serial(serial, stored_serial(fs).max(floor)).map_err(|e| e.to_string())?;
     write_file(fs, INDEX_PATH, &index)?;
     write_file(fs, SIG_PATH, &sig)?;
+    let serial_text = format!("{serial}\n");
+    write_file(fs, SERIAL_PATH, serial_text.as_bytes())?;
     persist("index", &index);
     persist("index.sig", &sig);
-    say(&format!("Signature OK. {} package(s) available.", entries.len()));
+    persist("serial", serial_text.as_bytes());
+    say(&format!("Signature OK (list serial {serial}). {} package(s) available.", entries.len()));
     Ok(entries.len())
 }
 
@@ -328,7 +349,7 @@ mod tests {
 
     fn updated() -> (RamFs, Fake) {
         let (mut fs, mut f) = (new_fs(), Fake::real());
-        run(|say, persist| update(&mut fs, &mut f, &[real_test_key()], say, persist)).0.unwrap();
+        run(|say, persist| update(&mut fs, &mut f, &[real_test_key()], 0, say, persist)).0.unwrap();
         (fs, f)
     }
 
@@ -341,10 +362,27 @@ mod tests {
     }
 
     #[test]
+    fn an_older_package_list_is_refused_but_the_same_or_newer_is_fine() {
+        // The fixture repository's index has serial 1.
+        let (mut fs, mut f) = updated();
+        assert_eq!(stored_serial(&fs), 1);
+        let (r, _, _) = run(|say, persist| update(&mut fs, &mut f, &[real_test_key()], 0, say, persist));
+        assert!(r.is_ok(), "the same list again is fine");
+        // The stick remembers a newer serial: the repository's list is now a rollback.
+        let (mut fresh, mut g) = (new_fs(), Fake::real());
+        let (r, _, saved) = run(|say, persist| update(&mut fresh, &mut g, &[real_test_key()], 5, say, persist));
+        assert!(r.unwrap_err().contains("OLDER package list"));
+        assert!(fresh.read(INDEX_PATH).is_none() && saved.is_empty(), "a refused list stores nothing");
+        // RAM remembers too.
+        write_file(&mut fresh, SERIAL_PATH, b"9\n").unwrap();
+        assert!(run(|say, persist| update(&mut fresh, &mut g, &[real_test_key()], 0, say, persist)).0.is_err());
+    }
+
+    #[test]
     fn a_tampered_or_unsigned_index_is_refused_and_changes_nothing() {
         let (mut fs, mut f) = (new_fs(), Fake::real());
         f.files.get_mut("index").unwrap()[40] ^= 1;
-        let (r, _, saved) = run(|say, persist| update(&mut fs, &mut f, &[real_test_key()], say, persist));
+        let (r, _, saved) = run(|say, persist| update(&mut fs, &mut f, &[real_test_key()], 0, say, persist));
         assert!(r.unwrap_err().contains("signature"));
         assert!(fs.read(INDEX_PATH).is_none() && saved.is_empty());
         // A good index already stored survives a later bad update.
@@ -352,12 +390,12 @@ mod tests {
         let mut bad = Fake::real();
         bad.files.get_mut("index.sig").unwrap()[3] = b'0';
         bad.files.get_mut("index.sig").unwrap()[4] = b'0';
-        assert!(run(|say, persist| update(&mut fs, &mut bad, &[real_test_key()], say, persist)).0.is_err());
+        assert!(run(|say, persist| update(&mut fs, &mut bad, &[real_test_key()], 0, say, persist)).0.is_err());
         assert_eq!(load_index(&fs, &[real_test_key()]).unwrap().len(), 3);
         let _ = &mut good;
         // Signed by someone else (the real repository key is not the test key).
         let (mut fs2, mut f2) = (new_fs(), Fake::real());
-        assert!(run(|say, persist| update(&mut fs2, &mut f2, &[[9; 32]], say, persist)).0.is_err());
+        assert!(run(|say, persist| update(&mut fs2, &mut f2, &[[9; 32]], 0, say, persist)).0.is_err());
     }
 
     #[test]

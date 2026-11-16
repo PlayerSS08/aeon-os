@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import tarfile
+import time
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -165,12 +166,14 @@ def cmd_build(a):
             lines.append(f"Description: {info['Description']}")
         stanzas.append("\n".join(lines))
         print(f"packed {info['Package']} {info['Version']}: {len(data)} bytes")
-    index = ("\n\n".join(stanzas) + "\n").encode("utf8")
+    # The serial grows with every published list; clients refuse an older one (rollback protection).
+    serial = a.serial if a.serial is not None else int(time.time())
+    index = ("\n\n".join([f"Serial: {serial}"] + stanzas) + "\n").encode("utf8")
     with open(os.path.join(a.out, "index"), "wb") as f:
         f.write(index)
     with open(os.path.join(a.out, "index.sig"), "w", encoding="ascii", newline="\n") as f:
         f.write(sk.sign(index).hex() + "\n")
-    print(f"index with {len(stanzas)} package(s) signed; public key {public_bytes(sk).hex()}")
+    print(f"index (serial {serial}) with {len(stanzas)} package(s) signed; public key {public_bytes(sk).hex()}")
 
 
 def cmd_serve(a):
@@ -196,6 +199,7 @@ def main():
     b.add_argument("out")
     b.add_argument("--key", default=DEFAULT_KEY)
     b.add_argument("--test-key", action="store_true")
+    b.add_argument("--serial", type=int, default=None, help="index serial (default: the current Unix time)")
     b.set_defaults(fn=cmd_build)
     s = sub.add_parser("serve")
     s.add_argument("dir")

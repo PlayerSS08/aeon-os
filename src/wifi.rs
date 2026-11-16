@@ -38,6 +38,24 @@ pub trait Radio {
     fn now_ms(&mut self) -> u64;
 }
 
+/// A name for a Wi-Fi chip by PCI id, for the `wifi` command. Only chips someone has met are listed; anything
+/// else is reported by its raw id.
+pub fn chip_name(vendor: u16, device: u16) -> Option<&'static str> {
+    Some(match (vendor, device) {
+        (0x10EC, 0xB520) => "Realtek RTL8852BE Wi-Fi 6",
+        (0x10EC, 0xC822) | (0x10EC, 0xC82F) => "Realtek RTL8822CE Wi-Fi 5",
+        (0x10EC, 0xB852) => "Realtek RTL8852BE (variant)",
+        (0x8086, 0x2723) => "Intel Wi-Fi 6 AX200",
+        (0x8086, 0x2725) => "Intel Wi-Fi 6E AX210",
+        (0x8086, 0x51F0) | (0x8086, 0x51F1) | (0x8086, 0x7A70) => "Intel Wi-Fi 6E AX211",
+        (0x8086, 0x06F0) | (0x8086, 0xA0F0) | (0x8086, 0x34F0) => "Intel Wi-Fi 6 AX201",
+        (0x14C3, 0x0608) | (0x14C3, 0x7961) => "MediaTek Wi-Fi",
+        (0x168C, _) => "Qualcomm Atheros Wi-Fi",
+        (0x14E4, _) => "Broadcom Wi-Fi",
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkState {
     Idle,
@@ -503,6 +521,13 @@ mod tests {
         let bss = found.iter().find(|b| b.ssid == b"AeonNet").cloned().expect("scan must find the AP");
         let r = st.connect(&bss, "Aeon-pass-1234", [0x31; 32]);
         (st, r)
+    }
+
+    #[test]
+    fn chip_names() {
+        assert_eq!(chip_name(0x10EC, 0xB520), Some("Realtek RTL8852BE Wi-Fi 6"));
+        assert_eq!(chip_name(0x8086, 0x2725), Some("Intel Wi-Fi 6E AX210"));
+        assert_eq!(chip_name(0x10EC, 0x8168), None, "the wired Realtek chip is not a Wi-Fi chip");
     }
 
     #[test]

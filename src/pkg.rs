@@ -28,6 +28,10 @@ pub enum PkgError {
     SizeMismatch,
     InfoMismatch,
     Conflict { path: String, owner: String },
+    /// The signed index carries no `Serial:` line.
+    NoSerial,
+    /// The repository offered an older package list than one already seen.
+    Rollback { offered: u64, seen: u64 },
 }
 
 impl core::fmt::Display for PkgError {
@@ -44,6 +48,8 @@ impl core::fmt::Display for PkgError {
             PkgError::SizeMismatch => write!(f, "the downloaded file has a different size than the index says"),
             PkgError::InfoMismatch => write!(f, "the package's own PKGINFO disagrees with the index"),
             PkgError::Conflict { path, owner } => write!(f, "'{path}' already belongs to package '{owner}'"),
+            PkgError::NoSerial => write!(f, "the package index has no Serial line (rebuild it with a current tools/aeon_repo.py)"),
+            PkgError::Rollback { offered, seen } => write!(f, "the repository offered an OLDER package list (serial {offered}, already seen {seen}): refusing, this could be a rollback attack"),
         }
     }
 }
@@ -101,10 +107,23 @@ pub fn hex(bytes: &[u8]) -> String {
 
 /// Parses an index: stanzas of `Key: value` lines separated by blank lines.
 pub fn parse_index(text: &str) -> Result<Vec<Entry>, PkgError> {
+    parse_index_full(text).map(|(_, entries)| entries)
+}
+
+/// Like `parse_index`, also returning the `Serial:` of the optional header stanza (`Serial: 7` on its own).
+pub fn parse_index_full(text: &str) -> Result<(Option<u64>, Vec<Entry>), PkgError> {
     let mut out: Vec<Entry> = Vec::new();
+    let mut serial = None;
     for stanza in text.split("\n\n") {
         let stanza = stanza.trim();
         if stanza.is_empty() {
+            continue;
+        }
+        if let Some(n) = stanza.strip_prefix("Serial:").filter(|r| !r.contains('\n')) {
+            if serial.is_some() {
+                return Err(PkgError::BadIndex("Serial given twice"));
+            }
+            serial = Some(n.trim().parse::<u64>().map_err(|_| PkgError::BadIndex("bad Serial"))?);
             continue;
         }
         let (mut name, mut version, mut depends, mut size, mut sha, mut file, mut desc) = (None, None, Vec::new(), None, None, None, String::new());
@@ -141,7 +160,7 @@ pub fn parse_index(text: &str) -> Result<Vec<Entry>, PkgError> {
             description: desc,
         });
     }
-    Ok(out)
+    Ok((serial, out))
 }
 
 /// Does `sig` (64 raw bytes, or 128 hex characters with optional whitespace) sign `msg` under one of `keys`?
@@ -165,12 +184,20 @@ pub fn verify_signature(keys: &[[u8; 32]], msg: &[u8], sig: &[u8]) -> bool {
     keys.iter().any(|k| ed25519::verify(k, msg, &raw))
 }
 
-/// Parses the index only if its signature is valid.
-pub fn parse_signed_index(keys: &[[u8; 32]], index: &[u8], sig: &[u8]) -> Result<Vec<Entry>, PkgError> {
+/// Parses the index only if its signature is valid. Returns its serial (which grows with every new index the
+/// repository publishes) and the packages.
+pub fn parse_signed_index(keys: &[[u8; 32]], index: &[u8], sig: &[u8]) -> Result<(u64, Vec<Entry>), PkgError> {
     if !verify_signature(keys, index, sig) {
         return Err(PkgError::BadSignature);
     }
-    parse_index(core::str::from_utf8(index).map_err(|_| PkgError::BadIndex("not text"))?)
+    let (serial, entries) = parse_index_full(core::str::from_utf8(index).map_err(|_| PkgError::BadIndex("not text"))?)?;
+    Ok((serial.ok_or(PkgError::NoSerial)?, entries))
+}
+
+/// Refuses an index older than the newest one seen before (`floor`, 0 if none). The same serial is fine: it is
+/// the same list again. This blunts replay of an old, validly signed list that hides newer package versions.
+pub fn check_serial(offered: u64, floor: u64) -> Result<(), PkgError> {
+    if offered < floor { Err(PkgError::Rollback { offered, seen: floor }) } else { Ok(()) }
 }
 
 /// Checks a downloaded package file against its index entry.
@@ -572,6 +599,20 @@ mod tests {
         assert!(!verify_signature(&[pk], &[0x72], b"nothex"));
         assert!(!verify_signature(&[pk], &[0x72], &raw[..63]));
         assert_eq!(parse_signed_index(&[pk], b"Package: x\n", &raw), Err(PkgError::BadSignature));
+        // A correctly signed index without a serial is refused (nothing signed for the test key here, so only the
+        // parsing rules are checked): the header stanza must be a lone `Serial:` line.
+        assert_eq!(parse_index_full("Serial: 12\n\nPackage: a\nVersion: 1\nSize: 1\nSHA256: 0000000000000000000000000000000000000000000000000000000000000001\nFilename: a\n").unwrap().0, Some(12));
+        assert_eq!(parse_index_full(INDEX).unwrap().0, None);
+        assert!(parse_index_full("Serial: x\n\n").is_err());
+        assert!(parse_index_full("Serial: 1\n\nSerial: 2\n").is_err());
+    }
+
+    #[test]
+    fn rollback_check() {
+        assert_eq!(check_serial(5, 5), Ok(()));
+        assert_eq!(check_serial(6, 5), Ok(()));
+        assert_eq!(check_serial(0, 0), Ok(()));
+        assert_eq!(check_serial(4, 5), Err(PkgError::Rollback { offered: 4, seen: 5 }));
     }
 
     #[test]
