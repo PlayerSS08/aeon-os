@@ -8,7 +8,7 @@
 ** Written by VirtualBox 7.2.22 (r175245)
 -->
 <VirtualBox xmlns="http://www.virtualbox.org/" version="1.19-windows">
-  <Machine uuid="{628c6af2-ef91-445d-a4f7-12d164895b8c}" name="Aeon-VM" OSType="Other_64" snapshotFolder="Snapshots" lastStateChange="2026-11-16T06:01:23Z">
+  <Machine uuid="{628c6af2-ef91-445d-a4f7-12d164895b8c}" name="Aeon-VM" OSType="Other_64" snapshotFolder="Snapshots" lastStateChange="2026-11-16T08:45:36Z">
     <MediaRegistry>
       <HardDisks>
         <HardDisk uuid="{3505efa3-ce2e-4b9c-8047-3fa6ff599e82}" location="Aeon-Boot.vdi" format="VDI" type="Normal"/>
@@ -18,8 +18,7 @@
     <ExtraData>
       <ExtraDataItem name="GUI/LastCloseAction" value="PowerOff"/>
       <ExtraDataItem name="GUI/LastNormalWindowPosition" value="0,23,1536,889,max"/>
-      <ExtraDataItem name="GUI/LastScaleWindowPosition" value="448,216,640,480"/>
-      <ExtraDataItem name="GUI/Scale" value="true"/>
+      <ExtraDataItem name="GUI/LastScaleWindowPosition" value="448,216,640,480,max"/>
       <ExtraDataItem name="GUI/ScaleFactor" value="1"/>
       <ExtraDataItem name="VBoxInternal/CPUM/MtrrVarCountIsVirtual" value="0"/>
       <ExtraDataItem name="VBoxInternal2/EfiGraphicsResolution" value="1024x768"/>
@@ -36,8 +35,7 @@
       <Firmware type="EFI64"/>
       <BIOS>
         <IOAPIC enabled="true"/>
-        <Logo fadeIn="false" fadeOut="false" displayTime="0"/>
-        <BootMenu mode="Disabled"/>
+        <Logo fadeIn="false" fadeOut="false" displayTime="1000"/>
         <SmbiosUuidLittleEndian enabled="true"/>
         <AutoSerialNumGen enabled="true"/>
       </BIOS>
@@ -52,7 +50,7 @@
       <AudioAdapter useDefault="true" driver="WAS"/>
       <Clipboard/>
       <GuestProperties>
-        <GuestProperty name="/VirtualBox/HostInfo/GUI/LanguageID" value="en_US" timestamp="1794808403438931300" flags="RDONLYGUEST"/>
+        <GuestProperty name="/VirtualBox/HostInfo/GUI/LanguageID" value="en_US" timestamp="1794818978359847600" flags=""/>
       </GuestProperties>
       <StorageControllers>
         <StorageController name="SATA" type="AHCI" PortCount="30" useHostIOCache="false" Bootable="true" IDE0MasterEmulationPort="0" IDE0SlaveEmulationPort="1" IDE1MasterEmulationPort="2" IDE1SlaveEmulationPort="3">

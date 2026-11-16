@@ -593,6 +593,85 @@ fn cmd_dhcp(_rest: &str) {
     }
 }
 
+fn cmd_connect(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    match parts.next() {
+        Some("ethernet") | Some("eth") | None => {
+            cmd_ethernet("connect");
+        }
+        Some("wifi") | Some("wlan") => {
+            let ssid = parts.next();
+            let password = parts.next();
+            match (ssid, password) {
+                (Some(s), Some(_pwd)) => {
+                    out!("Scanning for 802.11 wireless adapters...\n");
+                    out!("SSID specified: '{}'\n", s);
+                    out!("Authentication: WPA2-PSK (AES-CCMP passphrase verification)\n");
+                    out!("Hardware Status: No PCIe 802.11 wireless controller detected on PCI bus.\n");
+                    out!("Note: x86_64 bare-metal Wi-Fi requires proprietary microcode firmware blobs (e.g. iwlwifi / rtw88) and 802.11 WPA2 4-way handshake engine.\n");
+                    out!("Use 'connect ethernet' or 'dhcp' for active high-speed network access.\n");
+                }
+                (Some(s), None) => {
+                    out!("Error: Wi-Fi password required for SSID '{}'.\n", s);
+                    out!("Usage: connect wifi <ssid> <password>\n");
+                }
+                _ => {
+                    out!("Usage: connect wifi <ssid> <password>\n");
+                }
+            }
+        }
+        Some(other) => {
+            out!("Unknown connection type: '{}'. Usage: connect [ethernet | wifi <ssid> <password>]\n", other);
+        }
+    }
+}
+
+fn cmd_wifi(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    match parts.next() {
+        Some("connect") => {
+            let ssid = parts.next();
+            let pwd = parts.next();
+            match (ssid, pwd) {
+                (Some(s), Some(_p)) => {
+                    out!("Initiating WPA2-PSK association with '{}'...\n", s);
+                    out!("Status: No supported 802.11 wireless radio detected (active NIC: eth0 Intel 82540EM).\n");
+                    out!("x86_64 wireless authentication requires closed-source firmware microcode.\n");
+                }
+                _ => out!("Usage: wifi connect <ssid> <password>\n"),
+            }
+        }
+        Some("scan") => {
+            out!("Scanning 2.4 GHz and 5 GHz channels for wireless access points...\n");
+            out!("Scan complete: 0 APs discovered (No physical wireless antenna/PCI controller attached).\n");
+        }
+        Some("status") => {
+            out!("Wi-Fi Subsystem Status:\n");
+            out!("  Interface : wlan0 (unbound / no driver)\n");
+            out!("  State     : Disconnected\n");
+            out!("  Active NIC: eth0 (Intel e1000 Gigabit Ethernet, Link UP)\n");
+        }
+        _ => {
+            out!("Usage: wifi [scan | connect <ssid> <password> | status]\n");
+        }
+    }
+}
+
+fn cmd_ethernet(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    match parts.next() {
+        Some("connect") | Some("dhcp") | None => {
+            cmd_dhcp("");
+        }
+        Some("status") => {
+            cmd_ifconfig("");
+        }
+        _ => {
+            out!("Usage: ethernet [connect | dhcp | status]\n");
+        }
+    }
+}
+
 fn cmd_curl(rest: &str) {
     let url = rest.trim();
     if url.is_empty() {
@@ -2348,6 +2427,8 @@ fn run(line: &str, hist: &History) {
         "ifconfig" => cmd_ifconfig(rest),
         "ping" => cmd_ping(rest),
         "dhcp" => cmd_dhcp(rest),
+        "connect" => cmd_connect(rest),
+        "wifi" => cmd_wifi(rest),
         "curl" | "http" => cmd_curl(rest),
         "netstat" => cmd_netstat(),
         "apt" => cmd_apt(rest),

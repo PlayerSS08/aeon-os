@@ -256,7 +256,7 @@ def main():
         'bootx64_efi': bootx64,
         'sha256_txt': sha,
         'cert': cert,
-        'aeon_cfg': b"# Aeon Boot Configuration\nmode=1024x768\ntimeout=1\n"
+        'aeon_cfg': b"# Aeon Boot Configuration\nmode=1024x768\ntimeout=5\n"
     }
 
     boot_raw = os.path.join(vm_dir, "Aeon-Boot.raw")

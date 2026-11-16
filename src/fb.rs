@@ -541,15 +541,16 @@ impl Console {
             self.splash = false;
             let bg = self.px(BG);
             self.fill_rect(0, 0, self.width, self.height, bg);
-            let cx = self.width / 2;
-            let cy = self.height / 12;
-            self.draw_segarc_ring_at(cx, cy, 0, 1, 255);
+            let ws = self.scale;
+            let tracking = 6 * ws;
+            let w = gfont::text_width(&gfont::WORDMARK, "AEON") * ws + 3 * tracking;
+            let x = self.width.saturating_sub(w) / 2;
+            self.draw_text(&gfont::WORDMARK, x, self.height / 14, (255, 255, 255), BG, "AEON", ws, tracking);
         }
         let (face, sc) = if self.width >= 1600 { (&gfont::SANS_24, if self.width >= 3000 { 2 } else { 1 }) } else { (&gfont::SANS_16, 1) };
         let item_h = (face.height as usize + 12) * sc;
-        let r_out = 30 * self.scale;
-        let cy = self.height / 12;
-        let list_top = cy + r_out + 28 * sc;
+        let ws = self.scale;
+        let list_top = self.height / 14 + gfont::WORDMARK.height as usize * ws + 36 * sc;
         let panel_w = (self.width / 3).clamp(300 * sc, 700 * sc).min(self.width);
         let panel_x = (self.width - panel_w) / 2;
         let list_h = entries.len() * item_h;

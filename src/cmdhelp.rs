@@ -40,6 +40,8 @@ pub const COMMANDS: &[Cmd] = &[
     c("network", "ifconfig", "ifconfig [if] [ip]", "display or configure network interfaces"),
     c("network", "ping", "ping <ip> [-c N]", "send ICMP Echo Requests and measure latency"),
     c("network", "dhcp", "dhcp [renew|status]", "auto-configure IP, gateway, and DNS"),
+    c("network", "connect", "connect [eth|wifi]", "connect to Ethernet or Wi-Fi"),
+    c("network", "wifi", "wifi [scan|connect]", "Wi-Fi wireless networking"),
     c("network", "curl", "curl <url>", "transfer data over HTTP/TCP"),
     c("network", "http", "http <url>", "same as `curl`"),
     c("network", "netstat", "netstat", "interfaces, routes, ARP cache, sockets"),
