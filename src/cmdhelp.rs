@@ -43,7 +43,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("network", "dhcp", "dhcp [renew|status]", "auto-configure IP, gateway, and DNS"),
     c("network", "connect", "connect [eth|wifi]", "connect to Ethernet or Wi-Fi"),
     c("network", "wifi", "wifi [scan|connect]", "Wi-Fi wireless networking"),
-    c("network", "curl", "curl <url>", "transfer data over HTTP/TCP"),
+    c("network", "curl", "curl <url> [-o file]", "download over http (names work; no https)"),
     c("network", "http", "http <url>", "same as `curl`"),
     c("network", "netstat", "netstat", "interfaces, routes, ARP cache, sockets"),
     c("packaging", "apt", "apt <cmd> [pkg]", "Debian package manager for .deb packages"),
@@ -73,6 +73,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("files", "rmdir", "rmdir <folder>", "delete an empty folder"),
     c("files", "df", "df", "space used by the RAM files"),
     c("files", "cat", "cat <file>", "print a file"),
+    c("files", "sha256sum", "sha256sum <file>...", "SHA-256 of files, to check downloads"),
     c("files", "write", "write [-f] <f> <t>", "create a file (-f replaces; \\n = new line)"),
     c("files", "append", "append <file> <text>", "add a line to the end of a file"),
     c("files", "edit", "edit <file>", "type many lines, end with a line holding only ."),
@@ -213,7 +214,8 @@ mod tests {
         assert_eq!(common_prefix("dc"), "dcat");
         assert_eq!(common_prefix("hel"), "help");
         assert_eq!(common_prefix("he"), "he"); // help head hexdump
-        assert_eq!(common_prefix("sh"), "shutdown");
+        assert_eq!(common_prefix("sh"), "sh"); // sha256sum shutdown
+        assert_eq!(common_prefix("shu"), "shutdown");
         assert_eq!(common_prefix("mem"), "mem"); // mem and memmap
         assert_eq!(common_prefix("zz"), "");
         assert_eq!(common_prefix("").len(), 0, "everything matches, nothing in common");

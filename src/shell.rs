@@ -692,40 +692,91 @@ fn cmd_ethernet(rest: &str) {
     }
 }
 
+/// Saves `data` to `name`: on the AEON USB volume for `/usb/...` paths (read-only volumes and `EFI/` are refused),
+/// otherwise in the RAM filesystem. Returns a short description of where it went.
+fn save_bytes(name: &str, data: &[u8]) -> Result<String, String> {
+    let p = path_arg(name).ok_or_else(|| alloc::format!("bad path '{name}'"))?;
+    if usbfs::is_usb(&p) {
+        let rel = usbfs::rel_path(&p);
+        if rel.is_empty() {
+            return Err(String::from("cannot write to the volume root as a file"));
+        }
+        usbfs::check_write_safety(rel).map_err(|why| alloc::format!("cannot write '{name}': {why}"))?;
+        usbfs::hw_write(rel, data, true).map_err(|why| alloc::format!("cannot write '{name}': {why}"))?;
+        return Ok(alloc::format!("{name} (on the USB stick)"));
+    }
+    fs().write(&p, data).map_err(|e| alloc::format!("cannot write '{name}': {e:?}"))?;
+    Ok(alloc::format!("{name} (RAM filesystem, gone at power off)"))
+}
+
+/// Largest download `curl` keeps in memory. The heap is 32 MiB; this leaves room for everything else.
+const MAX_DOWNLOAD: usize = 12 * 1024 * 1024;
+
 fn cmd_curl(rest: &str) {
-    let url = rest.trim();
-    if url.is_empty() {
-        out!("usage: curl <url>\n");
+    let mut url = None;
+    let mut output = None;
+    let mut it = rest.split_whitespace();
+    while let Some(t) = it.next() {
+        match t {
+            "-o" | "-O" => output = it.next(),
+            _ => url = Some(t),
+        }
+    }
+    let Some(url) = url else {
+        out!("usage: curl <http://host[:port]/path> [-o <file>]
+  names are resolved with DNS; https:// is not supported yet (no TLS)
+");
+        return;
+    };
+    if !crate::netdev::link_up() {
+        out!("curl: no network link (a cable is needed: the Wi-Fi chip has no driver yet; `ifconfig` shows what is up)
+");
         return;
     }
-    let clean = url.trim_start_matches("http://");
-    let (host_port, path) = clean.split_once('/').map_or((clean, "/"), |(hp, p)| (hp, alloc::format!("/{p}").leak() as &str));
-    let (host, port) = host_port.split_once(':').map_or((host_port, 80u16), |(h, p)| (h, p.parse::<u16>().unwrap_or(80)));
-
-    let target_ip = match crate::netstack::Ipv4Addr::parse(host) {
-        Some(ip) => ip,
-        None if host == "localhost" => crate::netstack::Ipv4Addr::LOOPBACK,
-        None if host == "gateway" => {
-            let (_, _, gw, _, _) = crate::netstack::get_config();
-            gw
-        }
-        None => {
-            out!("curl: could not resolve host '{}'\n", host);
-            return;
+    out!("* Fetching {}
+", url);
+    let mut shown = 0usize;
+    let mut progress = |got: usize, total: Option<usize>| {
+        if got >= shown + 64 * 1024 {
+            shown = got;
+            match total {
+                Some(t) => out!("  {} of {} KiB
+", got / 1024, t / 1024),
+                None => out!("  {} KiB
+", got / 1024),
+            }
         }
     };
-
-    out!("* Connecting to {} ({}) port {}...\n", host, target_ip, port);
-    match crate::netstack::http_get(target_ip, port, path) {
+    match crate::netstack::http_fetch(url, MAX_DOWNLOAD, &mut progress) {
         Ok(resp) => {
-            out!("* HTTP status: {}\n", resp.status);
-            out!("{}\n", resp.headers);
-            let body = String::from_utf8_lossy(&resp.body);
-            out!("{}\n", body);
+            out!("* HTTP status {}, {} byte(s)
+{}", resp.status, resp.body.len(), resp.headers);
+            match output {
+                Some(file) => match save_bytes(file, &resp.body) {
+                    Ok(where_) => out!("saved to {}
+", where_),
+                    Err(e) => out!("curl: {}
+", e),
+                },
+                None => {
+                    // Text goes to the screen; anything else is summarised so it cannot flood the console.
+                    let shown_bytes = &resp.body[..resp.body.len().min(4096)];
+                    if shown_bytes.iter().all(|&b| matches!(b, b'\n' | b'\r' | b'\t' | 32..=126)) {
+                        out!("{}
+", String::from_utf8_lossy(shown_bytes));
+                        if resp.body.len() > 4096 {
+                            out!("... ({} more byte(s); use -o <file> to keep the whole body)
+", resp.body.len() - 4096);
+                        }
+                    } else {
+                        out!("(binary data; use -o <file> to save it)
+");
+                    }
+                }
+            }
         }
-        Err(e) => {
-            out!("curl: (7) Failed to connect to {} port {}: {}\n", host, port, e);
-        }
+        Err(e) => out!("curl: {}
+", e),
     }
 }
 
@@ -1563,6 +1614,34 @@ fn cmd_df() {
     out!("\n");
     if let Some(info) = crate::xhci::disk_info() {
         out!("usb: /usb  {} MiB  ({} sectors)\n", info.sectors / 2048, info.sectors);
+    }
+}
+
+/// `sha256sum <file>...`: the SHA-256 of each file (RAM filesystem or the USB stick), for checking downloads.
+fn cmd_sha256sum(args: &str) {
+    if args.trim().is_empty() {
+        out!("usage: sha256sum <file>...
+");
+        return;
+    }
+    for name in args.split_whitespace() {
+        let Some(p) = path_arg(name) else { continue };
+        let data: Option<alloc::vec::Vec<u8>> = if usbfs::is_usb(&p) {
+            usbfs::hw_read(usbfs::rel_path(&p), 16 * 1024 * 1024).ok()
+        } else {
+            fs().read(&p).map(<[u8]>::to_vec)
+        };
+        match data {
+            Some(d) => {
+                let digest = crate::sha256::digest(&d);
+                let mut hex = [0u8; 64];
+                crate::sha256::fmt_hex(&digest, &mut hex);
+                out!("{}  {}
+", core::str::from_utf8(&hex).unwrap_or("?"), name);
+            }
+            None => out!("sha256sum: {}: no such file
+", name),
+        }
     }
 }
 
@@ -2688,6 +2767,7 @@ fn run(line: &str, hist: &History) {
         "rmdir" => cmd_rmdir(rest),
         "df" => cmd_df(),
         "cat" => cmd_cat(rest),
+        "sha256sum" => cmd_sha256sum(rest),
         "write" => cmd_write(rest),
         "append" => cmd_append(rest),
         // `edit <file>` is handled in the shell loop (it needs to keep state between lines).

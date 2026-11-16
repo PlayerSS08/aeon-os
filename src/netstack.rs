@@ -325,18 +325,20 @@ pub fn resolve_mac(target_ip: Ipv4Addr) -> Option<MacAddr> {
         return Some(mac);
     }
 
-    let _ = send_arp_request(target_ip);
-    let t0 = rdtsc();
-    let timeout = tsc_hz() / 10; // 100ms
-    loop {
-        poll();
-        if let Some(mac) = arp_lookup(target_ip) {
-            return Some(mac);
+    for _ in 0..3 {
+        let _ = send_arp_request(target_ip);
+        let t0 = rdtsc();
+        let timeout = tsc_hz() / 5; // 200 ms per try
+        loop {
+            poll();
+            if let Some(mac) = arp_lookup(target_ip) {
+                return Some(mac);
+            }
+            if rdtsc().wrapping_sub(t0) > timeout {
+                break;
+            }
+            pause();
         }
-        if rdtsc().wrapping_sub(t0) > timeout {
-            break;
-        }
-        pause();
     }
     None
 }
@@ -610,7 +612,9 @@ pub fn run_dhcp(timeout_ms: u64) -> Result<(Ipv4Addr, Ipv4Addr, Ipv4Addr, Ipv4Ad
     };
 
     set_config(ip, mask, gw, dns, true);
-    arp_update(gw, MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x02]));
+    dns_flush();
+    // The gateway's MAC is learned with ARP on the first packet that needs it (it used to be hard-coded to
+    // QEMU's gateway address, which is wrong on every real network).
     Ok((ip, mask, gw, dns))
 }
 
@@ -706,6 +710,13 @@ fn handle_udp(src_ip: Ipv4Addr, payload: &[u8]) {
         // Incoming DHCP packet
         handle_dhcp(src_ip, data);
     }
+    if src_port == 53 {
+        if let Some(w) = DNS_WAIT.lock().as_mut() {
+            if w.port == dst_port && w.reply.is_none() {
+                w.reply = Some(data.to_vec());
+            }
+        }
+    }
 }
 
 fn handle_dhcp(server_ip: Ipv4Addr, data: &[u8]) {
@@ -764,20 +775,41 @@ fn handle_dhcp(server_ip: Ipv4Addr, data: &[u8]) {
 }
 
 // -----------------------------------------------------------------------------
-// TCP Client & HTTP
+// TCP, DNS and HTTP. The protocol rules live in `tcp`, `dns` and `http` (pure, host-tested); this part
+// moves their segments and messages through the IP layer.
 // -----------------------------------------------------------------------------
 
-struct TcpConn {
-    local_port: u16,
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use crate::tcp::{self, Tcp};
+use crate::{dns, http};
+
+struct Conn {
+    tcp: Tcp,
     remote_ip: Ipv4Addr,
     remote_port: u16,
-    local_seq: u32,
-    remote_seq: u32,
-    state: u8, // 0 = closed, 1 = syn_sent, 2 = established, 3 = fin_wait
-    rx_buf: alloc::vec::Vec<u8>,
+    local_port: u16,
 }
 
-static TCP_CONN: SpinLock<Option<TcpConn>> = SpinLock::new(None);
+static TCP_CONN: SpinLock<Option<Conn>> = SpinLock::new(None);
+static RAND_COUNTER: SpinLock<u32> = SpinLock::new(0);
+
+/// A hard-to-guess 32-bit value for initial sequence numbers, ports and DNS ids: a hash of the clock, a counter
+/// and our MAC. Good enough to make blind spoofing of a client connection impractical; not a CSPRNG.
+fn random_u32() -> u32 {
+    let n = {
+        let mut c = RAND_COUNTER.lock();
+        *c = c.wrapping_add(1);
+        *c
+    };
+    let mut seed = [0u8; 18];
+    seed[..8].copy_from_slice(&uptime_us().to_le_bytes());
+    seed[8..12].copy_from_slice(&n.to_le_bytes());
+    seed[12..].copy_from_slice(&netdev::mac_address());
+    let d = crate::sha256::digest(&seed);
+    u32::from_le_bytes([d[0], d[1], d[2], d[3]])
+}
 
 fn tcp_checksum(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, tcp_segment: &[u8]) -> u16 {
     let mut pseudo = alloc::vec![0u8; 12 + tcp_segment.len()];
@@ -790,187 +822,297 @@ fn tcp_checksum(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, tcp_segment: &[u8]) -> u16 {
     internet_checksum(&pseudo)
 }
 
-fn send_tcp_segment(
-    dst_ip: Ipv4Addr,
-    src_port: u16,
-    dst_port: u16,
-    seq: u32,
-    ack: u32,
-    flags: u16,
-    payload: &[u8],
-) -> Result<(), netdev::NetError> {
+/// Builds and sends one TCP segment produced by the state machine.
+fn send_out(dst_ip: Ipv4Addr, local_port: u16, remote_port: u16, o: &tcp::Out) -> Result<(), netdev::NetError> {
     let (my_ip, _, _, _, _) = get_config();
-    let total_len = 20 + payload.len();
-    let mut seg = alloc::vec![0u8; total_len];
-
-    seg[0..2].copy_from_slice(&src_port.to_be_bytes());
-    seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
-    seg[4..8].copy_from_slice(&seq.to_be_bytes());
-    seg[8..12].copy_from_slice(&ack.to_be_bytes());
-    let offset_and_flags = (5u16 << 12) | (flags & 0x01FF);
-    seg[12..14].copy_from_slice(&offset_and_flags.to_be_bytes());
-    seg[14..16].copy_from_slice(&64240u16.to_be_bytes()); // Window size
-    seg[16..18].copy_from_slice(&0u16.to_be_bytes()); // Checksum
-    seg[18..20].copy_from_slice(&0u16.to_be_bytes()); // Urgent pointer
-    seg[20..].copy_from_slice(payload);
-
+    let hdr = if o.mss_option { 24 } else { 20 };
+    let mut seg = alloc::vec![0u8; hdr + o.payload.len()];
+    seg[0..2].copy_from_slice(&local_port.to_be_bytes());
+    seg[2..4].copy_from_slice(&remote_port.to_be_bytes());
+    seg[4..8].copy_from_slice(&o.seq.to_be_bytes());
+    seg[8..12].copy_from_slice(&o.ack.to_be_bytes());
+    seg[12..14].copy_from_slice(&((((hdr / 4) as u16) << 12) | (o.flags & 0x01FF)).to_be_bytes());
+    seg[14..16].copy_from_slice(&o.window.to_be_bytes());
+    if o.mss_option {
+        seg[20..24].copy_from_slice(&[2, 4, (tcp::MSS >> 8) as u8, tcp::MSS as u8]);
+    }
+    seg[hdr..].copy_from_slice(&o.payload);
     let csum = tcp_checksum(my_ip, dst_ip, &seg);
     seg[16..18].copy_from_slice(&csum.to_be_bytes());
-
     send_ipv4_packet(dst_ip, IPPROTO_TCP, &seg)
 }
 
-fn handle_tcp(src_ip: Ipv4Addr, payload: &[u8]) {
-    if payload.len() < 20 {
-        return;
-    }
-    let src_port = u16::from_be_bytes([payload[0], payload[1]]);
-    let dst_port = u16::from_be_bytes([payload[2], payload[3]]);
-    let seq = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-    let ack = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
-    let offset = ((payload[12] >> 4) as usize) * 4;
-    let flags = u16::from_be_bytes([payload[12] & 0x01, payload[13]]);
-
-    let mut conn = TCP_CONN.lock();
-    let c = match conn.as_mut() {
-        Some(c) if c.remote_ip == src_ip && c.remote_port == src_port && c.local_port == dst_port => c,
-        _ => return,
-    };
-
-    if c.state == 1 && (flags & TCP_SYN != 0) && (flags & TCP_ACK != 0) {
-        // SYN-ACK received -> send ACK
-        c.remote_seq = seq.wrapping_add(1);
-        c.local_seq = ack;
-        c.state = 2; // ESTABLISHED
-        let _ = send_tcp_segment(src_ip, c.local_port, c.remote_port, c.local_seq, c.remote_seq, TCP_ACK, &[]);
-    } else if c.state == 2 {
-        let data_len = payload.len().saturating_sub(offset);
-        if data_len > 0 {
-            c.rx_buf.extend_from_slice(&payload[offset..]);
-            c.remote_seq = c.remote_seq.wrapping_add(data_len as u32);
-            let _ = send_tcp_segment(src_ip, c.local_port, c.remote_port, c.local_seq, c.remote_seq, TCP_ACK, &[]);
-        }
-        if flags & TCP_FIN != 0 {
-            c.remote_seq = c.remote_seq.wrapping_add(1);
-            let _ = send_tcp_segment(src_ip, c.local_port, c.remote_port, c.local_seq, c.remote_seq, TCP_ACK | TCP_FIN, &[]);
-            c.state = 0; // CLOSED
-        }
+fn send_all(dst_ip: Ipv4Addr, local_port: u16, remote_port: u16, outs: &[tcp::Out]) {
+    for o in outs {
+        let _ = send_out(dst_ip, local_port, remote_port, o);
     }
 }
 
-pub struct HttpResponse {
-    pub status: u16,
-    pub headers: alloc::string::String,
-    pub body: alloc::vec::Vec<u8>,
-}
-
-pub fn http_get(target: Ipv4Addr, port: u16, path: &str) -> Result<HttpResponse, &'static str> {
-    let local_port = 49152 + ((uptime_us() % 16384) as u16);
-    let initial_seq = 0x1000_2000;
-
-    *TCP_CONN.lock() = Some(TcpConn {
-        local_port,
-        remote_ip: target,
-        remote_port: port,
-        local_seq: initial_seq,
-        remote_seq: 0,
-        state: 1, // SYN_SENT
-        rx_buf: alloc::vec::Vec::new(),
-    });
-
-    // Send SYN
-    send_tcp_segment(target, local_port, port, initial_seq, 0, TCP_SYN, &[])
-        .map_err(|_| "failed to send TCP SYN")?;
-
-    // Wait for ESTABLISHED
-    let t0 = uptime_us();
-    let mut ok = false;
-    while uptime_us() < t0 + 3_000_000 {
-        poll();
-        let conn = TCP_CONN.lock();
-        if let Some(c) = conn.as_ref() {
-            if c.state == 2 {
-                ok = true;
-                break;
+/// Parses a received TCP segment (header, options, checksum). `None` if it is malformed or its checksum is wrong.
+pub fn parse_tcp_segment<'a>(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, p: &'a [u8]) -> Option<(u16, u16, tcp::Seg<'a>)> {
+    if p.len() < 20 {
+        return None;
+    }
+    let offset = usize::from(p[12] >> 4) * 4;
+    if offset < 20 || offset > p.len() {
+        return None;
+    }
+    if tcp_checksum(src_ip, dst_ip, p) != 0 {
+        return None;
+    }
+    let mut mss = None;
+    let mut o = &p[20..offset];
+    while let Some(&kind) = o.first() {
+        match kind {
+            0 => break,
+            1 => o = &o[1..],
+            _ => {
+                let len = usize::from(*o.get(1)?);
+                if len < 2 || len > o.len() {
+                    return None;
+                }
+                if kind == 2 && len == 4 {
+                    mss = Some(u16::from_be_bytes([o[2], o[3]]));
+                }
+                o = &o[len..];
             }
         }
-        pause();
     }
+    Some((
+        u16::from_be_bytes([p[0], p[1]]),
+        u16::from_be_bytes([p[2], p[3]]),
+        tcp::Seg {
+            seq: u32::from_be_bytes([p[4], p[5], p[6], p[7]]),
+            ack: u32::from_be_bytes([p[8], p[9], p[10], p[11]]),
+            flags: u16::from_be_bytes([p[12] & 0x01, p[13]]),
+            window: u16::from_be_bytes([p[14], p[15]]),
+            mss,
+            payload: &p[offset..],
+        },
+    ))
+}
 
-    if !ok {
-        *TCP_CONN.lock() = None;
-        return Err("connection refused or timed out");
-    }
-
-    // Send HTTP GET request
-    let req = alloc::format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: aeon-os/1.0\r\nConnection: close\r\n\r\n",
-        path,
-        target
-    );
-
-    let (l_seq, r_seq) = {
-        let conn = TCP_CONN.lock();
-        let c = conn.as_ref().unwrap();
-        (c.local_seq, c.remote_seq)
+fn handle_tcp(src_ip: Ipv4Addr, payload: &[u8]) {
+    let (my_ip, _, _, _, _) = get_config();
+    let Some((sp, dp, seg)) = parse_tcp_segment(src_ip, my_ip, payload) else { return };
+    let now = uptime_us();
+    // Decide what to send while holding the lock, send after releasing it: sending may resolve an ARP entry,
+    // which polls the network and would come back here.
+    let (outs, ip, lp, rp) = {
+        let mut guard = TCP_CONN.lock();
+        let Some(c) = guard.as_mut() else { return };
+        if c.remote_ip != src_ip || c.remote_port != sp || c.local_port != dp {
+            return;
+        }
+        (c.tcp.on_segment(&seg, now), c.remote_ip, c.local_port, c.remote_port)
     };
+    send_all(ip, lp, rp, &outs);
+}
 
-    send_tcp_segment(target, local_port, port, l_seq, r_seq, TCP_ACK | TCP_PSH, req.as_bytes())
-        .map_err(|_| "failed to send HTTP request")?;
+/// Runs the retransmission timer of the open connection.
+fn tcp_tick() {
+    let now = uptime_us();
+    let (outs, ip, lp, rp) = {
+        let mut guard = TCP_CONN.lock();
+        let Some(c) = guard.as_mut() else { return };
+        (c.tcp.on_tick(now), c.remote_ip, c.local_port, c.remote_port)
+    };
+    send_all(ip, lp, rp, &outs);
+}
 
-    // Wait for data and connection close
-    let t1 = uptime_us();
-    while uptime_us() < t1 + 5_000_000 {
-        poll();
-        let conn = TCP_CONN.lock();
-        if let Some(c) = conn.as_ref() {
-            if c.state == 0 || !c.rx_buf.is_empty() {
-                // Check if full HTTP response received
-                if c.rx_buf.windows(4).any(|w| w == b"\r\n\r\n") {
+// --- DNS ---------------------------------------------------------------------------------------------------
+
+struct DnsWait {
+    port: u16,
+    reply: Option<Vec<u8>>,
+}
+
+static DNS_WAIT: SpinLock<Option<DnsWait>> = SpinLock::new(None);
+const DNS_CACHE_SIZE: usize = 8;
+static DNS_CACHE: SpinLock<Vec<(String, Ipv4Addr)>> = SpinLock::new(Vec::new());
+
+fn dns_cache_put(name: &str, ip: Ipv4Addr) {
+    let mut c = DNS_CACHE.lock();
+    c.retain(|(n, _)| n != name);
+    if c.len() == DNS_CACHE_SIZE {
+        c.remove(0);
+    }
+    c.push((name.to_string(), ip));
+}
+
+/// Forgets cached names (after the network configuration changed).
+pub fn dns_flush() {
+    DNS_CACHE.lock().clear();
+}
+
+/// Turns a host name into an IPv4 address: literal addresses and `localhost` directly, everything else through
+/// the DNS server the DHCP lease gave us (three tries).
+pub fn dns_resolve(name: &str) -> Result<Ipv4Addr, String> {
+    if let Some(ip) = Ipv4Addr::parse(name) {
+        return Ok(ip);
+    }
+    if name == "localhost" {
+        return Ok(Ipv4Addr::LOOPBACK);
+    }
+    let lower = name.to_ascii_lowercase();
+    if let Some((_, ip)) = DNS_CACHE.lock().iter().find(|(n, _)| *n == lower) {
+        return Ok(*ip);
+    }
+    let (_, _, _, server, _) = get_config();
+    if server == Ipv4Addr::ANY {
+        return Err("no DNS server configured (run `dhcp` first)".to_string());
+    }
+    let mut last = String::from("no answer from the DNS server");
+    for _ in 0..3 {
+        let r = random_u32();
+        let (id, port) = (r as u16, 49152 + ((r >> 16) % 16000) as u16);
+        let query = dns::build_query(id, &lower).map_err(|_| alloc::format!("'{name}' is not a valid host name"))?;
+        *DNS_WAIT.lock() = Some(DnsWait { port, reply: None });
+        if send_udp_packet(Ipv4Addr::ANY, server, port, 53, &query).is_err() {
+            last = String::from("could not send the DNS query");
+            continue;
+        }
+        let t0 = uptime_us();
+        let mut reply = None;
+        while uptime_us() < t0 + 1_500_000 {
+            poll();
+            if let Some(w) = DNS_WAIT.lock().as_mut() {
+                if w.reply.is_some() {
+                    reply = w.reply.take();
                     break;
                 }
             }
+            pause();
+        }
+        *DNS_WAIT.lock() = None;
+        let Some(reply) = reply else { continue };
+        match dns::parse_response(id, &reply) {
+            Ok(addrs) => {
+                let ip = Ipv4Addr(addrs[0]);
+                dns_cache_put(&lower, ip);
+                return Ok(ip);
+            }
+            Err(dns::DnsError::NoSuchName) => return Err(alloc::format!("'{name}' does not exist (DNS: no such name)")),
+            Err(dns::DnsError::WrongId) => continue,
+            Err(e) => last = alloc::format!("DNS error for '{name}': {e:?}"),
+        }
+    }
+    Err(last)
+}
+
+// --- HTTP --------------------------------------------------------------------------------------------------
+
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: String,
+    pub body: Vec<u8>,
+}
+
+/// GET `url` (plain `http://` only), following up to five redirects. `max_body` bounds the memory used.
+/// `progress` is called with the bytes of body received so far and the total if the server announced it.
+pub fn http_fetch(url: &str, max_body: usize, progress: &mut dyn FnMut(usize, Option<usize>)) -> Result<HttpResponse, String> {
+    let mut cur = http::parse_url(url).map_err(|_| alloc::format!("'{url}' is not a usable http:// URL"))?;
+    for _ in 0..6 {
+        if cur.https {
+            return Err(String::from("https:// needs TLS, which Aeon does not have yet; use an http:// address"));
+        }
+        let ip = dns_resolve(&cur.host)?;
+        let (resp, location) = fetch_once(ip, &cur, max_body, progress)?;
+        if matches!(resp.status, 301 | 302 | 303 | 307 | 308) {
+            if let Some(loc) = location {
+                cur = http::resolve_location(&cur, &loc).map_err(|_| alloc::format!("bad redirect target '{loc}'"))?;
+                continue;
+            }
+        }
+        return Ok(resp);
+    }
+    Err(String::from("too many redirects"))
+}
+
+fn fetch_once(
+    ip: Ipv4Addr,
+    url: &http::Url,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<(HttpResponse, Option<String>), String> {
+    let local_port = 49152 + (random_u32() % 16000) as u16;
+    let now = uptime_us();
+    let (conn, syn) = Tcp::connect(random_u32(), now);
+    *TCP_CONN.lock() = Some(Conn { tcp: conn, remote_ip: ip, remote_port: url.port, local_port });
+    send_all(ip, local_port, url.port, &syn);
+
+    let result = fetch_loop(ip, url, local_port, max_body, progress);
+    // Whatever happened, tell the server we are done and drop the connection.
+    if let Some(mut c) = TCP_CONN.lock().take() {
+        let outs = c.tcp.abort();
+        drop(c);
+        send_all(ip, local_port, url.port, &outs);
+    }
+    result
+}
+
+fn fetch_loop(
+    ip: Ipv4Addr,
+    url: &http::Url,
+    local_port: u16,
+    max_body: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>),
+) -> Result<(HttpResponse, Option<String>), String> {
+    let mut parser = http::Parser::new(max_body);
+    let mut requested = false;
+    let mut last_progress = uptime_us();
+    let started = last_progress;
+    loop {
+        poll();
+        tcp_tick();
+        let now = uptime_us();
+        // Pull what arrived, and send the request once the connection is up.
+        let (rx, established, peer_closed, state, failure, outs) = {
+            let mut guard = TCP_CONN.lock();
+            let c = guard.as_mut().ok_or("connection lost")?;
+            let outs = if c.tcp.is_established() && !requested {
+                requested = true;
+                c.tcp.send(&http::request(url), now)
+            } else {
+                Vec::new()
+            };
+            (c.tcp.take_rx(), c.tcp.is_established(), c.tcp.peer_closed(), c.tcp.state(), c.tcp.failure(), outs)
+        };
+        send_all(ip, local_port, url.port, &outs);
+        if !rx.is_empty() {
+            last_progress = now;
+            parser.feed(&rx).map_err(|e| alloc::format!("bad HTTP response: {e:?}"))?;
+            progress(parser.received(), parser.content_length());
+        }
+        if parser.is_done() {
+            break;
+        }
+        if state == tcp::State::Closed || (peer_closed && rx.is_empty()) {
+            if failure == tcp::Failure::Reset {
+                return Err(String::from("connection refused or reset by the server"));
+            }
+            if failure == tcp::Failure::TimedOut {
+                return Err(String::from("connection timed out (no answer from the server)"));
+            }
+            parser.finish().map_err(|_| String::from("the server closed the connection before the whole file arrived"))?;
+            break;
+        }
+        // Give up when nothing has moved for a while (the retransmission timer handles lost packets).
+        let idle_limit = if established { 15_000_000 } else { 8_000_000 };
+        if now.saturating_sub(last_progress) > idle_limit && now.saturating_sub(started) > idle_limit {
+            return Err(String::from("timed out waiting for the server"));
         }
         pause();
     }
-
-    let raw = {
-        let mut conn = TCP_CONN.lock();
-        let c = conn.take().ok_or("no connection")?;
-        c.rx_buf
-    };
-
-    if raw.is_empty() {
-        return Err("empty HTTP response");
-    }
-
-    // Parse status line and split body
-    let delim = b"\r\n\r\n";
-    let split_pos = raw.windows(4).position(|w| w == delim).unwrap_or(raw.len());
-    let header_bytes = &raw[..split_pos];
-    let body_bytes = if split_pos + 4 <= raw.len() {
-        &raw[split_pos + 4..]
-    } else {
-        &[]
-    };
-
-    let header_str = alloc::string::String::from_utf8_lossy(header_bytes);
-    let mut status = 200;
-    if let Some(first_line) = header_str.lines().next() {
-        let mut parts = first_line.split_whitespace();
-        let _proto = parts.next();
-        if let Some(code_str) = parts.next() {
-            if let Ok(c) = code_str.parse::<u16>() {
-                status = c;
-            }
+    let mut headers = String::new();
+    for name in ["content-type", "content-length", "server", "last-modified", "location"] {
+        if let Some(v) = parser.header(name) {
+            headers.push_str(&alloc::format!("{name}: {v}\n"));
         }
     }
-
-    Ok(HttpResponse {
-        status,
-        headers: alloc::string::String::from(header_str),
-        body: alloc::vec::Vec::from(body_bytes),
-    })
+    let location = parser.header("location").map(|s| s.to_string());
+    let status = parser.status();
+    Ok((HttpResponse { status, headers, body: parser.into_body() }, location))
 }
 
 // -----------------------------------------------------------------------------
@@ -993,12 +1135,19 @@ pub fn poll() {
                     continue;
                 }
                 let ihl = (payload[0] & 0x0F) as usize * 4;
-                if payload.len() < ihl {
+                if payload.len() < ihl || ihl < 20 {
+                    continue;
+                }
+                // The Ethernet frame may be padded: the IP header says how long the packet really is. Fragments
+                // are not reassembled, so they are dropped.
+                let total = usize::from(u16::from_be_bytes([payload[2], payload[3]])).min(payload.len());
+                let frag = u16::from_be_bytes([payload[6], payload[7]]);
+                if total < ihl || frag & 0x3FFF != 0 {
                     continue;
                 }
                 let protocol = payload[9];
                 let src_ip = Ipv4Addr([payload[12], payload[13], payload[14], payload[15]]);
-                let ip_data = &payload[ihl..];
+                let ip_data = &payload[ihl..total];
 
                 match protocol {
                     IPPROTO_ICMP => handle_icmp(src_ip, ip_data),

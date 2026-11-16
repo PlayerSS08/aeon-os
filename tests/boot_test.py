@@ -146,7 +146,13 @@ class Vm:
 
     def type(self, s):
         m = {" ": "spc", "-": "minus", "=": "equal", ".": "dot", "/": "slash", "`": "grave_accent"}
-        self.keys(*[m.get(c, c) for c in s])
+        for c in s:
+            if c == ":":
+                self.chord("shift", "semicolon")
+            elif c == "_":
+                self.chord("shift", "minus")
+            else:
+                self.keys(m.get(c, c))
 
     def shot(self, path_png):
         ppm = path_png[:-4] + ".ppm"
@@ -1129,6 +1135,70 @@ def t_mouse(ctx):
         vm.close()
 
 
+def t_net(ctx):
+    """DHCP, DNS and a real multi-segment HTTP download through QEMU's user-mode network, checked by SHA-256."""
+    import hashlib, http.server, threading, functools
+    r = ctx.r
+    root = os.path.join(ctx.work, "www")
+    os.makedirs(root)
+    blob = bytes((i * 131 + (i >> 8) * 7) & 255 for i in range(300_000))
+    with open(os.path.join(root, "blob.bin"), "wb") as f:
+        f.write(blob)
+    with open(os.path.join(root, "hello.txt"), "w") as f:
+        f.write("hello from the host\n")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+    handler.log_message = lambda *a, **k: None
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-net", cfg="nomenu" + chr(10)), ctx.work, name="net", mem=512,
+            extra=["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"])
+    try:
+        r.check("shell prompt with a NIC", vm.wait_for("aeon> ", 150, "serial"))
+        vm.type("dhcp")
+        vm.keys("ret")
+        r.check("DHCP lease acquired", vm.wait_for("DHCP lease acquired successfully", 40, "serial"), vm.serial_text()[-500:])
+        vm.type(f"curl http://10.0.2.2:{port}/hello.txt")
+        vm.keys("ret")
+        r.check("a small text file is fetched and shown", vm.wait_for("hello from the host", 40, "serial"), vm.serial_text()[-600:])
+        r.check("the HTTP status is reported", "HTTP status 200" in vm.serial_text())
+        vm.type(f"curl http://10.0.2.2:{port}/blob.bin -o /blob.bin")
+        vm.keys("ret")
+        r.check("the 300 KB download completes", vm.wait_for("saved to /blob.bin", 90, "serial"), vm.serial_text()[-600:])
+        vm.type("sha256sum /blob.bin")
+        vm.keys("ret")
+        want = hashlib.sha256(blob).hexdigest()
+        r.check("the downloaded file has the right SHA-256", vm.wait_for(want, 40, "serial"), vm.serial_text()[-400:])
+        # DNS: QEMU's resolver forwards to the host's, so a name for the host itself needs no internet.
+        vm.type(f"curl http://host.test:{port}/hello.txt")
+        vm.keys("ret")
+        vm.wait_for("curl:", 30, "serial") or vm.wait_for("hello from the host", 5, "serial")
+        r.check("an unknown name is reported as a DNS failure, not a crash", "does not exist" in vm.serial_text() or "DNS" in vm.serial_text() or "no answer" in vm.serial_text(), vm.serial_text()[-500:])
+        vm.type(f"curl https://example.org/")
+        vm.keys("ret")
+        r.check("https is refused honestly", vm.wait_for("needs TLS", 30, "serial"), vm.serial_text()[-300:])
+    finally:
+        vm.close()
+        srv.shutdown()
+
+
+def t_netdns(ctx):
+    """Opt-in (AEON_TEST_INTERNET=1): resolve a public name through DNS and fetch a page over the real internet."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-dns", cfg="nomenu" + chr(10)), ctx.work, name="dns", mem=512,
+            extra=["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"])
+    try:
+        r.check("shell prompt with a NIC", vm.wait_for("aeon> ", 150, "serial"))
+        vm.type("dhcp")
+        vm.keys("ret")
+        r.check("DHCP lease acquired", vm.wait_for("DHCP lease acquired successfully", 40, "serial"))
+        vm.type("curl http://example.com/")
+        vm.keys("ret")
+        r.check("a public name resolves and its page arrives", vm.wait_for("Example Domain", 60, "serial"), vm.serial_text()[-700:])
+    finally:
+        vm.close()
+
+
 def t_usb(ctx):
     """The xHCI USB controller: started when present, reported cleanly when absent."""
     r = ctx.r
@@ -1986,7 +2056,7 @@ def t_pendrive(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
@@ -2003,6 +2073,8 @@ def main():
     class Ctx:
         pass
 
+    if os.environ.get("AEON_TEST_INTERNET") == "1":
+        TESTS["netdns"] = t_netdns
     ctx = Ctx()
     ctx.efi, ctx.faults, ctx.shots = os.path.abspath(a.efi), os.path.abspath(a.faults), os.path.abspath(a.shots)
     os.makedirs(ctx.shots, exist_ok=True)

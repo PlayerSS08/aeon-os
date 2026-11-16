@@ -516,23 +516,10 @@ pub fn fetch_package_via_http(url: &str) -> Result<Vec<u8>, String> {
     if cfg!(test) || !crate::netdev::link_up() {
         return Err("network link is down or offline test".to_string());
     }
-    let clean = url.trim_start_matches("http://").trim_start_matches("https://");
-    let (host_port, path) = clean.split_once('/').unwrap_or((clean, "/"));
-    let (host, port) = host_port.split_once(':').map_or((host_port, 80u16), |(h, p)| (h, p.parse::<u16>().unwrap_or(80)));
-
-    let target_ip = if let Some(ip) = crate::netstack::Ipv4Addr::parse(host) {
-        ip
-    } else if host == "localhost" {
-        crate::netstack::Ipv4Addr::LOOPBACK
-    } else {
-        let (_, _, gw, _, _) = crate::netstack::get_config();
-        gw
-    };
-
-    match crate::netstack::http_get(target_ip, port, path) {
+    match crate::netstack::http_fetch(url, 8 * 1024 * 1024, &mut |_, _| {}) {
         Ok(resp) if resp.status == 200 && !resp.body.is_empty() => Ok(resp.body),
         Ok(resp) => Err(alloc::format!("HTTP server returned status {}", resp.status)),
-        Err(e) => Err(alloc::format!("HTTP connection failed: {}", e)),
+        Err(e) => Err(e),
     }
 }
 
