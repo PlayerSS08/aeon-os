@@ -147,27 +147,70 @@ Aeon OS distinguishes between temporary RAM filesystem storage (`/`) and physica
 
 ## 4. Package Management & Internet Resources (`apt` / `aptitude`)
 
-Aeon OS includes a Debian-compatible package management subsystem capable of installing packages directly from Debian mirror repositories (`http://deb.debian.org/debian`) or from direct internet HTTP/HTTPS URLs.
+Aeon OS includes a Debian/Ubuntu-compatible package management subsystem capable of installing packages from the Ubuntu `resolute` repository mirrors (`http://archive.ubuntu.com/ubuntu`) and arbitrary remote HTTP/HTTPS URLs.
+
+### Repository Catalog & Glob Filtering (`apt list`)
+The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`, `resolute-updates`, `resolute-security`).
+
+- **Listing Packages with Wildcards/Globs:**
+  ```text
+  apt list 7*
+  apt list 4*
+  apt list a*
+  ```
+  - **Output Example (`apt list 7*`):**
+    ```text
+    Listing... Done
+    7kaa/resolute 2.15.7+ds-1 amd64
+    7kaa-data/resolute 2.15.7+ds-1 all
+    7zip/resolute,now 26.00+dfsg-1 amd64 [installed,automatic]
+    7zip-rar/resolute 26.00+ds-1 amd64
+    7zip-standalone/resolute 26.00+dfsg-1 amd64
+    ```
+  - **Output Example (`apt list 4*`):**
+    ```text
+    Listing... Done
+    4g8/resolute 1.0-8 amd64
+    4pane/resolute 8.0-1build5 amd64
+    4ti2/resolute 1.6.10+ds-1.1build1 amd64
+    4ti2-doc/resolute 1.6.10+ds-1.1build1 all
+    ```
+  - **Output Example (`apt list a*`):**
+    ```text
+    Listing... Done
+    a11y-profile-manager/resolute 0.1.11-0ubuntu8 amd64
+    a11y-profile-manager-doc/resolute 0.1.11-0ubuntu8 all
+    a11y-profile-manager-indicator/resolute 0.1.11-0ubuntu8 amd64
+    a2boot/resolute-updates,resolute-security 4.2.3~ds-2.1ubuntu0.2 amd64
+    a2d/resolute 2.0.5-2build1 all
+    a2d-doc/resolute 2.0.5-2build1 all
+    a2jmidid/resolute 9-4build1 amd64
+    a2ps/resolute 1:4.15.7-5 amd64
+    a56/resolute 1.3+dfsg-12build1 amd64
+    a7xpg/resolute 0.11.dfsg1-12build3 amd64
+    a7xpg-data/resolute 0.11.dfsg1-12build3 all
+    aa3d/resolute 1.0-8.3build1 amd64
+    ```
 
 ### Installing Any Package from the Internet
 - **Syntax:**
   ```text
   apt install <package_name>
   ```
-  - **Examples:** `apt install python3`, `apt install git`, `apt install neofetch`, `apt install gcc`, `apt install vim`, `apt install wget`, `apt install tmux`, `apt install zsh`
-  - **Action:** Resolves the package against Debian bookworm repository sources, downloads the `.deb` package payload, validates SHA-256 integrity, unpacks the binary directly into `/bin/<package_name>`, and updates `/var/lib/dpkg/status`.
+  - **Examples:** `apt install 4g8`, `apt install curl`, `apt install python3`, `apt install git`, `apt install neofetch`, `apt install gcc`, `apt install vim`, `apt install wget`, `apt install tmux`, `apt install zsh`
+  - **Action:** Resolves the package against repository sources, downloads or decodes the `.deb` package payload, validates SHA-256 integrity, unpacks the binary directly into `/bin/<package_name>`, and updates `/var/lib/dpkg/status`.
   - **Execution:** Once installed, any package can be executed directly via `run <package_name>` or from `/bin/<package_name>`.
 
 ### Installing from Direct Internet URLs
 - **Syntax:**
   ```text
-  apt install <http_url>
+  apt install <http_or_https_url>
   ```
   - **Example:**
     ```text
-    apt install http://repo.aeon.org/packages/fastfetch.deb
+    apt install https://archive.ubuntu.com/pool/main/h/htop/htop_3.3.0_amd64.deb
     ```
-  - **Action:** Fetches the remote resource via HTTP/TCP socket, extracts the binary payload, deploys it to `/bin`, and registers it in the local `dpkg` database.
+  - **Action:** Fetches the remote resource via HTTP/HTTPS/TCP socket, extracts the binary payload, deploys it to `/bin`, and registers it in the local `dpkg` database.
 
 ### Package Querying & Management
 - **Search Packages:** `apt search <pattern>` – Searches local packages and remote repository catalogs.

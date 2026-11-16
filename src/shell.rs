@@ -739,9 +739,10 @@ fn cmd_apt(rest: &str) {
 
     match sub {
         "update" => {
-            out!("Hit:1 http://deb.debian.org/debian bookworm InRelease\n");
-            out!("Get:2 http://deb.debian.org/debian bookworm/main amd64 Packages [8,784 kB]\n");
-            out!("Fetched 8,784 kB in 1s (7,842 kB/s)\n");
+            out!("Hit:1 http://archive.ubuntu.com/ubuntu resolute InRelease\n");
+            out!("Get:2 http://archive.ubuntu.com/ubuntu resolute/main amd64 Packages [9,418 kB]\n");
+            out!("Get:3 http://archive.ubuntu.com/ubuntu resolute-updates InRelease [128 kB]\n");
+            out!("Fetched 9,546 kB in 1s (8,230 kB/s)\n");
             out!("Reading package lists... Done\n");
             out!("Building dependency tree... Done\n");
             out!("All packages are up to date.\n");
@@ -757,6 +758,7 @@ fn cmd_apt(rest: &str) {
             out!("Reading package lists... Done\n");
             out!("Building dependency tree... Done\n");
             out!("The following NEW packages will be installed:\n  {}\n", pkg);
+            out!("0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n");
             match crate::apt::install_package(fs, pkg) {
                 Ok(msg) => out!("{}\n", msg),
                 Err(err) => out!("E: {}\n", err),
@@ -776,19 +778,43 @@ fn cmd_apt(rest: &str) {
             }
         }
         "list" => {
-            let installed_only = parts.any(|a| a == "--installed");
+            let mut installed_only = false;
+            let mut pattern = "";
+            for arg in parts {
+                if arg == "--installed" {
+                    installed_only = true;
+                } else if !arg.starts_with('-') {
+                    pattern = arg;
+                }
+            }
+
+            out!("Listing... Done\n");
+
             if installed_only {
                 let inst = crate::apt::list_installed(fs);
-                out!("Listing... Done\n");
                 for (p, v) in inst {
-                    out!("{}/now {} amd64 [installed]\n", p, v);
+                    if pattern.is_empty() || crate::apt::matches_glob(&p, pattern) {
+                        let (_, auto) = crate::apt::is_installed_automatic(fs, &p);
+                        let suite = crate::apt::suite_for(&p);
+                        let arch = crate::apt::arch_for(&p);
+                        out!("{}\n", crate::apt::format_apt_list_entry(&p, suite, &v, arch, true, auto));
+                    }
                 }
             } else {
-                out!("Listing... Done\n");
                 for p in crate::apt::BUILTIN_PACKAGES {
-                    let inst = crate::apt::is_installed(fs, p.name);
-                    let tag = if inst { " [installed]" } else { "" };
-                    out!("{}/bookworm {} amd64{}\n", p.name, p.version, tag);
+                    if pattern.is_empty() || crate::apt::matches_glob(p.name, pattern) {
+                        let (inst, auto) = crate::apt::is_installed_automatic(fs, p.name);
+                        out!("{}\n", crate::apt::format_apt_list_entry(p.name, p.suite, p.version, p.arch, inst, auto));
+                    }
+                }
+                let inst = crate::apt::list_installed(fs);
+                for (p, v) in inst {
+                    if !crate::apt::BUILTIN_PACKAGES.iter().any(|b| b.name == p.as_str()) {
+                        if pattern.is_empty() || crate::apt::matches_glob(&p, pattern) {
+                            let (_, auto) = crate::apt::is_installed_automatic(fs, &p);
+                            out!("{}\n", crate::apt::format_apt_list_entry(&p, "resolute", &v, "amd64", true, auto));
+                        }
+                    }
                 }
             }
         }
@@ -817,12 +843,12 @@ fn cmd_apt(rest: &str) {
             let mut found = false;
             for p in crate::apt::BUILTIN_PACKAGES {
                 if p.name.contains(pattern) || p.description.contains(pattern) {
-                    out!("{} - {}\n", p.name, p.description);
+                    out!("{}/{} {} {}\n  {}\n", p.name, p.suite, p.version, p.arch, p.description);
                     found = true;
                 }
             }
             if !found {
-                out!("{} - Debian package available from remote mirror http://deb.debian.org/debian\n", pattern);
+                out!("{}/resolute 1.0.0-1 amd64\n  Package available from remote repository\n", pattern);
             }
         }
         _ => {
