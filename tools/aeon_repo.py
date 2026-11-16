@@ -66,15 +66,14 @@ def rust_key_file(pk):
 def cmd_keygen(a):
     if os.path.exists(a.key):
         sys.exit(f"refusing to overwrite {a.key}")
-    os.makedirs(os.path.dirname(a.key), exist_ok=True)
+    os.makedirs(os.path.dirname(a.key), mode=0o700, exist_ok=True)
     sk = Ed25519PrivateKey.generate()
     seed = sk.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-    with open(a.key, "w", encoding="ascii") as f:
+    # Created owner-only and exclusively (never overwrites), so the secret is never readable by others, even
+    # briefly. On Windows the mode bits are mostly ignored: the folder's ACL (your user profile or drive) applies.
+    fd = os.open(a.key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="ascii") as f:
         f.write(seed.hex() + "\n")
-    try:
-        os.chmod(a.key, 0o600)
-    except OSError:
-        pass
     pk = public_bytes(sk)
     with open(a.rust, "w", encoding="utf8", newline="\n") as f:
         f.write(rust_key_file(pk))

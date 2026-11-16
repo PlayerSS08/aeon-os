@@ -980,7 +980,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
                 c.clear();
                 c.fullscreen_log();
             } else {
-                // Splash: the 8-segment ring fades in and rotates, a thin bar tracks the real boot stages.
+                // Splash: the AEON wordmark fades in (ease-out, 180 ms) and a thin bar tracks the real boot stages.
                 c.begin_splash();
                 for step in 1..=10u16 {
                     c.fade_logo((u32::from(anim::ease_out_cubic(step * 100)) * 255 / 1000) as u8);

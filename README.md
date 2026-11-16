@@ -1,9 +1,11 @@
 # Aeon
 
-A small UEFI x86_64 boot stage and small kernel (about 261 KB signed (260,648 bytes), under the 512 KiB size limit the tests enforce; boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
+A small UEFI x86_64 boot stage and small kernel (about 572 KB, under the 640 KiB size limit the tests enforce; boots in 64 MB of RAM) in Rust (`no_std`, no dependencies). It boots from a USB
 stick on a UEFI PC, shows a logo with a progress bar, measures its command line into the TPM, seeds its
 own randomness, leaves firmware control, sets up its own CPU and memory protections, and drops into a
 preemptive multitasking kernel with a shell.
+
+**New in 0.10.0** (see `docs/RELEASE-0.10.0.md`): real TCP/DNS/HTTP (`dhcp`, `curl <url> [-o file]`, `sha256sum`), a signed package manager (`apt help`), USB mouse with an on-screen pointer (`mouse`), a Realtek RTL8168 wired driver (untested on hardware) and a tested WPA2 Wi-Fi stack with **no Wi-Fi chip driver yet** (`wifi status`). How Aeon compares with other systems and what is still missing: `docs/OS-LANDSCAPE.md`.
 
 ## Boot from a USB stick
 

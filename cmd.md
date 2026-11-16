@@ -49,26 +49,13 @@ The bare-metal Intel e1000 Gigabit NIC (`82540EM` / `82545EM` / `82574L`) and Vi
 
 ---
 
-### Wi-Fi Wireless Connection (Hardware & Command Status)
+### Wi-Fi Wireless Connection (honest status)
 
-- **Available Shell Commands:**
-  ```text
-  connect wifi <ssid> <password>
-  wifi connect <ssid> <password>
-  wifi scan
-  wifi status
-  ```
-- **Example Usage:**
-  ```text
-  connect wifi OfficeNetwork MySecurePassword123
-  ```
-- **Current Bare-Metal Status & Hardware Clarification:**
-  - **Do we have Wi-Fi with password right now?**
-    - The shell command syntax (`connect wifi <ssid> <password>`) is fully implemented to parse the SSID, accept the WPA2 passphrase, and scan for physical 802.11 PCIe wireless network adapters.
-    - On bare-metal x86_64 hardware, Wi-Fi connectivity requires two components that Ethernet does not:
-      1. **Proprietary Firmware Microcode:** Modern wireless chipsets (Intel Wi-Fi 6 AX200/AX211 `iwlwifi`, Realtek `rtw88`, Broadcom) cannot transmit packets without loading closed-source binary microcode blobs into the chip's internal SRAM on PCI boot.
-      2. **802.11 WPA2/WPA3 Cryptographic State Machine:** Establishing a wireless session requires IEEE 802.11 4-way EAPOL handshakes, AES-CCMP pairwise transient key (PTK) generation, and 802.11 beacon framing.
-    - **Current Behavior:** When `connect wifi <ssid> <password>` is executed, Aeon OS scans the PCI bus for Class `0x0280` (Wireless Controller). If no supported wireless radio or microcode is present (such as inside VirtualBox emulation or laptops with unfree firmware), it informs the operator and routes high-speed traffic through the active Ethernet link (`eth0`).
+- **Commands:** `wifi status`, `wifi scan`, `connect wifi <ssid> <password>`.
+- **What happens today:** they report the Wi-Fi chip found on the PCI bus (on the HP OMEN 16: Realtek RTL8852BE, `10EC:B520`) and refuse to scan or join, because **no driver for that chip exists yet**.
+- **What is built and tested:** everything above the radio. WPA2-Personal key derivation (PBKDF2-SHA1), the 4-way EAPOL handshake, AES-CCMP encryption, 802.11 scan/auth/association frames and the station state machine (`src/wpa.rs`, `src/ieee80211.rs`, `src/wifi.rs`). They are tested against RFC vectors, an independent Python implementation and a simulated access point, **not** against real Wi-Fi hardware.
+- **What is missing:** the chip driver. The RTL8852BE needs Realtek's closed firmware, MAC/baseband setup tables and DMA rings; Linux's `rtw89` driver is large and its firmware has had version and crash problems (the OMEN's chip is the `-VT` variant, `rtw8852bt` in Linux). It can only be developed with the laptop in the loop.
+- **Use instead:** the wired port (Realtek RTL8168, driver included, *untested on hardware*: run `dhcp`) or any USB Ethernet bridge that the firmware exposes.
 
 ---
 
@@ -96,10 +83,10 @@ Aeon OS provides kernel-level physical and virtual memory inspection tools.
 
 ## 3. Storage Subsystem & Drive Save Access
 
-Aeon OS possesses full read and write access to physical and virtual block storage devices.
+Aeon reads FAT16/FAT32 disks and writes to **one** place: a FAT32 USB stick whose volume label is `AEON`. Every other volume (including the laptop's internal NVMe with Windows) is never written. `EFI/` on the stick is protected too.
 
 ### Permanent Drive Saving (Disk Persistence)
-Aeon OS distinguishes between temporary RAM filesystem storage (`/`) and physical persistent disk storage (`/usb` or `/dev/sdX`):
+Aeon distinguishes the temporary RAM filesystem (`/`, gone at power off) from the AEON USB stick (`/usb`, permanent). Create the stick with `mkfs.fat -F 32 -n AEON` or format FAT32 and set the label `AEON`.
 
 - **Save / Create a File on Disk:**
   ```text
@@ -109,7 +96,7 @@ Aeon OS distinguishes between temporary RAM filesystem storage (`/`) and physica
     ```text
     write /usb/notes.txt Configuration saved successfully.
     ```
-  - **Behavior:** Performs an actual physical sector write through the storage driver (`usbfs::hw_write` / AHCI SATA block write) to commit data directly to the disk's FAT32 partition.
+  - **Behavior:** Writes the file to the stick's FAT32 volume (`usbfs`). Run `sync` before unplugging.
 
 - **Overwrite Existing File on Disk:**
   ```text
@@ -138,110 +125,52 @@ Aeon OS distinguishes between temporary RAM filesystem storage (`/`) and physica
   - Displays total storage capacity, allocated clusters, and available free disk sectors.
 
 - **Low-Level Direct Block Storage Operations:**
-  - `disks`: Lists all recognized storage devices (SATA AHCI ports, NVMe, USB mass storage).
+  - `disks`: Lists recognized storage devices (SATA AHCI ports, virtio disks, the USB stick).
   - `dls`: Traverses partitions and raw directories.
   - `dread <lba> [offset]`: Direct hex inspection of any raw 512-byte disk sector.
   - `storage`: Hardware diagnostics of AHCI SATA controllers, port speeds, and DMA command slots.
 
 ---
 
-## 4. Package Management & Internet Resources (`apt` / `aptitude`)
+## 4. Packages & Internet (`apt`, `curl`)
 
-Aeon OS includes a Debian/Ubuntu-compatible package management subsystem capable of installing packages from the Ubuntu `resolute` repository mirrors (`http://archive.ubuntu.com/ubuntu`) and arbitrary remote HTTP/HTTPS URLs.
+Aeon's `apt` uses Debian's verbs but is **not** Debian's apt: it does not read `.deb` files and cannot run Linux programs. Packages are small archives of files (data, documents, scripts, Aeon programs) from a **signed repository**.
 
-### Repository Catalog & Glob Filtering (`apt list`)
-The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`, `resolute-updates`, `resolute-security`).
+### How trust works
+The kernel contains the repository's public Ed25519 key (`src/pkgkey.rs`). `apt update` downloads `index` and `index.sig` and refuses the list unless the signature verifies and its serial is not older than one already seen (rollback protection, remembered in RAM and on the stick). The index lists each package's size and SHA-256, so a package is installed only if its bytes match the signed index. Plain `http://` is therefore safe as a transport; `https://` is not supported yet (Aeon has no TLS).
 
-- **Listing Packages with Wildcards/Globs:**
-  ```text
-  apt list 7*
-  apt list 4*
-  apt list a*
-  ```
-  - **Output Example (`apt list 7*`):**
-    ```text
-    Listing... Done
-    7kaa/resolute 2.15.7+ds-1 amd64
-    7kaa-data/resolute 2.15.7+ds-1 all
-    7zip/resolute,now 26.00+dfsg-1 amd64 [installed,automatic]
-    7zip-rar/resolute 26.00+ds-1 amd64
-    7zip-standalone/resolute 26.00+dfsg-1 amd64
-    ```
-  - **Output Example (`apt list 4*`):**
-    ```text
-    Listing... Done
-    4g8/resolute 1.0-8 amd64
-    4pane/resolute 8.0-1build5 amd64
-    4ti2/resolute 1.6.10+ds-1.1build1 amd64
-    4ti2-doc/resolute 1.6.10+ds-1.1build1 all
-    ```
-  - **Output Example (`apt list a*`):**
-    ```text
-    Listing... Done
-    a11y-profile-manager/resolute 0.1.11-0ubuntu8 amd64
-    a11y-profile-manager-doc/resolute 0.1.11-0ubuntu8 all
-    a11y-profile-manager-indicator/resolute 0.1.11-0ubuntu8 amd64
-    a2boot/resolute-updates,resolute-security 4.2.3~ds-2.1ubuntu0.2 amd64
-    a2d/resolute 2.0.5-2build1 all
-    a2d-doc/resolute 2.0.5-2build1 all
-    a2jmidid/resolute 9-4build1 amd64
-    a2ps/resolute 1:4.15.7-5 amd64
-    a56/resolute 1.3+dfsg-12build1 amd64
-    a7xpg/resolute 0.11.dfsg1-12build3 amd64
-    a7xpg-data/resolute 0.11.dfsg1-12build3 all
-    aa3d/resolute 1.0-8.3build1 amd64
-    ```
+### Typical session
+```text
+dhcp                                   get an address on the cable
+apt source http://192.168.1.20:8080/   the PC that runs: python tools/aeon_repo.py serve repo
+apt update                             "3 package(s) available"
+apt list                               what the repository has
+apt install greeter                    installs greet-data first, checks every hash
+cat /usr/share/greet/en.txt
+apt remove greeter ; apt autoremove
+```
+With the AEON stick plugged in, every installed package and the index are copied to `aeonpkg/` on the stick. After a reboot (even with no network) `apt restore` verifies the saved index and reinstalls them.
 
-### Installing Any Package from the Internet
-- **Syntax:**
-  ```text
-  apt install <package_name>
-  ```
-  - **Examples:** `apt install 4g8`, `apt install curl`, `apt install python3`, `apt install git`, `apt install neofetch`, `apt install gcc`, `apt install vim`, `apt install wget`, `apt install tmux`, `apt install zsh`
-  - **Action:** Resolves the package against repository sources, downloads or decodes the `.deb` package payload, validates SHA-256 integrity, unpacks the binary directly into `/bin/<package_name>`, and updates `/var/lib/dpkg/status`.
-  - **Execution:** Once installed, any package can be executed directly via `run <package_name>` or from `/bin/<package_name>`.
+### Commands
+| Command | Meaning |
+|:---|:---|
+| `apt source [url]` | show or set the repository address |
+| `apt update` | fetch and verify the package list |
+| `apt list [--installed]`, `apt search <text>`, `apt show <pkg>`, `apt files <pkg>` | queries |
+| `apt install <pkg>...` | install with dependencies; refuses on bad signature, size, hash, unsafe paths or file conflicts; rolls back if the filesystem is full |
+| `apt remove <pkg>...`, `apt autoremove` | remove; refuses while another package needs it |
+| `apt restore` | reinstall what is saved on the stick |
 
-### Installing from Direct Internet URLs
-- **Syntax:**
-  ```text
-  apt install <http_or_https_url>
-  ```
-  - **Example:**
-    ```text
-    apt install https://archive.ubuntu.com/pool/main/h/htop/htop_3.3.0_amd64.deb
-    ```
-  - **Action:** Fetches the remote resource via HTTP/HTTPS/TCP socket, extracts the binary payload, deploys it to `/bin`, and registers it in the local `dpkg` database.
+### Making your own repository
+```text
+python tools/aeon_repo.py keygen            one time: key in .secrets/ (never commit), public key into src/pkgkey.rs, rebuild Aeon
+python tools/aeon_repo.py build repo-src repo
+python tools/aeon_repo.py serve repo --port 8080
+```
+A package source is a folder with `PKGINFO` (Package, Version, Depends, Description) and a `files/` tree whose paths are relative to `/`.
 
-### Package Querying & Lifecycle Management
-- **Search Packages:** pt search <pattern> - Searches local packages and remote repository catalogs.
-- **Show Package Information:** pt show <package> - RFC 822 detailed package metadata (Architecture, Version, Depends, Maintainer, SHA256).
-- **List Installed Packages:** pt list --installed - Displays all installed packages ([installed] and [installed,automatic]).
-- **Update Repositories:** pt update (or pt-get update) - Refreshes package lists from /etc/apt/sources.list.
-- **Remove Package:** pt remove <package> (or pt-get remove <package>) - Removes binary from /bin and keeps config files.
-- **Purge Package:** pt purge <package> (or pt-get purge <package>) - Completely deletes package and status registration.
-- **Auto-Remove Orphans:** pt autoremove - Detects and cleans up unneeded automatic dependencies.
-- **Clean Cache:** pt clean / pt autoclean - Empties downloaded archive files from /var/cache/apt/archives.
-- **Interactive Dashboard:** ptitude - Full-screen text dashboard displaying network status, repository sources, installed packages, and quick commands.
-
-### APT Cache Inspection (pt-cache)
-- **Query Package Policy & Pinning:**
-  `	ext
-  apt-cache policy <package>
-  `
-  - Displays currently installed version, candidate repository version, and mirror priority rankings.
-- **Inspect Dependency Hierarchy:**
-  `	ext
-  apt-cache depends <package>
-  `
-  - Analyzes package dependency trees (Depends:, Recommends:).
-
-### Low-Level Debian Package Manager (dpkg)
-- **Tabular Package Listing:** dpkg -l [pattern] - Displays status flags (ii installed), package name, version, architecture, and description.
-- **Detailed Package Status:** dpkg -s <package> - Outputs full control stanza from /var/lib/dpkg/status.
-- **Install Local Archive:** dpkg -i <file.deb> - Directly extracts and configures a .deb archive.
-- **List Installed Files:** dpkg -L <package> - Dumps paths registered in /var/lib/dpkg/info/<package>.list.
-- **Locate File Owner:** dpkg -S <pattern> - Identifies which package installed a specific file or binary.
-- **Remove / Purge Package:** dpkg -r <package> (remove) / dpkg -P <package> (purge).
+### Downloading anything else
+`curl <http://host[:port]/path> [-o file]` resolves names with DNS, follows redirects, handles chunked replies and keeps up to 12 MiB. `-o /usb/file` saves to the stick. `sha256sum <file>` checks a download. Real network traffic has been tested against QEMU's network and the public internet (DNS plus a page fetch), over the Intel e1000 emulation; the Realtek wired driver has not run on real hardware yet.
 
 ---
 
@@ -250,11 +179,10 @@ The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`,
 ### Packaging & Internet Resources
 | Command | Usage | Description |
 |:---|:---|:---|
-| pt | pt <cmd> [pkg|url] | Debian/Ubuntu package manager for installing any package or URL resource. |
-| pt-get | pt-get <cmd> [pkg] | Standard Debian APT packaging interface (update, install, remove, autoremove). |
-| pt-cache | pt-cache <policy|depends|search> <pkg> | Query repository cache, version priority, and dependencies. |
-| dpkg | dpkg <-l|-s|-i|-r|-P|-L|-S> [pkg|file] | Low-level Debian package management and filesystem manifest tracking. |
-| ptitude | ptitude | Interactive package management dashboard and inventory viewer. |
+| `apt` | `apt <cmd> [pkg]` | Signed package manager: source, update, list, search, show, files, install, remove, autoremove, restore. |
+| `apt-get`, `apt-cache` | same as `apt` | Aliases (`apt-cache` lists). |
+| `curl` | `curl <url> [-o file]` | HTTP download with DNS and redirects. |
+| `sha256sum` | `sha256sum <file>...` | SHA-256 of files, to verify downloads. |
 
 ### System & Architecture
 | Command | Usage | Description |
@@ -296,17 +224,18 @@ The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`,
 | `rm` | `rm <file>` | Delete file. |
 | `touch` | `touch <file>` | Create empty file or update timestamp. |
 | `df` | `df` | Disk filesystem space utilization. |
+| `mouse` | `mouse` | USB mouse pointer position and buttons (wheel scrolls the log). |
 
 ### Networking Subsystem
 | Command | Usage | Description |
 |:---|:---|:---|
-| `connect` | `connect [eth\|wifi <ssid> <pwd>]` | Connect to Ethernet or Wi-Fi network. |
-| `wifi` | `wifi [scan\|connect\|status]` | Wi-Fi wireless networking diagnostics and association. |
+| `connect` | `connect [eth\|wifi <ssid> <pwd>]` | Ethernet runs DHCP; Wi-Fi reports that there is no chip driver yet. |
+| `wifi` | `wifi [status\|scan\|connect]` | Detects the Wi-Fi chip; no driver yet (see section 1). |
 | `dhcp` | `dhcp [renew\|status]` | Auto-acquire IPv4 lease from gateway router. |
 | `ifconfig` | `ifconfig [if] [ip]` | Inspect or assign network interface IP configurations. |
 | `ip` | `ip [a\|r\|l\|n]` | Linux-compatible IP address, route, and link viewer. |
 | `ping` | `ping <target> [-c N]` | Transmit ICMP Echo Requests and measure round-trip latency. |
-| `curl` | `curl <url>` | Retrieve remote HTTP resources over TCP socket. |
+| `curl` | `curl <url> [-o file]` | Download over HTTP (DNS names, redirects, chunked). |
 | `netstat` | `netstat` | Display active sockets, routes, and ARP table. |
 
 ### CPU Scheduling & Concurrency
@@ -348,12 +277,6 @@ The package catalog provides exact parity with Ubuntu/Debian suites (`resolute`,
 
 ---
 
-## 6. Visual Command Verification Reference
+## 6. Screenshots
 
-The following verification screenshots are available in [S:\Works\Projects\Aeon\images](file:///S:/Works/Projects/Aeon/images):
-1. **Start Screen:** [01_start_screen.png](file:///S:/Works/Projects/Aeon/images/01_start_screen.png) – Centered `AEON` wordmark with restored 15-second countdown timer.
-2. **Help Catalog:** [03_cmd_help.png](file:///S:/Works/Projects/Aeon/images/03_cmd_help.png) – Full listing of commands including `connect`, `wifi`, and `apt`.
-3. **Ethernet Connection:** [cmd_connect.png](file:///S:/Works/Projects/Aeon/images/cmd_connect.png) – `connect` executing DHCP lease acquisition and setting link online.
-4. **Wi-Fi Association:** [cmd_wifi.png](file:///S:/Works/Projects/Aeon/images/cmd_wifi.png) – `connect wifi <ssid> <password>` parsing credentials and scanning PCI bus.
-5. **Drive Save Access:** [cmd_drive_save.png](file:///S:/Works/Projects/Aeon/images/cmd_drive_save.png) – `write /usb/test.txt` persisting data to disk block storage.
-6. **Internet Package Installation:** [cmd_apt_internet.png](file:///S:/Works/Projects/Aeon/images/cmd_apt_internet.png) – `apt install python3` downloading from repository mirror and deploying executable to `/bin/python3`.
+The screenshots in `images/` were taken with earlier builds and show the old, simulated `apt` and Wi-Fi text: do not use them as evidence for 0.10.0. The QEMU test suite (`tests/boot_test.py`, groups `mouse`, `net`, `apt`, `usb`) is the evidence for the features above; it saves fresh screenshots to `target/test-shots/`.
