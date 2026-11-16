@@ -593,7 +593,8 @@ fn cmd_ping(rest: &str) {
 }
 
 fn cmd_dhcp(_rest: &str) {
-    out!("initiating DHCP lease request on eth0...\n");
+    crate::netdev::ensure();
+    out!("initiating DHCP lease request on {}...\n", crate::netdev::device_name());
     match crate::netstack::run_dhcp(3000) {
         Ok((ip, mask, gw, dns)) => {
             out!("DHCP lease acquired successfully!\n");

@@ -165,6 +165,11 @@ impl Trb {
         (self.status >> 24) as u8
     }
 
+    /// For a transfer event: bytes of the TRB that were NOT transferred (requested length minus actual).
+    pub fn residual(&self) -> u32 {
+        self.status & 0x00FF_FFFF
+    }
+
     pub fn slot_id(&self) -> u8 {
         (self.control >> 24) as u8
     }

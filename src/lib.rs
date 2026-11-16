@@ -74,6 +74,7 @@ pub mod usbdesc;
 pub mod wifi;
 pub mod usbfs;
 pub mod usbmsd;
+pub mod usbnet;
 pub mod usercopy;
 pub mod virtio;
 pub mod waitq;

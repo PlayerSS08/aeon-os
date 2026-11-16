@@ -132,6 +132,32 @@ pub enum ActiveNetDev {
     Virtio(crate::virtionet::VirtioNet),
     #[cfg(target_os = "uefi")]
     Rtl8168(crate::rtl8168::Rtl8168),
+    #[cfg(target_os = "uefi")]
+    UsbNet(UsbNetDev),
+}
+
+/// The USB network function (a phone's USB tethering, an RNDIS/CDC-ECM adapter): the xHCI driver owns the
+/// hardware, this is only the handle the IP stack talks to.
+#[cfg(target_os = "uefi")]
+pub struct UsbNetDev;
+
+#[cfg(target_os = "uefi")]
+impl NetDev for UsbNetDev {
+    fn name(&self) -> &'static str {
+        crate::xhci::net_name()
+    }
+    fn mac_address(&self) -> [u8; 6] {
+        crate::xhci::net_mac()
+    }
+    fn link_up(&self) -> bool {
+        crate::xhci::net_present()
+    }
+    fn send(&mut self, packet: &[u8]) -> Result<(), NetError> {
+        crate::xhci::net_send(packet)
+    }
+    fn receive(&mut self, buf: &mut [u8]) -> Result<usize, NetError> {
+        crate::xhci::net_receive(buf)
+    }
 }
 
 static ACTIVE_DEV: SpinLock<ActiveNetDev> = SpinLock::new(ActiveNetDev::None);
@@ -152,6 +178,8 @@ pub fn device_name() -> &'static str {
         ActiveNetDev::Virtio(d) => d.name(),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Rtl8168(d) => d.name(),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::UsbNet(d) => d.name(),
     }
 }
 
@@ -166,6 +194,8 @@ pub fn mac_address() -> [u8; 6] {
         ActiveNetDev::Virtio(d) => d.mac_address(),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Rtl8168(d) => d.mac_address(),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::UsbNet(d) => d.mac_address(),
     }
 }
 
@@ -180,6 +210,8 @@ pub fn link_up() -> bool {
         ActiveNetDev::Virtio(d) => d.link_up(),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Rtl8168(d) => d.link_up(),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::UsbNet(d) => d.link_up(),
     }
 }
 
@@ -194,6 +226,8 @@ pub fn send_packet(packet: &[u8]) -> Result<(), NetError> {
         ActiveNetDev::Virtio(d) => d.send(packet),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Rtl8168(d) => d.send(packet),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::UsbNet(d) => d.send(packet),
     };
     let mut stats = STATS.lock();
     match res {
@@ -220,6 +254,8 @@ pub fn receive_packet(buf: &mut [u8]) -> Result<usize, NetError> {
         ActiveNetDev::Virtio(d) => d.receive(buf),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Rtl8168(d) => d.receive(buf),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::UsbNet(d) => d.receive(buf),
     };
     let mut stats = STATS.lock();
     match res {
@@ -344,6 +380,12 @@ pub fn probe() {
         }
     }
 
+    if crate::xhci::net_present() {
+        info!("net", "bound {} (USB network function) MAC {:02x?}", crate::xhci::net_name(), crate::xhci::net_mac());
+        *ACTIVE_DEV.lock() = ActiveNetDev::UsbNet(UsbNetDev);
+        return;
+    }
+
     info!("net", "no hardware NIC detected; falling back to software loopback");
     *ACTIVE_DEV.lock() = ActiveNetDev::Loopback(LoopbackDev::new());
 }
@@ -352,3 +394,17 @@ pub fn probe() {
 pub fn probe() {
     *ACTIVE_DEV.lock() = ActiveNetDev::Loopback(LoopbackDev::new());
 }
+
+/// Makes sure the best available network device is bound: if only the software loopback is active, looks again
+/// for a USB network function (a phone plugged in after boot) and re-probes.
+#[cfg(target_os = "uefi")]
+pub fn ensure() {
+    let only_loopback = matches!(*ACTIVE_DEV.lock(), ActiveNetDev::Loopback(_) | ActiveNetDev::None);
+    if only_loopback {
+        crate::xhci::rescan();
+        probe();
+    }
+}
+
+#[cfg(not(target_os = "uefi"))]
+pub fn ensure() {}

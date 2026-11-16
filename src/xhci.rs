@@ -21,6 +21,9 @@ use crate::block::{check_request, BlockDev, BlockError, BlockWrite, SECTOR_SIZE}
 use crate::global::Global;
 use crate::hidkbd::HidKeyboard;
 use crate::pointer::{self, MouseMotion};
+use crate::usbnet;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 use crate::keymap::Key;
 use crate::mmio::{dma_frames, dma_page, rd32, wait_until, wr32, wr64, PAGE_BYTES};
 use crate::usbdesc;
@@ -105,6 +108,27 @@ struct Keyboard {
     queue: KeyQueue,
     errors: u8,
 }
+
+/// A USB network function (RNDIS or CDC-ECM): bulk IN is kept armed, frames wait in `rx` for the IP stack.
+struct Net {
+    port: u8,
+    slot: u8,
+    kind: usbnet::Kind,
+    dci_in: u8,
+    dci_out: u8,
+    in_ring: ProducerRing<'static>,
+    out_ring: ProducerRing<'static>,
+    in_buf: u64,
+    out_buf: u64,
+    max_packet_out: usize,
+    mac: [u8; 6],
+    rx: VecDeque<Vec<u8>>,
+    errors: u8,
+}
+
+/// Size of the bulk IN buffer: an RNDIS transfer may bundle several frames (we asked for up to 16 KiB).
+const NET_IN_BUF: u32 = 16 * 1024;
+const NET_OUT_BUF: usize = 4096;
 
 struct Mouse {
     port: u8,
@@ -251,6 +275,7 @@ pub struct Xhci {
     event_mem: u64,
     keyboard: Option<Keyboard>,
     mouse: Option<Mouse>,
+    net: Option<Net>,
     storage: Option<Storage>,
 }
 
@@ -354,7 +379,7 @@ fn bring_up(d: &pci::Device) -> Result<Xhci, &'static str> {
     if rd32(op + 4) & (1 << 2) != 0 {
         return Err("host system error after start");
     }
-    Ok(Xhci { vendor: d.header.vendor, device: d.header.device, caps, slots, op, db, rt, dcbaa, handoff, cmd, events, event_mem, keyboard: None, mouse: None, storage: None })
+    Ok(Xhci { vendor: d.header.vendor, device: d.header.device, caps, slots, op, db, rt, dcbaa, handoff, cmd, events, event_mem, keyboard: None, mouse: None, net: None, storage: None })
 }
 
 impl Xhci {
@@ -644,6 +669,12 @@ impl Xhci {
                 return Err(why);
             }
             Ok(())
+        } else if let Some(un) = usbnet::find_usb_net(desc_slice) {
+            if self.net.is_some() {
+                info!("xhci", "port {}: a second USB network device is ignored", port);
+                return Ok(());
+            }
+            self.setup_net(port, slot, speed, &mut dev, out_ctx, in_ctx, un)
         } else {
             info!("xhci", "port {}: device is not supported, ignored", port);
             Ok(())
@@ -905,7 +936,7 @@ impl Xhci {
     /// Looks at every port with something connected until a keyboard and storage are set up.
     fn enumerate(&mut self) {
         for port in 1..=self.caps.max_ports {
-            if self.keyboard.is_some() && self.storage.is_some() && self.mouse.is_some() {
+            if self.keyboard.is_some() && self.storage.is_some() && self.mouse.is_some() && self.net.is_some() {
                 break;
             }
             if rd32(self.port_reg(port)) & reg::PORT_CONNECTED == 0 {
@@ -921,6 +952,168 @@ impl Xhci {
     fn on_hid_event(&mut self, event: &Trb) {
         self.on_keyboard_event(event);
         self.on_mouse_event(event);
+        self.on_net_event(event);
+    }
+
+    /// Bulk IN finished on the network function: keep its frames, arm the next read.
+    fn on_net_event(&mut self, event: &Trb) {
+        let db = self.db;
+        let Some(n) = self.net.as_mut() else { return };
+        if event.slot_id() != n.slot || event.endpoint_id() != n.dci_in {
+            return;
+        }
+        n.in_ring.retire();
+        match event.completion_code() {
+            CC_SUCCESS | CC_SHORT_PACKET => {
+                let got = (NET_IN_BUF - event.residual().min(NET_IN_BUF)) as usize;
+                // SAFETY: `in_buf` is a DMA allocation of NET_IN_BUF bytes owned by `net`; the transfer has completed.
+                let data = unsafe { core::slice::from_raw_parts(n.in_buf as *const u8, got) };
+                let mut push = |f: &[u8]| {
+                    if n.rx.len() >= 64 {
+                        n.rx.pop_front();
+                    }
+                    n.rx.push_back(f.to_vec());
+                };
+                match n.kind {
+                    usbnet::Kind::Rndis => usbnet::unwrap_packets(data).into_iter().for_each(&mut push),
+                    usbnet::Kind::Ecm if got >= 14 => push(data),
+                    usbnet::Kind::Ecm => {}
+                }
+            }
+            _ => n.errors = n.errors.saturating_add(1),
+        }
+        if n.errors < 16 && n.in_ring.enqueue(Trb::normal(n.in_buf, NET_IN_BUF)).is_some() {
+            wr32(db + 4 * u64::from(n.slot), u32::from(n.dci_in));
+        }
+    }
+
+    /// Class request on the default pipe of a device being set up (RNDIS and CDC control).
+    fn class_out(&mut self, dev: &mut Device, request: u8, value: u16, index: u16, data: &[u8]) -> Result<(), &'static str> {
+        if !data.is_empty() {
+            // SAFETY: `dev.buf` is a DMA page from `dma_page`; no transfer is running on it.
+            let b = unsafe { page_bytes(dev.buf) };
+            b[..data.len()].copy_from_slice(data);
+        }
+        let [vl, vh] = value.to_le_bytes();
+        let [il, ih] = index.to_le_bytes();
+        let [ll, lh] = (data.len() as u16).to_le_bytes();
+        let d = if data.is_empty() { None } else { Some((data.len() as u16, false)) };
+        self.control(dev, [0x21, request, vl, vh, il, ih, ll, lh], d)
+    }
+
+    /// RNDIS: sends one control message and waits for its completion.
+    fn rndis_command(&mut self, dev: &mut Device, iface: u16, msg: &[u8], want: u32, req: u32) -> Result<Vec<u8>, &'static str> {
+        self.class_out(dev, 0x00, 0, iface, msg).map_err(|_| "RNDIS SEND_ENCAPSULATED_COMMAND failed")?;
+        for _ in 0..50 {
+            // SAFETY: as above.
+            let z = unsafe { page_bytes(dev.buf) };
+            z[..64].fill(0);
+            let [il, ih] = iface.to_le_bytes();
+            if self.control(dev, [0xA1, 0x01, 0, 0, il, ih, 0x00, 0x04], Some((1024, true))).is_ok() {
+                // SAFETY: the transfer has finished.
+                let b = unsafe { page_bytes(dev.buf) };
+                let len = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
+                if (12..=1024).contains(&len) && u32::from_le_bytes([b[0], b[1], b[2], b[3]]) == want && u32::from_le_bytes([b[8], b[9], b[10], b[11]]) == req {
+                    return Ok(b[..len].to_vec());
+                }
+            }
+            wait_until(20, || false);
+        }
+        Err("the RNDIS device did not answer")
+    }
+
+    /// Brings up an RNDIS or CDC-ECM network function on `port` and keeps it ready for the IP stack.
+    #[allow(clippy::too_many_arguments)]
+    fn setup_net(&mut self, port: u8, slot: u8, speed: u8, dev: &mut Device, out_ctx: u64, in_ctx: u64, un: usbnet::UsbNet) -> Result<(), &'static str> {
+        let ac64 = self.caps.ac64;
+        let csz = self.caps.context_size();
+        info!(
+            "xhci",
+            "port {}: USB network function found ({:?}), config {}, control interface {}, data interface {} alt {}, bulk in {} out {}",
+            port, un.kind, un.config, un.ctrl_interface, un.data_interface, un.data_alt, un.ep_in, un.ep_out
+        );
+
+        self.control(dev, [0x00, 9, un.config, 0, 0, 0, 0, 0], None).map_err(|_| "SET_CONFIGURATION failed")?;
+        if un.data_alt != 0 {
+            self.control(dev, [0x01, 0x0B, un.data_alt, 0, un.data_interface, 0, 0, 0], None).map_err(|_| "SET_INTERFACE (data alternate) failed")?;
+        }
+
+        let dci_out = xhcictx::dci_out(un.ep_out);
+        let dci_in = xhcictx::dci_in(un.ep_in);
+        let (out_phys, out_ring) = new_ring(ac64)?;
+        let (in_phys, in_ring) = new_ring(ac64)?;
+        // SAFETY: `in_ctx` and `out_ctx` are pages from `dma_page`; no command is running.
+        let (ctx, out) = unsafe { (page_bytes(in_ctx), page_bytes(out_ctx)) };
+        ctx.fill(0);
+        let ep_out = Endpoint { dci: dci_out, ep_type: xhcictx::EP_BULK_OUT, max_packet: un.max_packet_out, interval: 0, dequeue: out_phys, avg_trb_len: 512 };
+        let ep_in = Endpoint { dci: dci_in, ep_type: xhcictx::EP_BULK_IN, max_packet: un.max_packet_in, interval: 0, dequeue: in_phys, avg_trb_len: 512 };
+        let max_dci = dci_out.max(dci_in);
+        if !(xhcictx::input_control(ctx, 0, 1 | (1 << dci_out) | (1 << dci_in))
+            && xhcictx::copy_slot_from_output(out, ctx, csz)
+            && xhcictx::set_slot_entries(ctx, csz, max_dci)
+            && xhcictx::endpoint(ctx, csz, &ep_out)
+            && xhcictx::endpoint(ctx, csz, &ep_in))
+        {
+            return Err("input context too small");
+        }
+        self.command(Trb::configure_endpoint(in_ctx, slot))?;
+
+        let mac = match un.kind {
+            usbnet::Kind::Rndis => {
+                let iface = u16::from(un.ctrl_interface);
+                let r = self.rndis_command(dev, iface, &usbnet::initialize(1), usbnet::MSG_INITIALIZE | usbnet::COMPLETE, 1)?;
+                if u32::from_le_bytes([r[12], r[13], r[14], r[15]]) != 0 {
+                    return Err("RNDIS initialisation was refused");
+                }
+                let r = self.rndis_command(dev, iface, &usbnet::query(2, usbnet::OID_PERMANENT_ADDRESS), usbnet::MSG_QUERY | usbnet::COMPLETE, 2)?;
+                let c = usbnet::parse_completion(&r).ok_or("bad RNDIS query answer")?;
+                if c.status != 0 || c.info.len() < 6 {
+                    return Err("the RNDIS device would not tell its MAC address");
+                }
+                let mac: [u8; 6] = c.info[..6].try_into().unwrap();
+                let r = self.rndis_command(dev, iface, &usbnet::set(3, usbnet::OID_PACKET_FILTER, usbnet::FILTER_NORMAL), usbnet::MSG_SET | usbnet::COMPLETE, 3)?;
+                if usbnet::parse_completion(&r).map(|c| c.status) != Some(0) {
+                    return Err("the RNDIS device refused the packet filter");
+                }
+                mac
+            }
+            usbnet::Kind::Ecm => {
+                let idx = un.mac_string.ok_or("no MAC address string in the descriptor")?;
+                self.control(dev, [0x80, 6, idx, 3, 0x09, 0x04, 32, 0], Some((32, true))).map_err(|_| "reading the MAC address string failed")?;
+                // SAFETY: the transfer has finished.
+                let mac = usbnet::parse_mac_string(&unsafe { page_bytes(dev.buf) }[..32]).ok_or("unreadable MAC address string")?;
+                // SET_ETHERNET_PACKET_FILTER: directed, broadcast, all multicast.
+                self.class_out(dev, 0x43, 0x000E, u16::from(un.ctrl_interface), &[]).map_err(|_| "SET_ETHERNET_PACKET_FILTER failed")?;
+                mac
+            }
+        };
+
+        let in_buf = dma_frames((NET_IN_BUF as usize).div_ceil(PAGE_BYTES), ac64)?;
+        let out_buf = dma_frames(NET_OUT_BUF.div_ceil(PAGE_BYTES), ac64)?;
+        let mut net = Net {
+            port,
+            slot,
+            kind: un.kind,
+            dci_in,
+            dci_out,
+            in_ring,
+            out_ring,
+            in_buf,
+            out_buf,
+            max_packet_out: usize::from(un.max_packet_out),
+            mac,
+            rx: VecDeque::new(),
+            errors: 0,
+        };
+        net.in_ring.enqueue(Trb::normal(in_buf, NET_IN_BUF)).ok_or("bulk ring full")?;
+        wr32(self.db + 4 * u64::from(slot), u32::from(dci_in));
+        self.net = Some(net);
+        info!(
+            "xhci",
+            "port {}: USB network ready ({:?}, slot {}, speed {}), MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            port, un.kind, slot, reg::speed_name(speed), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+        );
+        Ok(())
     }
 
     /// A transfer event for the mouse: add its movement to the pending motion, ask for the next report.
@@ -1126,4 +1319,103 @@ pub fn disk_info() -> Option<StorageInfo> {
         vendor: s.vendor,
         product: s.product,
     })
+}
+
+// --- USB network function: what the IP stack uses ---------------------------------------------------------------
+
+/// Is a USB network function (RNDIS or CDC-ECM) up?
+pub fn net_present() -> bool {
+    // SAFETY: rule A: only the shell task and boot code reach XHCI.
+    unsafe { XHCI.get() }.as_ref().is_some_and(|x| x.net.is_some())
+}
+
+pub fn net_mac() -> [u8; 6] {
+    // SAFETY: as above.
+    unsafe { XHCI.get() }.as_ref().and_then(|x| x.net.as_ref()).map_or([0; 6], |n| n.mac)
+}
+
+pub fn net_name() -> &'static str {
+    // SAFETY: as above.
+    match unsafe { XHCI.get() }.as_ref().and_then(|x| x.net.as_ref()).map(|n| n.kind) {
+        Some(usbnet::Kind::Rndis) => "USB RNDIS (phone tethering)",
+        Some(usbnet::Kind::Ecm) => "USB CDC-ECM Ethernet",
+        None => "USB network (none)",
+    }
+}
+
+/// Sends one Ethernet frame through the USB network function.
+pub fn net_send(frame: &[u8]) -> Result<(), crate::netdev::NetError> {
+    use crate::netdev::NetError;
+    // SAFETY: as above.
+    let x = unsafe { XHCI.get() }.as_mut().ok_or(NetError::DeviceNotFound)?;
+    let (slot, dci, out_buf, kind, maxp) = {
+        let n = x.net.as_ref().ok_or(NetError::DeviceNotFound)?;
+        (n.slot, n.dci_out, n.out_buf, n.kind, n.max_packet_out)
+    };
+    if frame.len() > 1514 {
+        return Err(NetError::PacketTooLarge);
+    }
+    let bytes: Vec<u8> = match kind {
+        usbnet::Kind::Rndis => usbnet::wrap_packet(frame, maxp),
+        usbnet::Kind::Ecm => {
+            let mut v = frame.to_vec();
+            if maxp > 0 && v.len() % maxp == 0 {
+                v.push(0);
+            }
+            v
+        }
+    };
+    // SAFETY: `out_buf` is a DMA allocation of NET_OUT_BUF bytes owned by `net`, and the previous send finished.
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf as *mut u8, bytes.len()) };
+    let n = x.net.as_mut().ok_or(NetError::DeviceNotFound)?;
+    n.out_ring.enqueue(Trb::normal(out_buf, bytes.len() as u32)).ok_or(NetError::TxFull)?;
+    wr32(x.db + 4 * u64::from(slot), u32::from(dci));
+    let ev = x.wait_for(TRB_TRANSFER_EVENT, slot, dci, 1000);
+    if let Some(n) = x.net.as_mut() {
+        n.out_ring.retire();
+    }
+    match ev.map(|e| e.completion_code()) {
+        Some(CC_SUCCESS | CC_SHORT_PACKET) => Ok(()),
+        Some(_) => Err(NetError::HardwareError),
+        None => Err(NetError::Timeout),
+    }
+}
+
+/// The next received Ethernet frame, if any.
+pub fn net_receive(out: &mut [u8]) -> Result<usize, crate::netdev::NetError> {
+    use crate::netdev::NetError;
+    // SAFETY: as above.
+    let x = unsafe { XHCI.get() }.as_mut().ok_or(NetError::DeviceNotFound)?;
+    while let Some(event) = x.try_event() {
+        if event.kind() == TRB_TRANSFER_EVENT {
+            x.on_hid_event(&event);
+        }
+    }
+    let n = x.net.as_mut().ok_or(NetError::DeviceNotFound)?;
+    match n.rx.pop_front() {
+        Some(f) if f.len() <= out.len() => {
+            out[..f.len()].copy_from_slice(&f);
+            Ok(f.len())
+        }
+        Some(_) => Err(NetError::NoBuffer),
+        None => Err(NetError::RxEmpty),
+    }
+}
+
+/// Looks again at every port that is not already in use: for a phone plugged in after boot.
+pub fn rescan() {
+    // SAFETY: as above.
+    let Some(x) = (unsafe { XHCI.get() }).as_mut() else { return };
+    let used: Vec<u8> = [x.keyboard.as_ref().map(|k| k.port), x.mouse.as_ref().map(|m| m.port), x.storage.as_ref().map(|s| s.port), x.net.as_ref().map(|n| n.port)].into_iter().flatten().collect();
+    for port in 1..=x.caps.max_ports {
+        // Only a port with a fresh connect event: `reset_port` acknowledges the event after every attempt, so a
+        // device that was already tried and refused is not addressed a second time (which the controller rejects).
+        let sc = rd32(x.port_reg(port));
+        if used.contains(&port) || sc & reg::PORT_CONNECTED == 0 || sc & reg::PORT_CONNECT_CHANGE == 0 {
+            continue;
+        }
+        if let Err(why) = x.setup_device(port) {
+            warn!("xhci", "port {}: device not used: {}", port, why);
+        }
+    }
 }

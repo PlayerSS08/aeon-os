@@ -1275,6 +1275,37 @@ def t_apt(ctx):
         vm.close()
 
 
+def t_usbnet(ctx):
+    """A USB network function (QEMU's usb-net, RNDIS like a phone's USB tethering): DHCP and a download through it."""
+    import functools, http.server, threading
+    r = ctx.r
+    root = os.path.join(ctx.work, "www2")
+    os.makedirs(root)
+    with open(os.path.join(root, "hi.txt"), "w") as f:
+        f.write("hello over usb tethering")
+    h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+    h.log_message = lambda *a, **k: None
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", 0), h)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-usbnet", cfg="nomenu" + chr(10)), ctx.work, name="usbnet", mem=512,
+            extra=["-netdev", "user,id=n0", "-device", "qemu-xhci,id=xhci", "-device", "usb-net,netdev=n0,bus=xhci.0"])
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        t = vm.text()
+        r.check("the xHCI driver finds the USB network function", "USB network function found" in t, t[-1200:])
+        r.check("it is brought up with a MAC address", "USB network ready" in t, t[-1200:])
+        vm.type("dhcp")
+        vm.keys("ret")
+        r.check("DHCP works over USB networking", vm.wait_for("DHCP lease acquired successfully", 40, "serial"), vm.serial_text()[-700:])
+        vm.type(f"curl http://10.0.2.2:{port}/hi.txt")
+        vm.keys("ret")
+        r.check("a page is fetched over USB networking", vm.wait_for("hello over usb tethering", 40, "serial"), vm.serial_text()[-600:])
+    finally:
+        vm.close()
+        srv.shutdown()
+
+
 def t_usb(ctx):
     """The xHCI USB controller: started when present, reported cleanly when absent."""
     r = ctx.r
@@ -2132,7 +2163,7 @@ def t_pendrive(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "apt": t_apt, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "usbnet": t_usbnet, "apt": t_apt, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }
