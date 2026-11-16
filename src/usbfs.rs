@@ -232,6 +232,94 @@ mod tests {
         img
     }
 
+    /// A 2 TB GPT disk laid out like the Seagate Portable in the OMEN test: a 16 MB reserved partition, a huge
+    /// NTFS partition with the owner's data, and the 100 GB AEON FAT32 volume far up the disk (sector 3.7 billion,
+    /// still inside the 32-bit sector numbers that READ(10)/WRITE(10) can address). Only the AEON volume has
+    /// storage behind it; every write anywhere else is recorded so the test can insist there are none.
+    struct SeagateLike {
+        vol: Vec<u8>,
+        writes_outside: Vec<u64>,
+    }
+
+    const SEAGATE_SECTORS: u64 = 3_907_029_168;
+    const NTFS_START: u64 = 32_768;
+    const AEON_START: u64 = 3_697_315_840;
+
+    impl SeagateLike {
+        fn vol_sectors(&self) -> u64 {
+            (self.vol.len() / SECTOR_SIZE) as u64
+        }
+        fn fill(&self, s: u64, out: &mut [u8]) {
+            out.fill(0);
+            if s == 0 {
+                out[446 + 4] = 0xEE; // protective MBR
+                out[446 + 8..446 + 12].copy_from_slice(&1u32.to_le_bytes());
+                out[510] = 0x55;
+                out[511] = 0xAA;
+            } else if s == 1 {
+                out[..8].copy_from_slice(b"EFI PART");
+                out[72..80].copy_from_slice(&2u64.to_le_bytes()); // entries at LBA 2
+                out[80..84].copy_from_slice(&128u32.to_le_bytes());
+                out[84..88].copy_from_slice(&128u32.to_le_bytes());
+            } else if s == 2 {
+                // Windows' layout: reserved (MSR), then NTFS data, then AEON. Entries are 128 bytes each.
+                for (i, (first, last)) in [(34u64, 32_767u64), (NTFS_START, AEON_START - 1), (AEON_START, AEON_START + self.vol_sectors() - 1)].iter().enumerate() {
+                    let e = &mut out[i * 128..(i + 1) * 128];
+                    e[..16].copy_from_slice(&[0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7]);
+                    e[16..32].copy_from_slice(&[i as u8 + 1; 16]);
+                    e[32..40].copy_from_slice(&first.to_le_bytes());
+                    e[40..48].copy_from_slice(&last.to_le_bytes());
+                }
+            } else if s == NTFS_START {
+                out[3..11].copy_from_slice(b"NTFS    ");
+                out[510] = 0x55;
+                out[511] = 0xAA;
+            } else if (AEON_START..AEON_START + self.vol_sectors()).contains(&s) {
+                let o = (s - AEON_START) as usize * SECTOR_SIZE;
+                out.copy_from_slice(&self.vol[o..o + SECTOR_SIZE]);
+            }
+        }
+    }
+
+    impl crate::block::BlockDev for SeagateLike {
+        fn sectors(&self) -> u64 {
+            SEAGATE_SECTORS
+        }
+        fn read(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), crate::block::BlockError> {
+            for (i, chunk) in buf.chunks_mut(SECTOR_SIZE).enumerate() {
+                self.fill(lba + i as u64, chunk);
+            }
+            Ok(())
+        }
+    }
+
+    impl crate::block::BlockWrite for SeagateLike {
+        fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), crate::block::BlockError> {
+            for (i, chunk) in buf.chunks(SECTOR_SIZE).enumerate() {
+                let s = lba + i as u64;
+                if (AEON_START..AEON_START + self.vol_sectors()).contains(&s) {
+                    let o = (s - AEON_START) as usize * SECTOR_SIZE;
+                    self.vol[o..o + SECTOR_SIZE].copy_from_slice(chunk);
+                } else {
+                    self.writes_outside.push(s);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_report_goes_to_the_aeon_partition_of_a_big_gpt_disk_and_nowhere_else() {
+        let mut dev = SeagateLike { vol: make_test_vol(AEON), writes_outside: Vec::new() };
+        let text = b"Aeon report: the boot log, the PCI list and the network registers".repeat(40);
+        write_file(&mut dev, "REPORT.TXT", &text, true).unwrap();
+        assert_eq!(read_file(&mut dev, "REPORT.TXT", 1 << 20).unwrap(), text);
+        // Replacing it with a second report works too (the stick is used again and again).
+        write_file(&mut dev, "REPORT.TXT", b"second", true).unwrap();
+        assert_eq!(read_file(&mut dev, "REPORT.TXT", 1 << 20).unwrap(), b"second");
+        assert!(dev.writes_outside.is_empty(), "wrote outside the AEON partition: {:?}", dev.writes_outside);
+    }
+
     #[test]
     fn path_helpers() {
         assert!(is_usb("/usb"));

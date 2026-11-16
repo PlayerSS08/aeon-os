@@ -446,12 +446,19 @@ fn cmd_touchpad(rest: &str) {
 }
 
 fn cmd_usb() {
+    out!("{}", usb_text());
+}
+
+/// The USB controller and what it found, as text (for `usb` and for `report`).
+fn usb_text() -> String {
+    use core::fmt::Write;
+    let mut o = String::new();
     let Some(s) = crate::xhci::summary() else {
-        out!("no xHCI USB controller in use (a PS/2 keyboard works without one; `pci` lists the hardware)\n");
-        return;
+        return String::from("no xHCI USB controller in use (a PS/2 keyboard works without one; `pci` lists the hardware)\n");
     };
-    out!(
-        "xHCI {:04x}:{:04x} version {:x}.{:02x}, {}: {} ports, {} slots, {} scratchpad pages\n",
+    let _ = writeln!(
+        o,
+        "xHCI {:04x}:{:04x} version {:x}.{:02x}, {}: {} ports, {} slots, {} scratchpad pages",
         s.vendor,
         s.device,
         s.version >> 8,
@@ -461,25 +468,29 @@ fn cmd_usb() {
         s.slots,
         s.scratchpads
     );
-    out!("firmware handoff: {}\n", s.handoff);
+    let _ = writeln!(o, "firmware handoff: {}", s.handoff);
     match s.keyboard_port {
-        Some(p) => out!("USB keyboard: in use on port {}\n", p),
-        None => out!("USB keyboard: none set up\n"),
+        Some(p) => { let _ = writeln!(o, "USB keyboard: in use on port {p}"); }
+        None => o.push_str("USB keyboard: none set up\n"),
     }
     match s.mouse_port {
-        Some(p) => out!("USB mouse: in use on port {}\n", p),
-        None => out!("USB mouse: none set up\n"),
+        Some(p) => { let _ = writeln!(o, "USB mouse: in use on port {p}"); }
+        None => o.push_str("USB mouse: none set up\n"),
     }
     match s.storage_port {
-        Some(p) => out!("USB storage: in use on port {}\n", p),
-        None => out!("USB storage: none set up\n"),
+        Some(p) => { let _ = writeln!(o, "USB storage: in use on port {p}"); }
+        None => o.push_str("USB storage: none set up (no drive was recognised: see the xhci lines of the boot log)\n"),
+    }
+    if let Some(d) = crate::xhci::disk_info() {
+        let _ = writeln!(o, "USB drive: {} {} , {} sectors of 512 bytes ({} GB)", core::str::from_utf8(&d.vendor).unwrap_or("?").trim(), core::str::from_utf8(&d.product).unwrap_or("?").trim(), d.sectors, d.sectors / 2_000_000);
     }
     let mut connected = 0;
     crate::xhci::for_each_port(|n, portsc| {
         if portsc & crate::xhcireg::PORT_CONNECTED != 0 {
             connected += 1;
-            out!(
-                "port {:>2}: device connected, {}, speed {}\n",
+            let _ = writeln!(
+                o,
+                "port {:>2}: device connected, {}, speed {}",
                 n,
                 if portsc & crate::xhcireg::PORT_ENABLED != 0 { "enabled" } else { "not enabled yet" },
                 crate::xhcireg::speed_name(crate::xhcireg::port_speed(portsc))
@@ -487,8 +498,9 @@ fn cmd_usb() {
         }
     });
     if connected == 0 {
-        out!("no device connected to any port\n");
+        o.push_str("no device connected to any port\n");
     }
+    o
 }
 
 fn cmd_ip(rest: &str) {
@@ -712,6 +724,8 @@ fn cmd_report() {
     r.push_str(&crate::netdev::diagnostics());
     let _ = writeln!(r, "\n== wifi ==");
     r.push_str(&wifi_diag_text());
+    let _ = writeln!(r, "\n== usb ==");
+    r.push_str(&usb_text());
     let _ = writeln!(r, "\n== touchpad ==");
     for l in crate::touchpad_hw::report() {
         let _ = writeln!(r, "{l}");
@@ -728,8 +742,12 @@ fn cmd_report() {
     match save_bytes("/usb/REPORT.TXT", r.as_bytes()) {
         Ok(where_) => out!("report written: {} ({} bytes). Shut down, plug the stick into another PC and open REPORT.TXT.\n", where_, r.len()),
         Err(e) => {
-            out!("could not write to the USB stick ({e}); showing the report here instead:\n");
-            out!("{}", r);
+            out!("REPORT NOT SAVED: {e}\n");
+            out!("--- USB state (this is the reason, take a photo of this screen) ---\n{}", usb_text());
+            for l in String::from_utf8_lossy(&raw).lines().filter(|l| l.contains("xhci") || l.contains("usb")) {
+                out!("{}\n", l);
+            }
+            out!("--- the full report follows ---\n{}", r);
         }
     }
 }
