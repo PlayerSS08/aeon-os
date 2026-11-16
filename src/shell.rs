@@ -445,8 +445,87 @@ fn cmd_touchpad(rest: &str) {
     }
 }
 
-fn cmd_usb() {
+fn cmd_usb(rest: &str) {
+    if rest.trim() == "rescan" {
+        crate::xhci::rescan();
+        out!("looked at the USB ports again\n");
+    }
     out!("{}", usb_text());
+}
+
+// ---- keeping files across reboots ------------------------------------------------------------------------------
+
+/// Where the RAM filesystem is saved on the AEON USB volume.
+const SNAPSHOT: &str = "/usb/AEONFS.BIN";
+static SAVED_FP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static UNSAVED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn tree_fingerprint() -> u64 {
+    crate::persist::fingerprint(fs().entries())
+}
+
+/// Brings back the files an earlier session saved on the USB stick (silent when there is nothing saved).
+fn persist_restore() {
+    use core::sync::atomic::Ordering::Relaxed;
+    if !crate::xhci::has_storage() {
+        crate::xhci::rescan();
+    }
+    if let Ok(bytes) = crate::usbfs::hw_read(crate::usbfs::rel_path(SNAPSHOT), crate::persist::MAX_TOTAL + 4096) {
+        match crate::persist::decode(&bytes) {
+            Ok(entries) => {
+                let n = entries.len();
+                for e in entries {
+                    // Parents come before children; an item that cannot be recreated is skipped, not fatal.
+                    let _ = match &e.data {
+                        None => fs().mkdir(&e.path),
+                        Some(d) => fs().write(&e.path, d),
+                    };
+                }
+                out!("restored {} saved item(s) from the USB stick\n", n);
+            }
+            Err(e) => out!("the saved files on the USB stick were not restored: {}\n", e),
+        }
+    }
+    SAVED_FP.store(tree_fingerprint(), Relaxed);
+}
+
+/// Writes the RAM filesystem to the USB stick. Automatic after any command that changed a file (`force` false);
+/// the `save` command and shutdown force it. Without a writable stick the files stay in memory, and it says so once.
+fn persist_save(force: bool) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let fp = tree_fingerprint();
+    if !force && fp == SAVED_FP.load(Relaxed) {
+        return;
+    }
+    let entries: Vec<crate::persist::Entry> = fs().entries().map(|(p, d)| crate::persist::Entry { path: String::from(p), data: d.map(<[u8]>::to_vec) }).collect();
+    let bytes = match crate::persist::encode(&entries) {
+        Ok(b) => b,
+        Err(e) => {
+            out!("files not saved: {}\n", e);
+            return;
+        }
+    };
+    if !crate::xhci::has_storage() {
+        crate::xhci::rescan();
+    }
+    match save_bytes(SNAPSHOT, &bytes) {
+        Ok(_) => {
+            SAVED_FP.store(fp, Relaxed);
+            UNSAVED.store(false, Relaxed);
+            if force {
+                out!("saved {} item(s), {} bytes, to the USB stick; they come back at the next boot\n", entries.len(), bytes.len());
+            }
+        }
+        Err(e) => {
+            // Remember the state so every later command does not retry (and stall) again.
+            SAVED_FP.store(fp, Relaxed);
+            UNSAVED.store(true, Relaxed);
+            if force || !WARNED.swap(true, Relaxed) {
+                out!("your files are only in memory and will be lost at power-off: {}\n  (`usb` shows why, `usb rescan` looks again, `save` tries again)\n", e);
+            }
+        }
+    }
 }
 
 /// The USB controller and what it found, as text (for `usb` and for `report`).
@@ -2841,7 +2920,8 @@ fn run(line: &str, hist: &History) {
         "race" => cmd_race(rest),
         "alloc" => cmd_alloc(rest),
         "pci" => cmd_pci(),
-        "usb" => cmd_usb(),
+        "usb" => cmd_usb(rest),
+        "save" => persist_save(true),
         "mouse" => cmd_mouse(),
         "touchpad" => cmd_touchpad(rest),
         "speedtest" => cmd_speedtest(rest),
@@ -2914,8 +2994,14 @@ fn run(line: &str, hist: &History) {
             Err(_) => out!("sync failed\n"),
         },
         "panic" => panic!("panic requested from the shell"),
-        "reboot" => power::reboot(),
-        "shutdown" => power::shutdown(),
+        "reboot" => {
+            persist_save(UNSAVED.load(core::sync::atomic::Ordering::Relaxed));
+            power::reboot()
+        }
+        "shutdown" => {
+            persist_save(UNSAVED.load(core::sync::atomic::Ordering::Relaxed));
+            power::shutdown()
+        }
         other => match cmdhelp::suggest(other) {
             Some(near) => out!("unknown command '{}'. Did you mean `{}`? (`help` lists everything)\n", other, near),
             None => out!("unknown command '{}', try `help`\n", other),
@@ -3177,6 +3263,7 @@ pub extern "C" fn shell_task(_: usize) {
         let _ = f.write("/etc/os-release", b"NAME=Aeon OS\nVERSION=0.10.0\nID=aeon\nPRETTY_NAME=\"Aeon OS 0.10.0-uefi\"\n");
     }
 
+    persist_restore();
     out!("\nAeon shell. Type `help`.\n{}", prompt());
     loop {
         let mut idle = true;
@@ -3288,6 +3375,8 @@ pub extern "C" fn shell_task(_: usize) {
                         }
                     } else {
                         run(line, &hist);
+                        // Any command that changed a file is saved to the USB stick right away.
+                        persist_save(false);
                         out!("{}", prompt());
                     }
                 }

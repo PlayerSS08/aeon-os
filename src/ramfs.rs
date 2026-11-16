@@ -217,6 +217,11 @@ impl RamFs {
         }
     }
 
+    /// Every folder (`None`) and file (its content) in path order, parents before children.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, Option<&[u8]>)> + '_ {
+        self.nodes.iter().map(|n| (n.path.as_str(), n.data.as_deref()))
+    }
+
     /// The content of a file (`None` for a folder or a missing path).
     pub fn read(&self, path: &str) -> Option<&[u8]> {
         self.find(path).ok().and_then(|i| self.nodes[i].data.as_deref())

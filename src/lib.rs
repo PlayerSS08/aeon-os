@@ -56,6 +56,7 @@ pub mod logfmt;
 pub mod memmap;
 pub mod netdev;
 pub mod netstack;
+pub mod persist;
 pub mod pci;
 pub mod pixel;
 pub mod pkg;

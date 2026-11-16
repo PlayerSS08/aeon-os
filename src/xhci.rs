@@ -434,6 +434,31 @@ impl Xhci {
         Ok(event)
     }
 
+    /// Resetting the controller drops every link. USB 3 devices (an external hard disk, say) need a few hundred
+    /// milliseconds to train their link again and USB 2 devices are debounced, so scanning the ports right away
+    /// finds nothing and the drive is never set up. This waits until the set of connected ports has stopped
+    /// changing for 300 ms (at most 2 s; at most 1 s if nothing has shown up at all).
+    fn settle_ports(&self) {
+        let connected = |x: &Self| (1..=x.caps.max_ports).filter(|&p| rd32(x.port_reg(p)) & reg::PORT_CONNECTED != 0).fold(0u128, |m, p| m | 1u128 << (p - 1).min(127));
+        let t0 = crate::log::uptime_us();
+        let mut last = connected(self);
+        let mut changed_at = t0;
+        loop {
+            wait_until(20, || false);
+            let now = crate::log::uptime_us();
+            let m = connected(self);
+            if m != last {
+                last = m;
+                changed_at = now;
+            }
+            let total = now.saturating_sub(t0);
+            if (m != 0 && now.saturating_sub(changed_at) >= 300_000) || (m == 0 && total >= 1_000_000) || total >= 2_000_000 {
+                info!("xhci", "ports settled after {} ms, {} device(s) connected", total / 1000, m.count_ones());
+                return;
+            }
+        }
+    }
+
     /// Resets a connected port and returns its status once the device is enabled.
     fn reset_port(&self, port: u8) -> Option<u32> {
         let at = self.port_reg(port);
@@ -1200,6 +1225,7 @@ pub fn init() {
                 x.caps.scratchpads,
                 x.handoff
             );
+            x.settle_ports();
             for port in 1..=x.caps.max_ports {
                 let portsc = rd32(x.port_reg(port));
                 if portsc & reg::PORT_CONNECTED != 0 {
