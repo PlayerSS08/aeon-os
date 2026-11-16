@@ -1090,6 +1090,45 @@ def t_tools(ctx):
         vm.close()
 
 
+def t_mouse(ctx):
+    """A USB boot mouse through xHCI: the driver starts it, the pointer moves and is painted, buttons show."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-mouse", cfg="nomenu" + chr(10)), ctx.work, name="mouse",
+            extra=["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-mouse,bus=xhci.0"])
+    try:
+        r.check("shell prompt with a USB mouse", vm.wait_for("aeon> ", 150, "serial"))
+        t = vm.text()
+        r.check("boot log says the USB mouse is ready", "USB mouse ready" in t, t[-800:])
+        vm.type("mouse")
+        vm.keys("ret")
+        r.check("`mouse` says it is ready before any movement", vm.wait_for("USB mouse ready; move it", 30, "serial"), vm.serial_text()[-400:])
+        vm.cmd("input-send-event", events=[{"type": "rel", "data": {"axis": "x", "value": 20}}, {"type": "rel", "data": {"axis": "y", "value": 10}}])
+        time.sleep(1.0)
+        vm.type("mouse")
+        vm.keys("ret")
+        r.check("`mouse` reports a pointer position", vm.wait_for("pointer at ", 30, "serial"), vm.serial_text()[-400:])
+        import re as _re
+        first = _re.findall(r"pointer at (\d+), (\d+)", vm.serial_text())
+        vm.cmd("input-send-event", events=[{"type": "rel", "data": {"axis": "x", "value": 20}}, {"type": "btn", "data": {"button": "left", "down": True}}])
+        time.sleep(1.0)
+        vm.type("mouse")
+        vm.keys("ret")
+        r.check("the second `mouse` shows the left button down", vm.wait_for("left down", 30, "serial"), vm.serial_text()[-400:])
+        pos = _re.findall(r"pointer at (\d+), (\d+)", vm.serial_text())
+        r.check("moving right increased x", len(pos) >= 2 and int(pos[-1][0]) > int(pos[0][0]), str(pos))
+        r.check("moving down put y below the centre", int(first[0][1]) > 0, str(first))
+        # The pointer is really painted: its tip is an outline pixel (black) and the pixel inside it is white.
+        w, h, pix = vm.shot(os.path.join(ctx.shots, "mouse-pointer.png"))
+        px, py = int(pos[-1][0]), int(pos[-1][1])
+        def at(x, y):
+            i = (y * w + x) * 3
+            return pix[i], pix[i + 1], pix[i + 2]
+        r.check("the pointer tip is painted as an outline", at(px, py) == (0, 0, 0), str(at(px, py)))
+        r.check("the pointer body is painted white", at(px + 1, py + 2) == (255, 255, 255), str(at(px + 1, py + 2)))
+    finally:
+        vm.close()
+
+
 def t_usb(ctx):
     """The xHCI USB controller: started when present, reported cleanly when absent."""
     r = ctx.r
@@ -1947,7 +1986,7 @@ def t_pendrive(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

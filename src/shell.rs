@@ -395,6 +395,22 @@ fn cmd_pci() {
 }
 
 /// `usb`: the xHCI controller and what is plugged into its ports.
+fn cmd_mouse() {
+    let has_mouse = crate::xhci::summary().is_some_and(|s| s.mouse_port.is_some());
+    match log::with_console(|c| c.pointer_info()).flatten() {
+        Some((x, y, b)) => out!(
+            "pointer at {}, {}; buttons: left {} right {} middle {}; the wheel scrolls the log\n",
+            x,
+            y,
+            if b & 1 != 0 { "down" } else { "up" },
+            if b & 2 != 0 { "down" } else { "up" },
+            if b & 4 != 0 { "down" } else { "up" }
+        ),
+        None if has_mouse => out!("USB mouse ready; move it to show the pointer\n"),
+        None => out!("no mouse: plug a USB boot-protocol mouse into a USB-A port (touchpads on I2C are not supported yet)\n"),
+    }
+}
+
 fn cmd_usb() {
     let Some(s) = crate::xhci::summary() else {
         out!("no xHCI USB controller in use (a PS/2 keyboard works without one; `pci` lists the hardware)\n");
@@ -415,6 +431,10 @@ fn cmd_usb() {
     match s.keyboard_port {
         Some(p) => out!("USB keyboard: in use on port {}\n", p),
         None => out!("USB keyboard: none set up\n"),
+    }
+    match s.mouse_port {
+        Some(p) => out!("USB mouse: in use on port {}\n", p),
+        None => out!("USB mouse: none set up\n"),
     }
     match s.storage_port {
         Some(p) => out!("USB storage: in use on port {}\n", p),
@@ -2627,6 +2647,7 @@ fn run(line: &str, hist: &History) {
         "alloc" => cmd_alloc(rest),
         "pci" => cmd_pci(),
         "usb" => cmd_usb(),
+        "mouse" => cmd_mouse(),
         "disks" => cmd_disks(),
         "disksched" => cmd_disksched(rest),
         "dls" => cmd_dls(rest),
@@ -2946,6 +2967,19 @@ pub extern "C" fn shell_task(_: usize) {
     out!("\nAeon shell. Type `help`.\n{}", prompt());
     loop {
         let mut idle = true;
+        // A USB mouse moves the pointer; the wheel scrolls the log (three lines a notch, up = older lines).
+        while let Some(m) = crate::xhci::poll_mouse() {
+            idle = false;
+            log::with_console(|c| {
+                c.pointer_motion(m.dx, m.dy, m.buttons);
+                let lines = (m.wheel.unsigned_abs() as usize).saturating_mul(3);
+                if m.wheel > 0 {
+                    c.scroll_up(lines);
+                } else if m.wheel < 0 {
+                    c.scroll_down(lines);
+                }
+            });
+        }
         // Keys come from the PS/2 controller and from a USB keyboard (xHCI driver), whichever has one.
         loop {
             let key = if let Some(code) = ps2_byte() {

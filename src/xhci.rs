@@ -20,6 +20,7 @@ use crate::bcache::BlockCache;
 use crate::block::{check_request, BlockDev, BlockError, BlockWrite, SECTOR_SIZE};
 use crate::global::Global;
 use crate::hidkbd::HidKeyboard;
+use crate::pointer::{self, MouseMotion};
 use crate::keymap::Key;
 use crate::mmio::{dma_frames, dma_page, rd32, wait_until, wr32, wr64, PAGE_BYTES};
 use crate::usbdesc;
@@ -102,6 +103,19 @@ struct Keyboard {
     report: u64,
     hid: HidKeyboard,
     queue: KeyQueue,
+    errors: u8,
+}
+
+struct Mouse {
+    port: u8,
+    slot: u8,
+    dci: u8,
+    ring: ProducerRing<'static>,
+    /// Physical address of the report buffer.
+    report: u64,
+    /// Movement since the last `poll_mouse`.
+    motion: MouseMotion,
+    dirty: bool,
     errors: u8,
 }
 
@@ -236,6 +250,7 @@ pub struct Xhci {
     events: EventRing,
     event_mem: u64,
     keyboard: Option<Keyboard>,
+    mouse: Option<Mouse>,
     storage: Option<Storage>,
 }
 
@@ -339,7 +354,7 @@ fn bring_up(d: &pci::Device) -> Result<Xhci, &'static str> {
     if rd32(op + 4) & (1 << 2) != 0 {
         return Err("host system error after start");
     }
-    Ok(Xhci { vendor: d.header.vendor, device: d.header.device, caps, slots, op, db, rt, dcbaa, handoff, cmd, events, event_mem, keyboard: None, storage: None })
+    Ok(Xhci { vendor: d.header.vendor, device: d.header.device, caps, slots, op, db, rt, dcbaa, handoff, cmd, events, event_mem, keyboard: None, mouse: None, storage: None })
 }
 
 impl Xhci {
@@ -369,7 +384,7 @@ impl Xhci {
                     return Some(event);
                 }
                 if event.kind() == TRB_TRANSFER_EVENT {
-                    self.on_keyboard_event(&event);
+                    self.on_hid_event(&event);
                 }
             }
             if arch::rdtsc().wrapping_sub(t0) >= ticks {
@@ -443,7 +458,51 @@ impl Xhci {
         }
     }
 
-    /// Brings up the device on `port`; when it is a boot keyboard, starts reading its reports.
+    /// Switches a boot-protocol HID interface to the boot protocol, registers its interrupt IN endpoint with
+    /// the controller and queues the first report read. Returns the endpoint's DCI, its ring and the physical
+    /// address of the 8-byte report buffer.
+    fn start_boot_hid(
+        &mut self,
+        dev: &mut Device,
+        slot: u8,
+        speed: u8,
+        out_ctx: u64,
+        in_ctx: u64,
+        hid: &usbdesc::BootKeyboard,
+    ) -> Result<(u8, ProducerRing<'static>, u64), &'static str> {
+        let ac64 = self.caps.ac64;
+        let csz = self.caps.context_size();
+        // Configuration, boot protocol, and no idle repeats from the device.
+        self.control(dev, [0x00, 9, hid.config, 0, 0, 0, 0, 0], None)?;
+        self.control(dev, [0x21, 0x0B, 0, 0, hid.interface, 0, 0, 0], None)?;
+        let _ = self.control(dev, [0x21, 0x0A, 0, 0, hid.interface, 0, 0, 0], None); // stalls on some devices: fine
+
+        // Tell the controller about the interrupt IN endpoint.
+        let dci = xhcictx::dci_in(hid.endpoint);
+        let (ring_phys, mut ring) = new_ring(ac64)?;
+        // SAFETY: `in_ctx` and `out_ctx` are pages from `dma_page`; no command is running.
+        let (ctx, out) = unsafe { (page_bytes(in_ctx), page_bytes(out_ctx)) };
+        ctx.fill(0);
+        let ep = Endpoint {
+            dci,
+            ep_type: xhcictx::EP_INTERRUPT_IN,
+            max_packet: hid.max_packet,
+            interval: reg::interrupt_interval_field(speed, hid.interval),
+            dequeue: ring_phys,
+            avg_trb_len: 8,
+        };
+        if !(xhcictx::input_control(ctx, 0, 1 | 1 << dci) && xhcictx::copy_slot_from_output(out, ctx, csz) && xhcictx::set_slot_entries(ctx, csz, dci) && xhcictx::endpoint(ctx, csz, &ep)) {
+            return Err("input context too small");
+        }
+        self.command(Trb::configure_endpoint(in_ctx, slot))?;
+
+        let report = dma_page(ac64)?;
+        ring.enqueue(Trb::normal(report, 8)).ok_or("interrupt ring full")?;
+        wr32(self.db + 4 * u64::from(slot), u32::from(dci));
+        Ok((dci, ring, report))
+    }
+
+    /// Brings up the device on `port`; when it is a boot keyboard or mouse, starts reading its reports.
     fn setup_device(&mut self, port: u8) -> Result<(), &'static str> {
         let portsc = self.reset_port(port).ok_or("port did not enable after reset")?;
         let speed = reg::port_speed(portsc);
@@ -497,36 +556,18 @@ impl Xhci {
                 return Ok(());
             }
 
-            // Configuration, boot protocol, and no idle repeats from the device.
-            self.control(&mut dev, [0x00, 9, kb.config, 0, 0, 0, 0, 0], None)?;
-            self.control(&mut dev, [0x21, 0x0B, 0, 0, kb.interface, 0, 0, 0], None)?;
-            let _ = self.control(&mut dev, [0x21, 0x0A, 0, 0, kb.interface, 0, 0, 0], None); // stalls on some keyboards: fine
-
-            // Tell the controller about the interrupt IN endpoint.
-            let dci = xhcictx::dci_in(kb.endpoint);
-            let (ring_phys, ring) = new_ring(ac64)?;
-            // SAFETY: `in_ctx` and `out_ctx` are pages from `dma_page`; no command is running.
-            let (ctx, out) = unsafe { (page_bytes(in_ctx), page_bytes(out_ctx)) };
-            ctx.fill(0);
-            let ep = Endpoint {
-                dci,
-                ep_type: xhcictx::EP_INTERRUPT_IN,
-                max_packet: kb.max_packet,
-                interval: reg::interrupt_interval_field(speed, kb.interval),
-                dequeue: ring_phys,
-                avg_trb_len: 8,
-            };
-            if !(xhcictx::input_control(ctx, 0, 1 | 1 << dci) && xhcictx::copy_slot_from_output(out, ctx, csz) && xhcictx::set_slot_entries(ctx, csz, dci) && xhcictx::endpoint(ctx, csz, &ep)) {
-                return Err("input context too small");
-            }
-            self.command(Trb::configure_endpoint(in_ctx, slot))?;
-
-            let report = dma_page(ac64)?;
-            let mut keyboard = Keyboard { port, slot, dci, ring, report, hid: HidKeyboard::new(), queue: KeyQueue::new(), errors: 0 };
-            keyboard.ring.enqueue(Trb::normal(report, 8)).ok_or("interrupt ring full")?;
-            wr32(self.db + 4 * u64::from(slot), u32::from(dci));
-            self.keyboard = Some(keyboard);
+            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, out_ctx, in_ctx, &kb)?;
+            self.keyboard = Some(Keyboard { port, slot, dci, ring, report, hid: HidKeyboard::new(), queue: KeyQueue::new(), errors: 0 });
             info!("xhci", "port {}: USB keyboard ready (slot {}, speed {})", port, slot, reg::speed_name(speed));
+            Ok(())
+        } else if let Some(mo) = usbdesc::find_boot_mouse(desc_slice) {
+            if self.mouse.is_some() {
+                info!("xhci", "port {}: a second mouse is ignored", port);
+                return Ok(());
+            }
+            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, out_ctx, in_ctx, &mo)?;
+            self.mouse = Some(Mouse { port, slot, dci, ring, report, motion: MouseMotion::default(), dirty: false, errors: 0 });
+            info!("xhci", "port {}: USB mouse ready (slot {}, speed {})", port, slot, reg::speed_name(speed));
             Ok(())
         } else if let Some(ms) = usbdesc::find_mass_storage(desc_slice) {
             if self.storage.is_some() {
@@ -864,7 +905,7 @@ impl Xhci {
     /// Looks at every port with something connected until a keyboard and storage are set up.
     fn enumerate(&mut self) {
         for port in 1..=self.caps.max_ports {
-            if self.keyboard.is_some() && self.storage.is_some() {
+            if self.keyboard.is_some() && self.storage.is_some() && self.mouse.is_some() {
                 break;
             }
             if rd32(self.port_reg(port)) & reg::PORT_CONNECTED == 0 {
@@ -873,6 +914,36 @@ impl Xhci {
             if let Err(why) = self.setup_device(port) {
                 warn!("xhci", "port {}: device not used: {}", port, why);
             }
+        }
+    }
+
+    /// Hands a transfer event to whichever HID device it belongs to.
+    fn on_hid_event(&mut self, event: &Trb) {
+        self.on_keyboard_event(event);
+        self.on_mouse_event(event);
+    }
+
+    /// A transfer event for the mouse: add its movement to the pending motion, ask for the next report.
+    fn on_mouse_event(&mut self, event: &Trb) {
+        let db = self.db;
+        let Some(m) = self.mouse.as_mut() else { return };
+        if event.slot_id() != m.slot || event.endpoint_id() != m.dci {
+            return;
+        }
+        m.ring.retire();
+        match event.completion_code() {
+            CC_SUCCESS | CC_SHORT_PACKET => {
+                // SAFETY: `report` is a page from `dma_page`; the transfer that wrote it has completed.
+                let report = unsafe { read_volatile(m.report as *const [u8; 8]) };
+                if let Some(r) = pointer::parse_report(&report) {
+                    m.motion.add(r);
+                    m.dirty = true;
+                }
+            }
+            _ => m.errors = m.errors.saturating_add(1),
+        }
+        if m.errors < 8 && m.ring.enqueue(Trb::normal(m.report, 8)).is_some() {
+            wr32(db + 4 * u64::from(m.slot), u32::from(m.dci));
         }
     }
 
@@ -948,10 +1019,27 @@ pub fn poll_key() -> Option<Key> {
     let x = unsafe { XHCI.get() }.as_mut()?;
     while let Some(event) = x.try_event() {
         if event.kind() == TRB_TRANSFER_EVENT {
-            x.on_keyboard_event(&event);
+            x.on_hid_event(&event);
         }
     }
     x.keyboard.as_mut()?.queue.pop()
+}
+
+/// Mouse movement and buttons since the last call, or `None` if nothing happened (or no mouse is set up).
+pub fn poll_mouse() -> Option<MouseMotion> {
+    // SAFETY: rule A: only the shell task and boot code reach XHCI.
+    let x = unsafe { XHCI.get() }.as_mut()?;
+    while let Some(event) = x.try_event() {
+        if event.kind() == TRB_TRANSFER_EVENT {
+            x.on_hid_event(&event);
+        }
+    }
+    let m = x.mouse.as_mut()?;
+    if !m.dirty {
+        return None;
+    }
+    m.dirty = false;
+    Some(core::mem::take(&mut m.motion))
 }
 
 /// What the `usb` command shows about the controller.
@@ -966,6 +1054,8 @@ pub struct Summary {
     pub running: bool,
     /// Port of the USB keyboard in use, if any.
     pub keyboard_port: Option<u8>,
+    /// Port of the USB mouse in use, if any.
+    pub mouse_port: Option<u8>,
     /// Port of the USB mass storage device in use, if any.
     pub storage_port: Option<u8>,
 }
@@ -983,6 +1073,7 @@ pub fn summary() -> Option<Summary> {
         handoff: x.handoff,
         running: rd32(x.op + 4) & 1 == 0,
         keyboard_port: x.keyboard.as_ref().map(|k| k.port),
+        mouse_port: x.mouse.as_ref().map(|m| m.port),
         storage_port: x.storage.as_ref().map(|s| s.port),
     })
 }

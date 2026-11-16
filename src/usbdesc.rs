@@ -37,6 +37,7 @@ const DESC_ENDPOINT: u8 = 5;
 const CLASS_HID: u8 = 3;
 const SUBCLASS_BOOT: u8 = 1;
 const PROTOCOL_KEYBOARD: u8 = 1;
+const PROTOCOL_MOUSE: u8 = 2;
 
 pub const CLASS_MASS_STORAGE: u8 = 8;
 pub const SUBCLASS_SCSI: u8 = 6;
@@ -46,6 +47,15 @@ pub const PROTOCOL_BOT: u8 = 0x50;
 /// the first interface that is a boot keyboard together with its interrupt IN endpoint.
 /// `None` when there is none, or when the chain is malformed (zero or overlong entry lengths).
 pub fn find_boot_keyboard(config_desc: &[u8]) -> Option<BootKeyboard> {
+    find_boot_hid(config_desc, PROTOCOL_KEYBOARD)
+}
+
+/// Same walk for a boot-protocol mouse (interface protocol 2).
+pub fn find_boot_mouse(config_desc: &[u8]) -> Option<BootKeyboard> {
+    find_boot_hid(config_desc, PROTOCOL_MOUSE)
+}
+
+fn find_boot_hid(config_desc: &[u8], protocol: u8) -> Option<BootKeyboard> {
     let d = config_desc;
     let mut i = 0usize;
     let mut config = 0u8;
@@ -61,7 +71,7 @@ pub fn find_boot_keyboard(config_desc: &[u8]) -> Option<BootKeyboard> {
         match kind {
             DESC_CONFIG if len >= 9 => config = e[5],
             DESC_INTERFACE if len >= 9 => {
-                let boot_keyboard = e[3] == 0 && e[5] == CLASS_HID && e[6] == SUBCLASS_BOOT && e[7] == PROTOCOL_KEYBOARD;
+                let boot_keyboard = e[3] == 0 && e[5] == CLASS_HID && e[6] == SUBCLASS_BOOT && e[7] == protocol;
                 keyboard_interface = boot_keyboard.then_some(e[2]);
             }
             DESC_ENDPOINT if len >= 7 => {
@@ -165,6 +175,24 @@ mod tests {
         0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,             // endpoint 0x02: Bulk OUT, 512 bytes
         0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,             // endpoint 0x81: Bulk IN, 512 bytes
     ];
+
+    /// A typical optical mouse: boot-protocol mouse interface, interrupt IN endpoint 1 with 4-byte reports.
+    const MOUSE: [u8; 34] = [
+        0x09, 0x02, 0x22, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00, // interface 0: HID, boot, mouse
+        0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x34, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x04, 0x00, 0x0A,
+    ];
+
+    #[test]
+    fn a_boot_mouse_is_found_and_is_not_a_keyboard() {
+        let m = find_boot_mouse(&MOUSE).unwrap();
+        assert_eq!((m.config, m.interface, m.endpoint, m.max_packet, m.interval), (1, 0, 1, 4, 10));
+        assert!(find_boot_keyboard(&MOUSE).is_none());
+        assert!(find_boot_mouse(&KEYBOARD).is_none());
+        assert!(find_boot_mouse(&FLASH_DRIVE).is_none());
+        assert!(find_boot_mouse(&MOUSE[..20]).is_none());
+    }
 
     #[test]
     fn a_boot_keyboard_is_found() {

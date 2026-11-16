@@ -277,12 +277,17 @@ impl Supplicant {
             data: RSN_WPA2_PSK_CCMP.to_vec(),
         };
         let out = sign(&ptk.kck, &reply);
-        // A retransmitted message 1 (same ANonce) refreshes its candidate; a new ANonce adds one.
-        self.cands.retain(|c| c.anonce != m.nonce);
-        if self.cands.len() == MAX_CANDIDATES {
-            self.cands.remove(0);
+        // Message 1 is unauthenticated, so a copy of the real one can be re-sent by anyone with any replay
+        // counter. A candidate that already exists therefore keeps the lowest counter it has seen: replays
+        // can never raise the floor that the real message 3 has to clear. A new ANonce adds a candidate.
+        if let Some(c) = self.cands.iter_mut().find(|c| c.anonce == m.nonce) {
+            c.replay = c.replay.min(m.replay);
+        } else {
+            if self.cands.len() == MAX_CANDIDATES {
+                self.cands.remove(0);
+            }
+            self.cands.push(Candidate { anonce: m.nonce, ptk, replay: m.replay });
         }
-        self.cands.push(Candidate { anonce: m.nonce, ptk, replay: m.replay });
         self.state = State::WaitMsg3;
         Ok(Some(out))
     }
@@ -563,6 +568,20 @@ mod tests {
         assert!(m4.is_some());
         assert_eq!(sup.state(), State::Done);
         assert_eq!(sup.gtk_rsc(), 9);
+    }
+
+    #[test]
+    fn a_replayed_copy_of_the_real_message_1_cannot_raise_the_replay_floor() {
+        let (mut sup, mut ap) = setup();
+        let m2 = sup.handle(&ap.msg1(1)).unwrap().unwrap();
+        let parsed = EapolKey::parse(&m2).unwrap();
+        ap.ptk = Some(derive_ptk(&pmk(), &AA, &SPA, &ap.anonce, &parsed.nonce));
+        // The attacker captured message 1 and sends it again with a huge replay counter.
+        let again = sup.handle(&ap.msg1(u64::MAX - 1)).unwrap().unwrap();
+        assert_eq!(EapolKey::parse(&again).unwrap().replay, u64::MAX - 1, "message 2 echoes what message 1 said");
+        // The real message 3 (replay 2) still clears the floor of 1.
+        assert!(sup.handle(&ap.msg3(2, None)).unwrap().is_some());
+        assert_eq!(sup.state(), State::Done);
     }
 
     #[test]

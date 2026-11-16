@@ -9,6 +9,7 @@ use crate::gfont::{self, Face};
 use crate::global::Global;
 use crate::logfmt::Level;
 use crate::pixel::PixelFormat;
+use crate::pointer::{self, Pointer, Texel};
 use crate::splash;
 const MAX_COLS: usize = 256;
 const MAX_ROWS: usize = 128;
@@ -110,6 +111,11 @@ pub struct Console {
     editor: bool,
     /// The cell (column, row) where the editor's cursor is painted.
     edit_cursor: Option<(usize, usize)>,
+    /// The mouse pointer, once a mouse is plugged in. It is painted over the log and removed before anything
+    /// else is drawn, so the pixels under it are always restored from `pointer_saved`.
+    pointer: Option<Pointer>,
+    pointer_saved: [u32; pointer::SPRITE_W * pointer::SPRITE_H],
+    pointer_shown_at: Option<(i32, i32)>,
 }
 
 impl Console {
@@ -163,6 +169,9 @@ impl Console {
             menu_from_splash: false,
             editor: false,
             edit_cursor: None,
+            pointer: None,
+            pointer_saved: [0; pointer::SPRITE_W * pointer::SPRITE_H],
+            pointer_shown_at: None,
         };
         c.logo_row = rows.saturating_sub(logo_rows) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
@@ -213,6 +222,7 @@ impl Console {
     }
 
     pub fn clear(&mut self) {
+        self.pointer_shown_at = None; // the fill below paints over it; nothing to restore
         let bg = self.px(BG);
         self.fill_rect(0, 0, self.width, self.height, bg);
         // SAFETY: single-threaded; no other reference to the history is live here.
@@ -567,6 +577,7 @@ impl Console {
     /// the screen width), `help` on the bottom bar and the cursor at `cursor` (row, column inside the text).
     /// The first call takes over the screen; later calls only repaint the cells that changed.
     pub fn edit_draw(&mut self, header: &str, lines: &[&[u8]], help: &str, cursor: (usize, usize)) {
+        self.pointer_erase();
         let first = !self.editor;
         if first {
             self.editor = true;
@@ -637,6 +648,8 @@ impl Console {
     /// Full-screen stop screen for an unrecoverable error. Shows only what the user needs: where it
     /// failed and what to do. No addresses or register values are printed to the screen.
     pub fn panic_screen(&mut self, lines: &[&[u8]]) {
+        self.pointer = None;
+        self.pointer_shown_at = None;
         self.splash = false;
         self.menu = false;
         let bg = self.px(PANIC_BG);
@@ -716,7 +729,8 @@ impl Console {
         }
     }
 
-    fn redraw_log(&self) {
+    fn redraw_log(&mut self) {
+        self.pointer_erase();
         let bg = self.px(BG);
         self.fill_rect(0, self.first_row * self.cell_h(), self.width, self.log_rows * self.cell_h(), bg);
         // SAFETY: single-threaded; the history is only read here and no mutable reference is live.
@@ -735,6 +749,7 @@ impl Console {
             }
         }
         self.paint_cursor(true);
+        self.pointer_paint();
     }
 
     fn newline(&mut self) {
@@ -802,18 +817,21 @@ impl Console {
             return;
         }
         let color = color_for(level);
+        self.pointer_erase();
         self.paint_cursor(false);
         for &b in bytes {
             self.put_byte(b, color);
         }
         self.paint_cursor(true);
+        self.pointer_paint();
     }
 
     /// Repaints the bottom row with `text` (clipped or padded to the screen width).
-    pub fn status(&self, text: &[u8]) {
+    pub fn status(&mut self, text: &[u8]) {
         if self.editor {
             return; // the editor's help line is on that row
         }
+        self.pointer_erase();
         let row = self.rows - 1;
         for c in 0..self.cols {
             let ch = text.get(c).copied().unwrap_or(b' ');
@@ -823,5 +841,71 @@ impl Console {
         let used = self.cols * self.cell_w();
         let bar = self.px(BAR_BG);
         self.fill_rect(used, row * self.cell_h(), self.width.saturating_sub(used), self.cell_h(), bar);
+        self.pointer_paint();
+    }
+
+    // --- mouse pointer ---------------------------------------------------------------------------------
+
+    /// Puts back the pixels the pointer covers. Anything that draws must call this first.
+    fn pointer_erase(&mut self) {
+        let Some((px, py)) = self.pointer_shown_at.take() else { return };
+        for sy in 0..pointer::SPRITE_H {
+            for sx in 0..pointer::SPRITE_W {
+                let (x, y) = (px + sx as i32, py + sy as i32);
+                if x < 0 || y < 0 {
+                    continue;
+                }
+                let saved = self.pointer_saved[sy * pointer::SPRITE_W + sx];
+                if let Some(row) = self.row_mut(x as usize, y as usize, 1) {
+                    row[0] = saved;
+                }
+            }
+        }
+    }
+
+    /// Paints the pointer at its position, remembering what is under it. Not while the splash, the menu or the
+    /// full-screen editor own the screen (the editor repaints single cells and would leave pointer fragments).
+    fn pointer_paint(&mut self) {
+        let Some(p) = self.pointer else { return };
+        if self.splash || self.menu || self.editor || self.pointer_shown_at.is_some() {
+            return;
+        }
+        let (black, white) = (self.px((0, 0, 0)), self.px((255, 255, 255)));
+        for sy in 0..pointer::SPRITE_H {
+            for sx in 0..pointer::SPRITE_W {
+                let colour = match pointer::sprite_texel(sx, sy) {
+                    Texel::Clear => continue,
+                    Texel::Outline => black,
+                    Texel::Fill => white,
+                };
+                let (x, y) = (p.x + sx as i32, p.y + sy as i32);
+                let mut old = None;
+                if let Some(row) = self.row_mut(x as usize, y as usize, 1) {
+                    old = Some(row[0]);
+                    row[0] = colour;
+                }
+                if let Some(old) = old {
+                    self.pointer_saved[sy * pointer::SPRITE_W + sx] = old;
+                }
+            }
+        }
+        self.pointer_shown_at = Some((p.x, p.y));
+    }
+
+    /// Moves the pointer by a relative mouse movement (creating it, centred, on first use) and repaints it.
+    pub fn pointer_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
+        if self.pointer.is_none() {
+            self.pointer = Some(Pointer::new(self.width, self.height));
+        }
+        self.pointer_erase();
+        if let Some(p) = self.pointer.as_mut() {
+            p.apply(dx, dy, buttons);
+        }
+        self.pointer_paint();
+    }
+
+    /// Where the pointer is and which buttons are down, once a mouse has been used.
+    pub fn pointer_info(&self) -> Option<(i32, i32, u8)> {
+        self.pointer.map(|p| (p.x, p.y, p.buttons))
     }
 }
