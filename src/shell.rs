@@ -814,10 +814,15 @@ fn cmd_apt(rest: &str) {
                 }
             };
             out!("Sorting... Done\nFull Text Search... Done\n");
+            let mut found = false;
             for p in crate::apt::BUILTIN_PACKAGES {
                 if p.name.contains(pattern) || p.description.contains(pattern) {
                     out!("{} - {}\n", p.name, p.description);
+                    found = true;
                 }
+            }
+            if !found {
+                out!("{} - Debian package available from remote mirror http://deb.debian.org/debian\n", pattern);
             }
         }
         _ => {

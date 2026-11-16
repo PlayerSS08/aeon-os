@@ -48,12 +48,16 @@ const PALETTE: [(u8, u8, u8); 5] = [
 const BG: (u8, u8, u8) = (0, 0, 0);
 const BAR_BG: (u8, u8, u8) = (40, 60, 90);
 const BAR_FG: (u8, u8, u8) = (235, 240, 250);
+const LOGO_RGB: (u8, u8, u8) = (255, 255, 255);
 const TRACK_RGB: (u8, u8, u8) = (38, 44, 58);
 // Neutral greys in the spirit of Apple's dark-mode system greys (no colour, no red): calm, high contrast.
 // (The menu and stop-screen colours live in `palette.rs`, where a test checks their contrast.)
-use crate::palette::{MENU_KEY, MENU_SELECT, MENU_TEXT, PANIC_BG, PANIC_HINT, PANIC_TEXT, PANIC_TITLE};
+use crate::palette::{MENU_KEY, MENU_SELECT, MENU_TEXT, PANIC_BG, PANIC_HINT, PANIC_MARK, PANIC_TEXT, PANIC_TITLE};
 const CURSOR_BG: (u8, u8, u8) = (200, 208, 224);
 
+
+/// Letter spacing added between the wordmark's letters, in pixels at scale 1.
+const WORDMARK_TRACKING: usize = 6;
 /// Widest character cell any face uses (for the per-row scratch buffer).
 const MAX_CELL_W: usize = 32;
 
@@ -78,6 +82,9 @@ pub struct Console {
     mono: &'static Face,
     cw: usize,
     chh: usize,
+    /// Wordmark scale (follows the screen width) and the text rows it covers.
+    ws: usize,
+    logo_rows: usize,
     cols: usize,
     rows: usize,
     first_row: usize,
@@ -93,8 +100,7 @@ pub struct Console {
     menu: bool,
     /// Last bar position drawn, in thousandths.
     bar_pm: u32,
-    /// Step index for 8-segment ring animation (0..7, rotates clockwise).
-    ring_step: usize,
+    logo_row: usize,
     /// For each history line: true when it continues the line above (the text wrapped at the right
     /// edge). Backspace at column 0 of such a line steps back up to the end of the line above.
     cont: [bool; HIST_ROWS],
@@ -123,12 +129,14 @@ impl Console {
         }
         let scale = splash::scale_for_width(info.width);
         let (mono, (cw, chh)) = if info.width >= 1600 { (&gfont::MONO_L, gfont::MONO_L_CELL) } else { (&gfont::MONO, gfont::MONO_CELL) };
+        let ws = scale;
+        let logo_rows = (gfont::WORDMARK.height as usize * ws).div_ceil(chh);
         let cols = (info.width / cw).min(MAX_COLS);
         let rows = (info.height / chh).min(MAX_ROWS);
-        if cols < 20 || rows < 10 {
+        if cols < 20 || rows < logo_rows + 4 {
             return None;
         }
-        let c = Console {
+        let mut c = Console {
             base: info.base as *mut u32,
             width: info.width,
             height: info.height,
@@ -138,6 +146,8 @@ impl Console {
             mono,
             cw,
             chh,
+            ws,
+            logo_rows,
             cols,
             rows,
             first_row: 0,
@@ -148,13 +158,19 @@ impl Console {
             splash: false,
             menu: false,
             bar_pm: 0,
-            ring_step: 0,
+            logo_row: 0,
             cont: [false; HIST_ROWS],
             menu_from_splash: false,
             editor: false,
             edit_cursor: None,
         };
-        // The log area uses the full screen (rows 0..rows-1, with row rows-1 as status bar)
+        c.logo_row = rows.saturating_sub(logo_rows) / 3;
+        // Put the log below the logo when the screen is big enough to keep a useful log area.
+        let first = (rows.saturating_sub(logo_rows)) / 3 + logo_rows + 2;
+        if rows >= first + 4 {
+            c.first_row = first;
+            c.log_rows = rows - 1 - first;
+        }
         Some(c)
     }
 
@@ -279,90 +295,17 @@ impl Console {
         }
     }
 
-    pub fn ring_center(&self) -> (usize, usize) {
-        let cx = self.width / 2;
-        let cy = (self.height * 38) / 100;
-        (cx, cy)
-    }
-
-    /// Draws the Eight-segment ring (segarc) in Mono theme, rotating clockwise with seed 1.
-    pub fn draw_segarc_ring(&self, step: usize, level: u8) {
-        let (cx, cy) = self.ring_center();
-        self.draw_segarc_ring_at(cx, cy, step, 1, level);
-    }
-
-    /// Draws an 8-segment ring (segarc) in Mono theme centered at (`cx`, `cy`), rotating clockwise with `seed`.
-    pub fn draw_segarc_ring_at(&self, cx: usize, cy: usize, step: usize, seed: usize, level: u8) {
-        let r_out = (30 * self.scale) as i64;
-        let r_in = (20 * self.scale) as i64;
-        let r_out_sq = r_out * r_out;
-        let r_in_sq = r_in * r_in;
-        let active = (step + seed) % 8;
-
-        // Monochrome brightness levels for the 8 segments based on distance behind active (clockwise)
-        const TRAIL: [u8; 8] = [255, 185, 125, 75, 45, 28, 28, 28];
-
-        for dy in -r_out..=r_out {
-            let py = cy as i64 + dy;
-            if py < 0 || py >= self.height as i64 {
-                continue;
-            }
-            let dy_sq = dy * dy;
-            for dx in -r_out..=r_out {
-                let px = cx as i64 + dx;
-                if px < 0 || px >= self.width as i64 {
-                    continue;
-                }
-                let dist_sq = dx * dx + dy_sq;
-                if dist_sq < r_in_sq || dist_sq > r_out_sq {
-                    continue;
-                }
-
-                // Integer octant and gap calculation
-                // u = dx (right is +), v = -dy (up is +)
-                let u = dx;
-                let v = -dy;
-                let au = u.unsigned_abs();
-                let av = v.unsigned_abs();
-                let max_a = au.max(av);
-                if max_a == 0 {
-                    continue;
-                }
-                let ratio = (au.min(av) * 1000) / max_a;
-
-                // Gap between segments: ratio between 350 and 480
-                if (350..=480).contains(&ratio) {
-                    continue;
-                }
-
-                let seg = if ratio < 350 {
-                    if av >= au {
-                        if v > 0 { 0 } else { 4 }
-                    } else if u > 0 { 2 } else { 6 }
-                } else if u > 0 && v > 0 {
-                    1
-                } else if u > 0 && v < 0 {
-                    3
-                } else if u < 0 && v < 0 {
-                    5
-                } else {
-                    7
-                };
-
-                let dist_behind = (active + 8 - seg) % 8;
-                let base_lum = TRAIL[dist_behind];
-                let lum = (u32::from(base_lum) * u32::from(level) / 255) as u8;
-                let color = self.px((lum, lum, lum));
-
-                if let Some(row) = self.row_mut(px as usize, py as usize, 1) {
-                    row[0] = color;
-                }
-            }
-        }
-    }
-
     pub fn draw_logo(&self) {
-        self.draw_segarc_ring(self.ring_step, 255);
+        self.draw_logo_rgb(LOGO_RGB, BG);
+    }
+
+    /// Draws "AEON" in the wordmark face, centred, starting at text row `logo_row`. The background
+    /// must be the solid colour `bg` (the framebuffer is never read back).
+    fn draw_logo_rgb(&self, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
+        let tracking = WORDMARK_TRACKING * self.ws;
+        let w = gfont::text_width(&gfont::WORDMARK, "AEON") * self.ws + 3 * tracking;
+        let x = self.width.saturating_sub(w) / 2;
+        self.draw_text(&gfont::WORDMARK, x, self.logo_row * self.chh, fg, bg, "AEON", self.ws, tracking);
     }
 
     /// Draws `text` with its top-left at pixel (`x`, `y`) in `face`, magnified `scale` times, with
@@ -404,14 +347,12 @@ impl Console {
 
     // ---- splash: logo, fade-in and progress bar instead of the scrolling log ----
 
-    /// Bar rectangle (x, y, width, height) in pixels, centred under the ring.
+    /// Bar rectangle (x, y, width, height) in pixels, centred under the logo.
     fn bar_rect(&self) -> (usize, usize, usize, usize) {
-        let w = (self.width / 4).clamp(180 * self.scale, 360 * self.scale).min(self.width);
+        let w = (self.width * 2 / 5).clamp(240, 640 * self.scale).min(self.width);
         let x = (self.width - w) / 2;
-        let (_, cy) = self.ring_center();
-        let r_out = 30 * self.scale;
-        let y = cy + r_out + 28 * self.scale;
-        let h = (3 * self.scale).max(3);
+        let y = (self.logo_row + self.logo_rows + 1) * self.cell_h();
+        let h = (4 * self.scale).max(4);
         (x, y, w, h)
     }
 
@@ -437,41 +378,34 @@ impl Console {
         }
     }
 
-    /// Clears the screen, centres the 8-segment ring and draws the empty progress track. Log output is held
+    /// Clears the screen, centres the logo and draws the empty progress track. Log output is held
     /// back (it stays in the ring buffer and on serial) until end_splash.
     pub fn begin_splash(&mut self) {
         self.clear();
         self.splash = true;
-        self.ring_step = 0;
+        self.logo_row = splash::splash_row(self.rows, self.logo_rows);
         let (x, y, w, h) = self.bar_rect();
         let track = self.px(TRACK_RGB);
         self.draw_pill(x, y, w, h, track);
-        self.draw_segarc_ring(0, 255);
     }
 
     pub fn splash_active(&self) -> bool {
         self.splash
     }
 
-    /// Draws the 8-segment ring at brightness level (0 = black, 255 = full), advancing rotation.
-    pub fn fade_logo(&mut self, level: u8) {
-        self.ring_step = (self.ring_step + 1) % 8;
-        self.draw_segarc_ring(self.ring_step, level);
+    /// Draws the logo at brightness level (0 = black, 255 = full), for a fade-in.
+    pub fn fade_logo(&self, level: u8) {
+        self.draw_logo_rgb(splash::dim(LOGO_RGB, level), BG);
     }
 
-    /// Fills the progress bar to permille thousandths and advances the 8-segment ring clockwise.
+    /// Fills the progress bar to permille thousandths.
     pub fn progress(&mut self, permille: u32) {
         if !self.splash {
             return;
         }
-        let moved = permille != self.bar_pm;
         self.bar_pm = permille.min(1000);
-        if moved {
-            self.ring_step = (self.ring_step + 1) % 8;
-        }
-        self.draw_segarc_ring(self.ring_step, 255);
         let (x, y, w, h) = self.bar_rect();
-        let fg = self.px((235, 238, 242));
+        let fg = self.px(LOGO_RGB);
         let filled = splash::fill_width(w, self.bar_pm);
         self.draw_pill(x, y, filled, h, fg);
     }
@@ -481,21 +415,19 @@ impl Console {
         self.bar_pm
     }
 
-    /// Dims the whole splash (ring and progress bar) to level / 255 for the fade-out, continuing rotation.
-    pub fn fade_splash(&mut self, level: u8) {
+    /// Dims the whole splash (logo, bar track and bar fill) to level / 255 for the fade-out.
+    pub fn fade_splash(&self, level: u8) {
         if !self.splash {
             return;
         }
-        self.ring_step = (self.ring_step + 1) % 8;
-        self.draw_segarc_ring(self.ring_step, level);
+        self.draw_logo_rgb(splash::dim(LOGO_RGB, level), BG);
         let (x, y, w, h) = self.bar_rect();
         let track = self.px(splash::dim(TRACK_RGB, level));
-        let fg = self.px(splash::dim((235, 238, 242), level));
+        let fg = self.px(splash::dim(LOGO_RGB, level));
         let filled = splash::fill_width(w, self.bar_pm);
         self.draw_pill(x, y, w, h, track);
         self.draw_pill(x, y, filled, h, fg);
     }
-
     /// Shows a short centred line under the bar (empty `text` removes it).
     pub fn hint(&self, text: &[u8]) {
         if !self.splash {
@@ -517,15 +449,15 @@ impl Console {
         self.draw_text(face, x, y, (120, 130, 145), BG, s, sc, 0);
     }
 
-    /// Leaves the splash: switches to full-screen log area and status bar.
+    /// Leaves the splash: the screen returns to logo at the top, log area and status bar.
     pub fn end_splash(&mut self) {
         if !self.splash {
             return;
         }
         self.splash = false;
         self.clear();
-        self.first_row = 0;
-        self.log_rows = self.rows - 1;
+        self.logo_row = self.rows.saturating_sub(self.logo_rows) / 3;
+        self.draw_logo();
     }
 
     // ---- Dawn, the boot menu ----
@@ -541,16 +473,14 @@ impl Console {
             self.splash = false;
             let bg = self.px(BG);
             self.fill_rect(0, 0, self.width, self.height, bg);
-            let ws = self.scale;
-            let tracking = 6 * ws;
-            let w = gfont::text_width(&gfont::WORDMARK, "AEON") * ws + 3 * tracking;
+            let tracking = WORDMARK_TRACKING * self.ws;
+            let w = gfont::text_width(&gfont::WORDMARK, "AEON") * self.ws + 3 * tracking;
             let x = self.width.saturating_sub(w) / 2;
-            self.draw_text(&gfont::WORDMARK, x, self.height / 14, (255, 255, 255), BG, "AEON", ws, tracking);
+            self.draw_text(&gfont::WORDMARK, x, self.height / 14, LOGO_RGB, BG, "AEON", self.ws, tracking);
         }
         let (face, sc) = if self.width >= 1600 { (&gfont::SANS_24, if self.width >= 3000 { 2 } else { 1 }) } else { (&gfont::SANS_16, 1) };
         let item_h = (face.height as usize + 12) * sc;
-        let ws = self.scale;
-        let list_top = self.height / 14 + gfont::WORDMARK.height as usize * ws + 36 * sc;
+        let list_top = self.height / 14 + gfont::WORDMARK.height as usize * self.ws + 36 * sc;
         let panel_w = (self.width / 3).clamp(300 * sc, 700 * sc).min(self.width);
         let panel_x = (self.width - panel_w) / 2;
         let list_h = entries.len() * item_h;
@@ -566,7 +496,7 @@ impl Console {
             // Labels are centred, no key hints: arrows and Enter are the only keys.
             let ty = y + (item_h - 4 * sc).saturating_sub(face.height as usize * sc) / 2;
             let lw = gfont::text_width(face, label) * sc;
-            self.draw_text(face, panel_x + panel_w.saturating_sub(lw) / 2, ty, if on { (240, 240, 240) } else { MENU_TEXT }, bg, label, sc, 0);
+            self.draw_text(face, panel_x + panel_w.saturating_sub(lw) / 2, ty, if on { LOGO_RGB } else { MENU_TEXT }, bg, label, sc, 0);
         }
         // One plain line about the highlighted entry, under the list.
         if let Some((_, desc)) = entries.get(selected) {
@@ -614,7 +544,7 @@ impl Console {
         self.progress(pm);
     }
 
-    /// Leaves the boot menu: switches to full-screen log area and status bar.
+    /// Leaves the boot menu: the screen returns to the logo with an empty log area.
     pub fn menu_end(&mut self) {
         if !self.menu {
             return;
@@ -622,8 +552,8 @@ impl Console {
         self.menu = false;
         self.splash = false;
         self.clear();
-        self.first_row = 0;
-        self.log_rows = self.rows - 1;
+        self.logo_row = self.rows.saturating_sub(self.logo_rows) / 3;
+        self.draw_logo();
     }
 
     // ---- the full-screen editor ----
@@ -716,17 +646,16 @@ impl Console {
         let small = &gfont::SANS_16;
         let line_h = (small.height as usize + 8) * sc;
         let lines = &lines[..lines.len().min(6)];
-        let r_out = 30 * self.scale;
-        let total = (r_out * 2) + 36 * sc + big.height as usize * sc + 24 * sc + lines.len() * line_h + 40 * sc + line_h;
+        let mark_h = gfont::WORDMARK.height as usize * self.ws;
+        let total = mark_h + 56 * sc + big.height as usize * sc + 24 * sc + lines.len() * line_h + 40 * sc + line_h;
         let mut y = self.height.saturating_sub(total) / 2;
         let center = |this: &Self, face: &Face, y: usize, text: &str, fg: (u8, u8, u8), scale: usize, tracking: usize| {
             let w = gfont::text_width(face, text) * scale + text.chars().count().saturating_sub(1) * tracking;
             this.draw_text(face, this.width.saturating_sub(w) / 2, y, fg, PANIC_BG, text, scale, tracking);
         };
-        let ring_y = y + r_out;
-        self.draw_segarc_ring_at(self.width / 2, ring_y, 0, 1, 255);
-        y = ring_y + r_out + 36 * sc;
-        center(self, big, y, "The system has stopped.", PANIC_TITLE, sc, 0);
+        center(self, &gfont::WORDMARK, y, "AEON", PANIC_MARK, self.ws, WORDMARK_TRACKING * self.ws);
+        y += mark_h + 56 * sc;
+        center(self, big, y, "Aeon has stopped.", PANIC_TITLE, sc, 0);
         y += big.height as usize * sc + 24 * sc;
         for l in lines {
             center(self, small, y, core::str::from_utf8(l).unwrap_or(""), PANIC_TEXT, sc, 0);

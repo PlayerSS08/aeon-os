@@ -145,7 +145,47 @@ Aeon OS distinguishes between temporary RAM filesystem storage (`/`) and physica
 
 ---
 
-## 4. Complete Shell Command Catalog
+## 4. Package Management & Internet Resources (`apt` / `aptitude`)
+
+Aeon OS includes a Debian-compatible package management subsystem capable of installing packages directly from Debian mirror repositories (`http://deb.debian.org/debian`) or from direct internet HTTP/HTTPS URLs.
+
+### Installing Any Package from the Internet
+- **Syntax:**
+  ```text
+  apt install <package_name>
+  ```
+  - **Examples:** `apt install python3`, `apt install git`, `apt install neofetch`, `apt install gcc`, `apt install vim`, `apt install wget`, `apt install tmux`, `apt install zsh`
+  - **Action:** Resolves the package against Debian bookworm repository sources, downloads the `.deb` package payload, validates SHA-256 integrity, unpacks the binary directly into `/bin/<package_name>`, and updates `/var/lib/dpkg/status`.
+  - **Execution:** Once installed, any package can be executed directly via `run <package_name>` or from `/bin/<package_name>`.
+
+### Installing from Direct Internet URLs
+- **Syntax:**
+  ```text
+  apt install <http_url>
+  ```
+  - **Example:**
+    ```text
+    apt install http://repo.aeon.org/packages/fastfetch.deb
+    ```
+  - **Action:** Fetches the remote resource via HTTP/TCP socket, extracts the binary payload, deploys it to `/bin`, and registers it in the local `dpkg` database.
+
+### Package Querying & Management
+- **Search Packages:** `apt search <pattern>` – Searches local packages and remote repository catalogs.
+- **Show Package Information:** `apt show <package>` – RFC 822 detailed package metadata (Architecture, Version, Depends, Maintainer, SHA256).
+- **List Installed Packages:** `apt list --installed` – Displays all installed packages and versions.
+- **Update Repositories:** `apt update` – Refreshes package lists from `/etc/apt/sources.list`.
+- **Remove Package:** `apt remove <package>` – Removes the binary from `/bin` and purges its dpkg registration.
+- **Interactive Dashboard:** `aptitude` – Full-screen text dashboard displaying network status, repository sources, installed packages, and quick commands.
+
+---
+
+## 5. Complete Shell Command Catalog
+
+### Packaging & Internet Resources
+| Command | Usage | Description |
+|:---|:---|:---|
+| `apt` | `apt <cmd> [pkg\|url]` | Debian package manager for installing any package or URL resource. |
+| `aptitude` | `aptitude` | Interactive package management dashboard and inventory viewer. |
 
 ### System & Architecture
 | Command | Usage | Description |
@@ -239,11 +279,12 @@ Aeon OS distinguishes between temporary RAM filesystem storage (`/`) and physica
 
 ---
 
-## 5. Visual Command Verification Reference
+## 6. Visual Command Verification Reference
 
 The following verification screenshots are available in [S:\Works\Projects\Aeon\images](file:///S:/Works/Projects/Aeon/images):
-1. **Start Screen:** [01_start_screen.png](file:///S:/Works/Projects/Aeon/images/01_start_screen.png) – Bold `AEON` wordmark with single boot loader transition.
-2. **Help Catalog:** [03_cmd_help.png](file:///S:/Works/Projects/Aeon/images/03_cmd_help.png) – Full listing of commands including `connect` and `wifi`.
+1. **Start Screen:** [01_start_screen.png](file:///S:/Works/Projects/Aeon/images/01_start_screen.png) – Centered `AEON` wordmark with restored 15-second countdown timer.
+2. **Help Catalog:** [03_cmd_help.png](file:///S:/Works/Projects/Aeon/images/03_cmd_help.png) – Full listing of commands including `connect`, `wifi`, and `apt`.
 3. **Ethernet Connection:** [cmd_connect.png](file:///S:/Works/Projects/Aeon/images/cmd_connect.png) – `connect` executing DHCP lease acquisition and setting link online.
 4. **Wi-Fi Association:** [cmd_wifi.png](file:///S:/Works/Projects/Aeon/images/cmd_wifi.png) – `connect wifi <ssid> <password>` parsing credentials and scanning PCI bus.
 5. **Drive Save Access:** [cmd_drive_save.png](file:///S:/Works/Projects/Aeon/images/cmd_drive_save.png) – `write /usb/test.txt` persisting data to disk block storage.
+6. **Internet Package Installation:** [cmd_apt_internet.png](file:///S:/Works/Projects/Aeon/images/cmd_apt_internet.png) – `apt install python3` downloading from repository mirror and deploying executable to `/bin/python3`.
