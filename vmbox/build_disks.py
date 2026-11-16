@@ -245,8 +245,10 @@ def main():
         sys.exit(1)
 
     print("Reading Aeon bootloader files from:", aeon_usb)
+    # Always the signed image in usb/ (what is shipped): a demo must boot exactly that, not a stray build.
     with open(os.path.join(aeon_usb, r"EFI\BOOT\BOOTX64.EFI"), "rb") as f:
         bootx64 = f.read()
+    print("Boot image: usb\\EFI\\BOOT\\BOOTX64.EFI,", len(bootx64), "bytes")
     with open(os.path.join(aeon_usb, "SHA256.txt"), "rb") as f:
         sha = f.read()
     with open(os.path.join(aeon_usb, "aeon-secureboot.cer"), "rb") as f:
@@ -256,7 +258,7 @@ def main():
         'bootx64_efi': bootx64,
         'sha256_txt': sha,
         'cert': cert,
-        'aeon_cfg': b"# Aeon Boot Configuration\nmode=1024x768\ntimeout=15\n"
+        'aeon_cfg': b"# Aeon Boot Configuration (no mode= line: Aeon picks the largest screen mode the display offers)\ntimeout=15\n"
     }
 
     boot_raw = os.path.join(vm_dir, "Aeon-Boot.raw")

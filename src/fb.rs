@@ -195,14 +195,22 @@ impl Console {
         (self.cols, self.rows)
     }
 
-    fn px(&self, c: (u8, u8, u8)) -> u32 {
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    pub fn px(&self, c: (u8, u8, u8)) -> u32 {
         self.format.pack(c.0, c.1, c.2)
     }
 
     /// The pixels `x..x + len` of scan line `y`, clipped to the visible area. The framebuffer is
     /// device memory owned by the console, hence `&self` yielding a mutable span.
     #[allow(clippy::mut_from_ref)]
-    fn row_mut(&self, x: usize, y: usize, len: usize) -> Option<&mut [u32]> {
+    pub fn row_mut(&self, x: usize, y: usize, len: usize) -> Option<&mut [u32]> {
         if y >= self.height || x >= self.width {
             return None;
         }
@@ -213,7 +221,7 @@ impl Console {
         Some(unsafe { core::slice::from_raw_parts_mut(self.base.add(y * self.stride + x), len) })
     }
 
-    fn fill_rect(&self, x: usize, y: usize, w: usize, h: usize, v: u32) {
+    pub fn fill_rect(&self, x: usize, y: usize, w: usize, h: usize, v: u32) {
         for yy in y..(y + h).min(self.height) {
             if let Some(row) = self.row_mut(x, yy, w) {
                 row.fill(v);
@@ -847,7 +855,7 @@ impl Console {
     // --- mouse pointer ---------------------------------------------------------------------------------
 
     /// Puts back the pixels the pointer covers. Anything that draws must call this first.
-    fn pointer_erase(&mut self) {
+    pub fn pointer_erase(&mut self) {
         let Some((px, py)) = self.pointer_shown_at.take() else { return };
         for sy in 0..pointer::SPRITE_H {
             for sx in 0..pointer::SPRITE_W {
@@ -865,7 +873,7 @@ impl Console {
 
     /// Paints the pointer at its position, remembering what is under it. Not while the splash, the menu or the
     /// full-screen editor own the screen (the editor repaints single cells and would leave pointer fragments).
-    fn pointer_paint(&mut self) {
+    pub fn pointer_paint(&mut self) {
         let Some(p) = self.pointer else { return };
         if self.splash || self.menu || self.editor || self.pointer_shown_at.is_some() {
             return;

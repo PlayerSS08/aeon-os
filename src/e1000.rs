@@ -40,8 +40,8 @@ const STATUS_LU: u32 = 1 << 1;
 
 const RCTL_EN: u32 = 1 << 1;
 const _RCTL_SBP: u32 = 1 << 2;
-const _RCTL_UPE: u32 = 1 << 3;
-const _RCTL_MPE: u32 = 1 << 4;
+const RCTL_UPE: u32 = 1 << 3;
+const RCTL_MPE: u32 = 1 << 4;
 const RCTL_BAM: u32 = 1 << 15;
 const RCTL_BSIZE_2048: u32 = 0 << 16;
 const RCTL_SECRC: u32 = 1 << 26;
@@ -259,6 +259,12 @@ pub fn init(dev: &pci::Device) -> Result<E1000, NetError> {
 
     driver.detect_mac();
 
+    // Reprogram Receive Address Filter with valid bit (RAH_AV) so unicast frames are accepted
+    let low = u32::from_le_bytes([driver.mac[0], driver.mac[1], driver.mac[2], driver.mac[3]]);
+    let high = u32::from_le_bytes([driver.mac[4], driver.mac[5], 0, 0]) | (1 << 31);
+    wr32(mmio_base + REG_RAL0, low);
+    wr32(mmio_base + REG_RAH0, high);
+
     // Clear multicast table array (128 dwords)
     for i in 0..128 {
         wr32(mmio_base + REG_MTA + (i * 4), 0);
@@ -311,8 +317,8 @@ pub fn init(dev: &pci::Device) -> Result<E1000, NetError> {
     wr32(mmio_base + REG_RDT, (NUM_RX_DESCRIPTORS - 1) as u32);
     driver.rx_cur = 0;
 
-    // Configure RX Control (enable, broadcast accept, 2048 buffer, strip CRC)
-    wr32(mmio_base + REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_SECRC);
+    // Configure RX Control (enable, broadcast accept, unicast/multicast promiscuous, 2048 buffer, strip CRC)
+    wr32(mmio_base + REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_UPE | RCTL_MPE | RCTL_BSIZE_2048 | RCTL_SECRC);
 
     // Initialize TX ring descriptors
     for i in 0..NUM_TX_DESCRIPTORS {

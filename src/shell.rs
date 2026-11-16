@@ -648,6 +648,7 @@ fn cmd_dhcp(_rest: &str) {
     }
 }
 
+
 /// The first wireless network controller on the PCI bus (class 02 "network", subclass 80 "other": that is how
 /// Wi-Fi cards identify themselves; or class 0D "wireless").
 fn find_wifi_hw() -> Option<(u16, u16, u8, u8, u8)> {
@@ -749,6 +750,57 @@ fn save_bytes(name: &str, data: &[u8]) -> Result<String, String> {
 
 /// Largest download `curl` keeps in memory. The heap is 32 MiB; this leaves room for everything else.
 const MAX_DOWNLOAD: usize = 12 * 1024 * 1024;
+
+/// A plain-http file big enough to time. Any other URL can be given on the command line.
+const SPEEDTEST_URLS: [&str; 2] = ["http://ftp.debian.org/debian/dists/stable/main/binary-amd64/Packages.xz", "http://speedtest.tele2.net/10MB.zip"];
+
+/// `speedtest [url]`: downloads a real file over the active network link and reports what was measured.
+/// Nothing here is estimated: the figure is bytes received divided by the seconds the transfer took.
+fn cmd_speedtest(rest: &str) {
+    if !crate::netdev::link_up() {
+        out!("speedtest: no network link (plug in a cable or a tethered phone, then run `dhcp`)\n");
+        return;
+    }
+    out!("link  : {}\n", crate::netdev::device_name());
+    // A URL on the command line is used alone; otherwise the built-in files are tried in turn.
+    let given = rest.split_whitespace().next();
+    let urls: &[&str] = match given.as_ref() {
+        Some(u) => core::slice::from_ref(u),
+        None => &SPEEDTEST_URLS,
+    };
+    for (i, url) in urls.iter().enumerate() {
+        out!("fetch : {}\n", url);
+        if speedtest_one(url) || i + 1 == urls.len() {
+            return;
+        }
+        out!("trying the next server...\n");
+    }
+}
+
+/// One timed download. Returns true when a speed was measured.
+fn speedtest_one(url: &str) -> bool {
+    let t0 = log::uptime_us();
+    let mut nop = |_: usize, _: Option<usize>| {};
+    match crate::netstack::http_fetch(url, MAX_DOWNLOAD, &mut nop) {
+        Ok(resp) if resp.status == 200 && !resp.body.is_empty() => {
+            let us = log::uptime_us().saturating_sub(t0).max(1);
+            let bytes = resp.body.len() as u64;
+            // bits per microsecond equals megabits per second.
+            let mbps_x100 = bytes * 8 * 100 / us;
+            out!("result: {} bytes in {}.{:03} s = {}.{:02} Mbit/s ({}.{:02} MB/s)\n", bytes, us / 1_000_000, us / 1000 % 1000, mbps_x100 / 100, mbps_x100 % 100, mbps_x100 / 800, mbps_x100 / 8 % 100);
+            out!("note  : measured download of the payload, including DNS and TCP setup; the Wi-Fi link rate is not shown because there is no Wi-Fi driver\n");
+            true
+        }
+        Ok(resp) => {
+            out!("speedtest: the server answered HTTP {} with {} bytes, so no speed was measured\n", resp.status, resp.body.len());
+            false
+        }
+        Err(e) => {
+            out!("speedtest: {}\n", e);
+            false
+        }
+    }
+}
 
 fn cmd_curl(rest: &str) {
     let mut url = None;
@@ -875,7 +927,7 @@ impl crate::apt::Fetcher for UsbFetcher {
     }
 }
 
-const APT_HELP: &str = "apt: signed packages over plain HTTP (not Debian's apt: no .deb, no Linux programs)\n  apt source <http://host[:port]/path/>   set the repository (needs a PC running tools/aeon_repo.py serve)\n  apt update                              download and verify the package list\n  apt list [--installed] | search <text> | show <pkg> | files <pkg>\n  apt install <pkg>...                    install with dependencies (SHA-256 + signature checked)\n  apt remove <pkg>... | autoremove\n  apt restore                             reinstall what was saved on the AEON stick (works offline)\n";
+const APT_HELP: &str = "apt: signed packages over plain HTTP (not Debian's apt: no .deb, no Linux programs)\n  apt source <http://host[:port]/path/>   set the repository (needs a PC running tools/aeon_repo.py serve)\n  apt update                              download and verify the package list\n  apt list [--installed] | search <text> | show <pkg> | files <pkg>\n  apt install <pkg>...                    install with dependencies (SHA-256 + signature checked)\n  apt reinstall <pkg>...                  reinstall already installed packages\n  apt upgrade                             upgrade installed packages to newest version\n  apt full-upgrade                        upgrade packages, removing obsolete dependencies if needed\n  apt remove <pkg>... | autoremove\n  apt restore                             reinstall what was saved on the AEON stick (works offline)\n";
 
 fn cmd_apt(rest: &str) {
     let mut parts = rest.split_whitespace();
@@ -927,6 +979,31 @@ fn cmd_apt(rest: &str) {
             let Some(mut f) = net_fetcher(fs) else { return };
             let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
             if let Err(e) = crate::apt::install(fs, &mut f, keys, &args, &mut say, &mut persist) {
+                out!("apt: {}\n", e);
+            }
+        }
+        "reinstall" => {
+            if args.is_empty() {
+                out!("usage: apt reinstall <package>...\n");
+                return;
+            }
+            let Some(mut f) = net_fetcher(fs) else { return };
+            let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
+            if let Err(e) = crate::apt::reinstall(fs, &mut f, keys, &args, &mut say, &mut persist) {
+                out!("apt: {}\n", e);
+            }
+        }
+        "upgrade" => {
+            let Some(mut f) = net_fetcher(fs) else { return };
+            let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
+            if let Err(e) = crate::apt::upgrade(fs, &mut f, keys, false, &mut say, &mut persist) {
+                out!("apt: {}\n", e);
+            }
+        }
+        "full-upgrade" | "dist-upgrade" => {
+            let Some(mut f) = net_fetcher(fs) else { return };
+            let mut persist = |rel: &str, d: &[u8]| usb_persist(&mut warned, rel, d);
+            if let Err(e) = crate::apt::upgrade(fs, &mut f, keys, true, &mut say, &mut persist) {
                 out!("apt: {}\n", e);
             }
         }
@@ -1376,56 +1453,123 @@ fn cmd_rmdir(arg: &str) {
 }
 
 fn cmd_ls(arg: &str) {
-    let Some(p) = folder_arg(arg) else { return };
+    let mut show_all = false;
+    let mut long_fmt = false;
+    let mut target = "";
+
+    for tok in arg.split_whitespace() {
+        if tok.starts_with('-') && tok.len() > 1 {
+            for c in tok[1..].chars() {
+                match c {
+                    'a' => show_all = true,
+                    'l' => long_fmt = true,
+                    'h' | '1' => {}
+                    _ => {}
+                }
+            }
+        } else {
+            target = tok;
+        }
+    }
+
+    let Some(p) = folder_arg(target) else { return };
     if usbfs::is_usb(&p) {
         let rel = usbfs::rel_path(&p);
         if usbfs::hw_is_dir(rel) {
-            let mut n = 0;
+            let mut entries: Vec<(String, bool, u64)> = Vec::new();
+            if show_all {
+                entries.push((String::from("."), true, 0));
+                entries.push((String::from(".."), true, 0));
+            }
             let res = usbfs::hw_list(rel, |e| {
-                if e.is_dir {
-                    out!("{:>8}  {}/\n", "<dir>", e.name());
-                } else {
-                    out!("{:>8}  {}\n", e.size, e.name());
-                }
-                n += 1;
+                entries.push((String::from(e.name()), e.is_dir, e.size as u64));
             });
             match res {
                 Ok(()) => {
-                    if n == 0 {
+                    if entries.is_empty() {
                         out!("(empty folder)\n");
+                    } else {
+                        for (name, is_dir, size) in &entries {
+                            if long_fmt {
+                                if *is_dir {
+                                    out!("     <dir>  {}/\n", name);
+                                } else {
+                                    out!("{:>10}  {}\n", size, name);
+                                }
+                            } else if *is_dir {
+                                out!("{}/  ", name);
+                            } else {
+                                out!("{}  ", name);
+                            }
+                        }
+                        if !long_fmt {
+                            out!("\n");
+                        }
                     }
                 }
-                Err(why) => out!("cannot list '{}': {}\n", arg, why),
+                Err(why) => out!("cannot list '{}': {}\n", target, why),
             }
         } else {
             match usbfs::hw_read(rel, 1024 * 1024) {
-                Ok(d) => out!("{:>8}  {}\n", d.len(), arg),
-                Err(_) => out!("no such folder '{}'\n", arg),
+                Ok(d) => {
+                    if long_fmt {
+                        out!("{:>10}  {}\n", d.len(), target);
+                    } else {
+                        out!("{}\n", target);
+                    }
+                }
+                Err(_) => out!("ls: cannot access '{}': No such file or directory\n", target),
             }
         }
         return;
     }
+
     if !fs().is_dir(&p) {
         match fs().read(&p) {
-            Some(d) => out!("{:>8}  {}\n", d.len(), arg),
-            None => out!("no such folder '{}'\n", arg),
+            Some(d) => {
+                if long_fmt {
+                    out!("{:>10}  {}\n", d.len(), target);
+                } else {
+                    out!("{}\n", target);
+                }
+            }
+            None => out!("ls: cannot access '{}': No such file or directory\n", target),
         }
         return;
     }
-    let mut n = 0;
+
+    let mut entries: Vec<(String, Option<usize>)> = Vec::new();
+    if show_all {
+        entries.push((String::from("."), None));
+        entries.push((String::from(".."), None));
+    }
     if p == "/" && crate::xhci::has_storage() {
-        out!("{:>8}  usb/\n", "<dir>");
-        n += 1;
+        entries.push((String::from("usb"), None));
     }
     for (name, size) in fs().list(&p) {
-        match size {
-            Some(s) => out!("{:>8}  {}\n", s, name),
-            None => out!("{:>8}  {}/\n", "<dir>", name),
-        }
-        n += 1;
+        entries.push((String::from(name), size));
     }
-    if n == 0 {
-        out!("{}\n", if p == "/" { "(no files)" } else { "(empty folder)" });
+
+    if entries.is_empty() {
+        out!("(empty folder)\n");
+        return;
+    }
+
+    for (name, size) in &entries {
+        if long_fmt {
+            match size {
+                Some(s) => out!("{:>10}  {}\n", s, name),
+                None => out!("     <dir>  {}/\n", name),
+            }
+        } else {
+            match size {
+                Some(_) => out!("{}  ", name),
+                None => out!("{}/  ", name),
+            }
+        }
+    }
+    if !long_fmt {
+        out!("\n");
     }
 }
 
@@ -2609,6 +2753,7 @@ fn run(line: &str, hist: &History) {
         "usb" => cmd_usb(),
         "mouse" => cmd_mouse(),
         "touchpad" => cmd_touchpad(rest),
+        "speedtest" => cmd_speedtest(rest),
         "disks" => cmd_disks(),
         "disksched" => cmd_disksched(rest),
         "dls" => cmd_dls(rest),
@@ -2925,6 +3070,21 @@ pub extern "C" fn shell_task(_: usize) {
     log::with_console(Console::fullscreen_log);
     // A line may be longer than the screen is wide: the console wraps it onto the next rows.
     ed.set_max(MAX_LINE);
+
+    // Ensure standard system directories and base config files exist in RAMFS on boot.
+    let f = fs();
+    for dir in &["/bin", "/etc", "/home", "/tmp", "/usr", "/var"] {
+        if !f.is_dir(dir) {
+            let _ = f.mkdir(dir);
+        }
+    }
+    if f.read("/etc/hostname").is_none() {
+        let _ = f.write("/etc/hostname", b"aeon-host\n");
+    }
+    if f.read("/etc/os-release").is_none() {
+        let _ = f.write("/etc/os-release", b"NAME=Aeon OS\nVERSION=0.10.0\nID=aeon\nPRETTY_NAME=\"Aeon OS 0.10.0-uefi\"\n");
+    }
+
     out!("\nAeon shell. Type `help`.\n{}", prompt());
     loop {
         let mut idle = true;

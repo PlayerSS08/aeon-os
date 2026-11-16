@@ -221,6 +221,137 @@ pub fn install(
     Ok(())
 }
 
+/// Reinstalls packages that are already installed.
+pub fn reinstall(
+    fs: &mut RamFs,
+    f: &mut dyn Fetcher,
+    keys: &[[u8; 32]],
+    names: &[&str],
+    say: &mut dyn FnMut(&str),
+    persist: &mut dyn FnMut(&str, &[u8]),
+) -> Result<(), String> {
+    let index = load_index(fs, keys)?;
+    let mut status = load_status(fs);
+    for n in names {
+        if !status.iter().any(|p| p.name == *n) {
+            return Err(format!("'{n}' is not installed; cannot reinstall"));
+        }
+    }
+    for n in names {
+        let e = index.iter().find(|e| e.name == *n).ok_or_else(|| pkg::PkgError::NotFound(n.to_string()).to_string())?;
+        say(&format!("Get: {} {} [{} B]", e.name, e.version, e.size));
+        let data = f.get(&e.filename, e.size.min(MAX_PACKAGE).saturating_add(1)).map_err(|err| format!("{}: {err}", e.name))?;
+        pkg::verify_download(e, &data).map_err(|err| format!("{}: {err}", e.name))?;
+        let plan = pkg::plan_install(e, &data).map_err(|err| format!("{}: {err}", e.name))?;
+
+        for (path, _) in &plan.files {
+            if let Some(owner) = status.iter().find(|p| p.name != e.name && p.files.contains(path)) {
+                return Err(pkg::PkgError::Conflict { path: path.clone(), owner: owner.name.clone() }.to_string());
+            }
+        }
+
+        let old_pos = status.iter().position(|p| p.name == e.name).expect("checked above");
+        let old_pkg = status.remove(old_pos);
+        for old_file in &old_pkg.files {
+            if !plan.files.iter().any(|(p, _)| p == old_file) {
+                fs.remove(old_file);
+            }
+        }
+
+        let mut written: Vec<String> = Vec::new();
+        let mut failure = None;
+        for (path, content) in &plan.files {
+            match write_file(fs, path, content) {
+                Ok(()) => written.push(path.clone()),
+                Err(err) => {
+                    failure = Some(err);
+                    break;
+                }
+            }
+        }
+        for dir in &plan.dirs {
+            if !fs.is_dir(dir) {
+                let _ = fs.mkdir(dir);
+            }
+        }
+        if let Some(err) = failure {
+            for p in &written {
+                fs.remove(p);
+            }
+            return Err(format!("{}: {err}; reinstall failed", e.name));
+        }
+
+        status.push(Installed {
+            name: e.name.clone(),
+            version: e.version.clone(),
+            depends: e.depends.clone(),
+            files: written,
+            auto: old_pkg.auto,
+        });
+
+        if let Err(err) = save_status(fs, &status) {
+            return Err(format!("{}: {err}; status update failed", e.name));
+        }
+        persist(&e.filename, &data);
+        say(&format!("Reinstalled {} {} ({} file(s))", e.name, e.version, plan.files.len()));
+    }
+    persist("installed", status.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join("\n").as_bytes());
+    Ok(())
+}
+
+/// Upgrades installed packages that have newer versions in the repository index.
+/// When `full` is true, also resolves new dependencies and performs autoremove on obsolete packages.
+pub fn upgrade(
+    fs: &mut RamFs,
+    f: &mut dyn Fetcher,
+    keys: &[[u8; 32]],
+    full: bool,
+    say: &mut dyn FnMut(&str),
+    persist: &mut dyn FnMut(&str, &[u8]),
+) -> Result<usize, String> {
+    let index = load_index(fs, keys)?;
+    let status = load_status(fs);
+    let upgradable: Vec<String> = status
+        .iter()
+        .filter_map(|p| {
+            index.iter().find(|e| e.name == p.name && e.version != p.version).map(|e| e.name.clone())
+        })
+        .collect();
+
+    if upgradable.is_empty() {
+        say("All packages are up to date.");
+        return Ok(0);
+    }
+
+    say(&format!("The following package(s) will be upgraded: {}", upgradable.join(", ")));
+    let refs: Vec<&str> = upgradable.iter().map(String::as_str).collect();
+
+    let mut missing_deps: Vec<&str> = Vec::new();
+    for name in &refs {
+        if let Some(entry) = index.iter().find(|e| e.name == *name) {
+            for dep in &entry.depends {
+                if !status.iter().any(|p| p.name == *dep) && !missing_deps.contains(&dep.as_str()) {
+                    missing_deps.push(dep.as_str());
+                }
+            }
+        }
+    }
+    if !missing_deps.is_empty() {
+        install(fs, f, keys, &missing_deps, say, persist)?;
+    }
+
+    reinstall(fs, f, keys, &refs, say, persist)?;
+
+    if full {
+        let removed = autoremove(fs, say)?;
+        if removed > 0 {
+            say(&format!("full-upgrade removed {} obsolete package(s).", removed));
+        }
+    }
+
+    Ok(upgradable.len())
+}
+
 /// Removes packages; refuses when another installed package still needs one of them.
 pub fn remove(fs: &mut RamFs, names: &[&str], say: &mut dyn FnMut(&str)) -> Result<(), String> {
     let mut status = load_status(fs);
@@ -528,5 +659,31 @@ mod tests {
         assert!(set_source(&mut fs, "ftp://x").is_err());
         assert!(set_source(&mut fs, "garbage").is_err());
         assert_eq!(get_source(&fs).unwrap(), "http://10.0.2.2:8080/", "a refused address changes nothing");
+    }
+
+    #[test]
+    fn reinstall_refuses_uninstalled_and_replaces_installed() {
+        let (mut fs, mut f) = updated();
+        let (r, _, _) = run(|say, persist| reinstall(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist));
+        assert!(r.unwrap_err().contains("not installed"));
+
+        run(|say, persist| install(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist)).0.unwrap();
+        assert!(fs.read("/usr/share/greet/README").is_some());
+
+        let (r, said, _) = run(|say, persist| reinstall(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist));
+        r.unwrap();
+        assert!(said.iter().any(|s| s.contains("Reinstalled greeter 1.0")));
+        assert!(fs.read("/usr/share/greet/README").is_some());
+        let st = load_status(&fs);
+        assert!(!st.iter().find(|p| p.name == "greeter").unwrap().auto);
+    }
+
+    #[test]
+    fn upgrade_when_up_to_date_says_up_to_date() {
+        let (mut fs, mut f) = updated();
+        run(|say, persist| install(&mut fs, &mut f, &[real_test_key()], &["greeter"], say, persist)).0.unwrap();
+        let (r, said, _) = run(|say, persist| upgrade(&mut fs, &mut f, &[real_test_key()], false, say, persist));
+        assert_eq!(r.unwrap(), 0);
+        assert!(said.iter().any(|s| s.contains("up to date")));
     }
 }
