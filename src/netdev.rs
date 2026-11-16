@@ -3,6 +3,7 @@
 //! Provides a unified interface for physical and virtual network interface cards:
 //! - Intel e1000 family (82540EM, 82545EM, 82574L)
 //! - VirtIO-Net (virtio 1.0 modern and legacy PCI)
+//! - Realtek RTL8168/8111 (HP OMEN wired port; untested on real hardware)
 //! - Software Loopback (for self-contained local testing)
 
 use crate::spin::SpinLock;
@@ -129,6 +130,8 @@ pub enum ActiveNetDev {
     E1000(crate::e1000::E1000),
     #[cfg(target_os = "uefi")]
     Virtio(crate::virtionet::VirtioNet),
+    #[cfg(target_os = "uefi")]
+    Rtl8168(crate::rtl8168::Rtl8168),
 }
 
 static ACTIVE_DEV: SpinLock<ActiveNetDev> = SpinLock::new(ActiveNetDev::None);
@@ -147,6 +150,8 @@ pub fn device_name() -> &'static str {
         ActiveNetDev::E1000(d) => d.name(),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Virtio(d) => d.name(),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::Rtl8168(d) => d.name(),
     }
 }
 
@@ -159,6 +164,8 @@ pub fn mac_address() -> [u8; 6] {
         ActiveNetDev::E1000(d) => d.mac_address(),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Virtio(d) => d.mac_address(),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::Rtl8168(d) => d.mac_address(),
     }
 }
 
@@ -171,6 +178,8 @@ pub fn link_up() -> bool {
         ActiveNetDev::E1000(d) => d.link_up(),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Virtio(d) => d.link_up(),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::Rtl8168(d) => d.link_up(),
     }
 }
 
@@ -183,6 +192,8 @@ pub fn send_packet(packet: &[u8]) -> Result<(), NetError> {
         ActiveNetDev::E1000(d) => d.send(packet),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Virtio(d) => d.send(packet),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::Rtl8168(d) => d.send(packet),
     };
     let mut stats = STATS.lock();
     match res {
@@ -207,6 +218,8 @@ pub fn receive_packet(buf: &mut [u8]) -> Result<usize, NetError> {
         ActiveNetDev::E1000(d) => d.receive(buf),
         #[cfg(target_os = "uefi")]
         ActiveNetDev::Virtio(d) => d.receive(buf),
+        #[cfg(target_os = "uefi")]
+        ActiveNetDev::Rtl8168(d) => d.receive(buf),
     };
     let mut stats = STATS.lock();
     match res {
@@ -232,13 +245,18 @@ pub fn stats() -> (u64, u64, u64, u64, u64, u64) {
 pub fn probe() {
     let mut chosen_e1000: Option<pci::Device> = None;
     let mut chosen_virtio: Option<pci::Device> = None;
+    let mut chosen_rtl: Option<pci::Device> = None;
 
     pci::for_each(|d| {
         let (vendor, device) = (d.header.vendor, d.header.device);
         // Intel e1000 family: 82540EM (0x100E), 82545EM (0x100F), 82543GC (0x1004), 82574L (0x10D3), 82567LM (0x10DE), etc.
-        if vendor == 0x8086 && (device == 0x100E || device == 0x100F || device == 0x1004 || device == 0x1010 || device == 0x10D3 || d.header.class == 0x02)
+        if vendor == 0x8086 && (device == 0x100E || device == 0x100F || device == 0x1004 || device == 0x1010 || device == 0x10D3)
             && chosen_e1000.is_none() {
             chosen_e1000 = Some(*d);
+        }
+        // Realtek RTL8168/8111 (the OMEN's wired port).
+        if crate::rtl8168::is_realtek_gbe(vendor, device) && chosen_rtl.is_none() {
+            chosen_rtl = Some(*d);
         }
         // VirtIO network adapter
         if vendor == 0x1AF4 && (device == 0x1000 || device == 0x1041)
@@ -268,6 +286,35 @@ pub fn probe() {
             }
             Err(e) => {
                 warn!("net", "failed to initialize Intel e1000: {:?}", e);
+            }
+        }
+    }
+
+    if let Some(dev) = chosen_rtl {
+        match crate::rtl8168::init(&dev) {
+            Ok(driver) => {
+                let mac = driver.mac_address();
+                let xid = driver.xid();
+                info!(
+                    "net",
+                    "bound Realtek RTL8168 ({:04x}:{:04x} rev {:02x}) xid={:03x} ({}) MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}; untested on hardware",
+                    dev.header.vendor,
+                    dev.header.device,
+                    dev.header.revision,
+                    xid,
+                    crate::rtl8168::chip_name(xid).unwrap_or("unknown variant"),
+                    mac[0],
+                    mac[1],
+                    mac[2],
+                    mac[3],
+                    mac[4],
+                    mac[5]
+                );
+                *ACTIVE_DEV.lock() = ActiveNetDev::Rtl8168(driver);
+                return;
+            }
+            Err(e) => {
+                warn!("net", "failed to initialize Realtek RTL8168: {:?}", e);
             }
         }
     }

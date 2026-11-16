@@ -146,8 +146,8 @@ pub fn hmac(key: &[u8], data: &[u8]) -> [u8; DIGEST_LEN] {
 
 /// PBKDF2-HMAC-SHA1 (RFC 8018). Fills `out` with derived key bytes.
 pub fn pbkdf2(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) {
-    let mut block_index: u32 = 1;
-    for chunk in out.chunks_mut(DIGEST_LEN) {
+    for (i, chunk) in out.chunks_mut(DIGEST_LEN).enumerate() {
+        let block_index = i as u32 + 1;
         let mut u = hmac_parts(password, &[salt, &block_index.to_be_bytes()]);
         let mut t = u;
         for _ in 1..iterations {
@@ -157,7 +157,6 @@ pub fn pbkdf2(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) {
             }
         }
         chunk.copy_from_slice(&t[..chunk.len()]);
-        block_index += 1;
     }
 }
 

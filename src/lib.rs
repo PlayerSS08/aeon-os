@@ -53,6 +53,7 @@ pub mod netstack;
 pub mod pci;
 pub mod pixel;
 pub mod readyq;
+pub mod rtl8168;
 pub mod ramfs;
 pub mod schedpolicy;
 pub mod schedtrace;

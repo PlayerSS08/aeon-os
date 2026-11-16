@@ -244,7 +244,7 @@ fn unsnap(body: &[u8]) -> Result<(u16, &[u8]), FrameError> {
 fn ccmp_aad(hdr: &[u8]) -> Vec<u8> {
     let mut aad = Vec::with_capacity(22);
     aad.push(hdr[0] & 0x8F); // subtype bits 4-6 masked for data frames (non-QoS: unchanged)
-    aad.push(hdr[1] & !0x38 | 0x00); // retry, power management, more data masked; protected kept
+    aad.push(hdr[1] & !0x38); // retry, power management, more data masked; protected kept
     aad.extend_from_slice(&hdr[4..22]); // A1, A2, A3
     aad.push(hdr[22] & 0x0F); // fragment number kept, sequence number masked
     aad.push(0);
@@ -320,6 +320,7 @@ pub fn data_unprotect(
 
 /// From-DS protected data frame (what an access point sends to a station). Used by the simulated AP in the
 /// tests; it is public because a future hotspot mode would need it too.
+#[allow(clippy::too_many_arguments)]
 pub fn data_from_ap_protected(
     key: &[u8; 16],
     pn: u64,

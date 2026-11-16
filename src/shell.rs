@@ -840,11 +840,11 @@ fn cmd_apt(rest: &str) {
                 }
                 let inst = crate::apt::list_installed(fs);
                 for (p, v) in inst {
-                    if !crate::apt::BUILTIN_PACKAGES.iter().any(|b| b.name == p.as_str()) {
-                        if pattern.is_empty() || crate::apt::matches_glob(&p, pattern) {
-                            let (_, auto) = crate::apt::is_installed_automatic(fs, &p);
-                            out!("{}\n", crate::apt::format_apt_list_entry(&p, "resolute", &v, "amd64", true, auto));
-                        }
+                    if !crate::apt::BUILTIN_PACKAGES.iter().any(|b| b.name == p.as_str())
+                        && (pattern.is_empty() || crate::apt::matches_glob(&p, pattern))
+                    {
+                        let (_, auto) = crate::apt::is_installed_automatic(fs, &p);
+                        out!("{}\n", crate::apt::format_apt_list_entry(&p, "resolute", &v, "amd64", true, auto));
                     }
                 }
             }

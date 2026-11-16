@@ -36,6 +36,7 @@ pub struct DebianPackage {
     pub payload: &'static [u8],
 }
 
+#[allow(clippy::too_many_arguments)]
 const fn p(
     name: &'static str,
     suite: &'static str,

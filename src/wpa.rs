@@ -198,16 +198,30 @@ pub struct Gtk {
     pub key: [u8; 16],
 }
 
+/// What one message 1 would give us. Message 1 carries no MIC, so anyone in radio range can send one: it must
+/// never overwrite what the real AP established. Each message 1 therefore gets its own candidate, and
+/// message 3 is matched to the candidate with the same ANonce and accepted only if its MIC verifies.
+struct Candidate {
+    anonce: [u8; 32],
+    ptk: Ptk,
+    /// Replay counter of the message 1 that created it; message 3 must carry a larger one.
+    replay: u64,
+}
+
+/// Candidates kept at once. A flood of forged message 1s can push the oldest out; the real AP retransmits
+/// message 1, which brings its candidate back.
+const MAX_CANDIDATES: usize = 8;
+
 pub struct Supplicant {
     pmk: [u8; PMK_LEN],
     aa: [u8; 6],
     spa: [u8; 6],
     snonce: [u8; 32],
     state: State,
-    anonce: [u8; 32],
-    last_replay: Option<u64>,
+    cands: Vec<Candidate>,
     ptk: Option<Ptk>,
     gtk: Option<Gtk>,
+    gtk_rsc: u64,
     /// The RSN element the AP advertised in its beacon or probe response, if known. Message 3 must carry the
     /// same one, otherwise someone downgraded the negotiation.
     ap_rsn: Option<Vec<u8>>,
@@ -216,7 +230,7 @@ pub struct Supplicant {
 impl Supplicant {
     /// `snonce` must come from the kernel entropy pool; it is the caller's job to make it unpredictable.
     pub fn new(pmk: [u8; PMK_LEN], aa: [u8; 6], spa: [u8; 6], snonce: [u8; 32], ap_rsn: Option<Vec<u8>>) -> Self {
-        Self { pmk, aa, spa, snonce, state: State::WaitMsg1, anonce: [0; 32], last_replay: None, ptk: None, gtk: None, ap_rsn }
+        Self { pmk, aa, spa, snonce, state: State::WaitMsg1, cands: Vec::new(), ptk: None, gtk: None, gtk_rsc: 0, ap_rsn }
     }
 
     pub fn state(&self) -> State {
@@ -227,6 +241,11 @@ impl Supplicant {
     }
     pub fn gtk(&self) -> Option<&Gtk> {
         self.gtk.as_ref()
+    }
+    /// The group packet number the AP had reached when it sent message 3 (its Key RSC). Group frames with a
+    /// packet number at or below it are replays from before we joined.
+    pub fn gtk_rsc(&self) -> u64 {
+        self.gtk_rsc
     }
 
     /// Feeds one EAPOL frame from the AP. Returns the reply frame to send, if any.
@@ -243,13 +262,10 @@ impl Supplicant {
     }
 
     fn msg1(&mut self, m: &EapolKey) -> Result<Option<Vec<u8>>, WpaError> {
-        // A new message 1 is legal at any time before completion (the AP retries), and restarts the exchange.
         if self.state == State::Done {
             return Err(WpaError::UnexpectedMessage);
         }
-        self.anonce = m.nonce;
-        self.last_replay = Some(m.replay);
-        let ptk = derive_ptk(&self.pmk, &self.aa, &self.spa, &self.anonce, &self.snonce);
+        let ptk = derive_ptk(&self.pmk, &self.aa, &self.spa, &m.nonce, &self.snonce);
         let reply = EapolKey {
             info: 2 | KI_PAIRWISE | KI_MIC,
             key_len: 0,
@@ -261,7 +277,12 @@ impl Supplicant {
             data: RSN_WPA2_PSK_CCMP.to_vec(),
         };
         let out = sign(&ptk.kck, &reply);
-        self.ptk = Some(ptk);
+        // A retransmitted message 1 (same ANonce) refreshes its candidate; a new ANonce adds one.
+        self.cands.retain(|c| c.anonce != m.nonce);
+        if self.cands.len() == MAX_CANDIDATES {
+            self.cands.remove(0);
+        }
+        self.cands.push(Candidate { anonce: m.nonce, ptk, replay: m.replay });
         self.state = State::WaitMsg3;
         Ok(Some(out))
     }
@@ -270,17 +291,14 @@ impl Supplicant {
         if self.state != State::WaitMsg3 {
             return Err(WpaError::UnexpectedMessage);
         }
-        let ptk = self.ptk.clone().ok_or(WpaError::UnexpectedMessage)?;
+        let cand = self.cands.iter().find(|c| c.anonce == m.nonce).ok_or(WpaError::NonceChanged)?;
+        let (ptk, msg1_replay) = (cand.ptk.clone(), cand.replay);
         if !mic_ok(&ptk.kck, &frame[..KEY_FIXED + m.data.len()], &m.mic) {
             return Err(WpaError::BadMic);
         }
-        if let Some(last) = self.last_replay {
-            if m.replay <= last {
-                return Err(WpaError::ReplayedMessage);
-            }
-        }
-        if m.nonce != self.anonce {
-            return Err(WpaError::NonceChanged);
+        // From here on the frame is authenticated: the AP that knows the PSK sent it.
+        if m.replay <= msg1_replay {
+            return Err(WpaError::ReplayedMessage);
         }
         if m.info & KI_INSTALL == 0 || m.info & KI_ENCRYPTED == 0 {
             return Err(WpaError::UnexpectedMessage);
@@ -293,7 +311,9 @@ impl Supplicant {
             }
         }
         self.gtk = Some(gtk.ok_or(WpaError::BadKeyData)?);
-        self.last_replay = Some(m.replay);
+        let mut rsc = [0u8; 8];
+        rsc[..6].copy_from_slice(&m.rsc[..6]);
+        self.gtk_rsc = u64::from_le_bytes(rsc);
         let reply = EapolKey {
             info: 2 | KI_PAIRWISE | KI_MIC | KI_SECURE,
             key_len: 0,
@@ -304,8 +324,11 @@ impl Supplicant {
             mic: [0; 16],
             data: Vec::new(),
         };
+        let out = sign(&ptk.kck, &reply);
+        self.ptk = Some(ptk);
+        self.cands.clear();
         self.state = State::Done;
-        Ok(Some(sign(&ptk.kck, &reply)))
+        Ok(Some(out))
     }
 }
 
@@ -414,6 +437,10 @@ mod tests {
         }
 
         fn msg3(&self, replay: u64, kek_override: Option<[u8; 16]>) -> Vec<u8> {
+            self.msg3_rsc(replay, kek_override, [0; 8])
+        }
+
+        fn msg3_rsc(&self, replay: u64, kek_override: Option<[u8; 16]>, rsc: [u8; 8]) -> Vec<u8> {
             let ptk = self.ptk.as_ref().unwrap();
             let kd = build_msg3_key_data(&kek_override.unwrap_or(ptk.kek), &self.rsn, 1, &[0x42; 16]);
             let m = EapolKey {
@@ -422,7 +449,7 @@ mod tests {
                 replay,
                 nonce: self.anonce,
                 iv: [0; 16],
-                rsc: [0; 8],
+                rsc,
                 mic: [0; 16],
                 data: kd,
             };
@@ -517,6 +544,40 @@ mod tests {
         ap.anonce = nonce(11, 2);
         // Valid MIC but a different ANonce than message 1 carried: refused as a changed nonce.
         assert_eq!(sup.handle(&ap.msg3(3, None)), Err(WpaError::NonceChanged));
+    }
+
+    #[test]
+    fn a_forged_message_1_cannot_break_the_real_handshake() {
+        let (mut sup, mut ap) = setup();
+        let m2 = sup.handle(&ap.msg1(1)).unwrap().unwrap();
+        let parsed = EapolKey::parse(&m2).unwrap();
+        ap.ptk = Some(derive_ptk(&pmk(), &AA, &SPA, &ap.anonce, &parsed.nonce));
+        // An attacker, with no key, injects message 1s with other ANonces and huge replay counters.
+        for i in 0..20u64 {
+            let forged = Ap { anonce: nonce(13, i as usize), ptk: None, rsn: Vec::new() };
+            assert!(sup.handle(&forged.msg1(1_000_000 + i)).unwrap().is_some());
+        }
+        // The real AP retransmits message 1 (its candidate may have been pushed out), then sends message 3.
+        sup.handle(&ap.msg1(1)).unwrap();
+        let m4 = sup.handle(&ap.msg3_rsc(2, None, [9, 0, 0, 0, 0, 0, 0, 0])).unwrap();
+        assert!(m4.is_some());
+        assert_eq!(sup.state(), State::Done);
+        assert_eq!(sup.gtk_rsc(), 9);
+    }
+
+    #[test]
+    fn a_bad_message_3_does_not_kill_the_attempt() {
+        let (mut sup, mut ap) = setup();
+        let m2 = sup.handle(&ap.msg1(1)).unwrap().unwrap();
+        let parsed = EapolKey::parse(&m2).unwrap();
+        ap.ptk = Some(derive_ptk(&pmk(), &AA, &SPA, &ap.anonce, &parsed.nonce));
+        let mut junk = ap.msg3(2, None);
+        let n = junk.len();
+        junk[n - 2] ^= 0x55;
+        assert_eq!(sup.handle(&junk), Err(WpaError::BadMic));
+        assert_eq!(sup.state(), State::WaitMsg3);
+        assert!(sup.handle(&ap.msg3(2, None)).unwrap().is_some());
+        assert_eq!(sup.state(), State::Done);
     }
 
     #[test]

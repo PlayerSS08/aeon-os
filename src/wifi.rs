@@ -5,6 +5,9 @@
 //! The chip driver for the OMEN's Realtek RTL8852BE is NOT written: it needs Realtek's firmware blob, the MAC
 //! and baseband setup tables and DMA rings, and cannot be proven without the laptop. Everything above the radio
 //! is tested here against a simulated access point (`tests`), including the full 4-way handshake.
+//!
+//! Known limits: no group-key or pairwise rekey handshakes (after an AP rekeys the group key, broadcast and
+//! multicast stop arriving while unicast keeps working), no power save, no roaming, WPA2-PSK/CCMP only.
 
 use alloc::vec::Vec;
 
@@ -97,19 +100,16 @@ impl<R: Radio> Station<R> {
             let _ = self.radio.tx(&dot11::probe_request(&mac, b"", seq));
             let end = self.radio.now_ms() + dwell_ms;
             while self.radio.now_ms() < end {
-                match self.radio.rx(&mut buf) {
-                    Some(n) => {
-                        if let Some(mut b) = dot11::parse_bss(&buf[..n]) {
-                            if b.channel == 0 {
-                                b.channel = ch;
-                            }
-                            match found.iter_mut().find(|x| x.bssid == b.bssid) {
-                                Some(old) => *old = b,
-                                None => found.push(b),
-                            }
+                if let Some(n) = self.radio.rx(&mut buf) {
+                    if let Some(mut b) = dot11::parse_bss(&buf[..n]) {
+                        if b.channel == 0 {
+                            b.channel = ch;
+                        }
+                        match found.iter_mut().find(|x| x.bssid == b.bssid) {
+                            Some(old) => *old = b,
+                            None => found.push(b),
                         }
                     }
-                    None => {}
                 }
             }
         }
@@ -176,9 +176,15 @@ impl<R: Radio> Station<R> {
         // 3. The 4-way handshake: the AP speaks first (message 1), then message 3 after our message 2.
         let mut sup = Supplicant::new(pmk, bss.bssid, me, snonce, bss.rsn.clone());
         let deadline = self.radio.now_ms() + 4000;
+        // Frames that fail their checks are ignored (anyone can inject them); the exchange only fails by timing
+        // out, or on an error found in an authenticated message. The last ignored error explains a timeout.
+        let mut last_error = None;
         while sup.state() != wpa::State::Done {
             if self.radio.now_ms() >= deadline {
-                return Err(WifiError::Timeout);
+                return Err(match last_error {
+                    Some(e) => WifiError::HandshakeFailed(e),
+                    None => WifiError::Timeout,
+                });
             }
             let bssid = bss.bssid;
             let Some(f) = self.wait_frame(200, |f| {
@@ -198,8 +204,16 @@ impl<R: Radio> Station<R> {
                     self.radio.tx(&dot11::data_plain(&me, &bss.bssid, &bss.bssid, 0x888E, &reply, seq))?;
                 }
                 Ok(None) => {}
-                // A retransmitted message 1 after message 3, or a stray frame: ignore. Real failures end it.
-                Err(wpa::WpaError::UnexpectedMessage) => {}
+                Err(
+                    e @ (wpa::WpaError::UnexpectedMessage
+                    | wpa::WpaError::BadMic
+                    | wpa::WpaError::NonceChanged
+                    | wpa::WpaError::ReplayedMessage
+                    | wpa::WpaError::Truncated
+                    | wpa::WpaError::NotEapolKey
+                    | wpa::WpaError::UnsupportedDescriptor),
+                ) => last_error = Some(e),
+                // The MIC verified, so the AP itself sent something unacceptable (for example a downgraded RSN).
                 Err(e) => return Err(WifiError::HandshakeFailed(e)),
             }
         }
@@ -211,7 +225,8 @@ impl<R: Radio> Station<R> {
             gtk_id: gtk.key_id,
             tx_pn: 0,
             rx_pn_ptk: 0,
-            rx_pn_gtk: 0,
+            // Group frames must be newer than what the AP had sent when it gave us the key.
+            rx_pn_gtk: sup.gtk_rsc(),
         });
         Ok(())
     }
@@ -249,10 +264,12 @@ impl<R: Radio> Station<R> {
         let unicast = frame.len() >= 10 && frame[4] & 1 == 0;
         let result = if unicast {
             dot11::data_unprotect(&s.tk, &mut s.rx_pn_ptk, frame, &s.bss.bssid, &me)
-        } else {
+        } else if frame.len() > dot11::HDR_LEN + 3 && frame[dot11::HDR_LEN + 3] >> 6 == s.gtk_id {
             dot11::data_unprotect(&s.gtk, &mut s.rx_pn_gtk, frame, &s.bss.bssid, &me)
+        } else {
+            // A group frame under a key index we do not hold (for example after a rekey we cannot do yet).
+            return Ok(None);
         };
-        let _ = s.gtk_id;
         match result {
             Ok(eth) if eth.len() <= out.len() => {
                 out[..eth.len()].copy_from_slice(&eth);
@@ -535,6 +552,30 @@ mod tests {
         assert!(NetDev::receive(&mut st, &mut out).is_ok());
         st.radio().q.push_back(copy);
         assert_eq!(NetDev::receive(&mut st, &mut out), Err(NetError::RxEmpty));
+    }
+
+    #[test]
+    fn group_frames_need_the_right_key_id_and_a_fresh_packet_number() {
+        let (mut st, r) = join(Quirks::default());
+        assert_eq!(r, Ok(()));
+        let bcast = [0xFF; 6];
+        let src = [0x02, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC];
+        let mk = |key: &[u8; 16], pn: u64, id: u8| {
+            dot11::data_from_ap_protected(key, pn, id, &AP_MAC, &bcast, &src, 0x0806, b"who-has", 4)
+        };
+        let mut out = [0u8; 100];
+        // The AP gave us group key 0x99.. as key id 1.
+        st.radio().q.push_back(mk(&[0x99; 16], 5, 1));
+        assert!(matches!(st.recv_eth(&mut out), Ok(Some(_))));
+        // The same frame again is a replay; a frame under another key id or with the wrong key is dropped.
+        st.radio().q.push_back(mk(&[0x99; 16], 5, 1));
+        st.radio().q.push_back(mk(&[0x99; 16], 6, 2));
+        st.radio().q.push_back(mk(&[0x11; 16], 7, 1));
+        for _ in 0..3 {
+            assert_eq!(st.recv_eth(&mut out), Ok(None));
+        }
+        st.radio().q.push_back(mk(&[0x99; 16], 8, 1));
+        assert!(matches!(st.recv_eth(&mut out), Ok(Some(_))));
     }
 
     #[test]
