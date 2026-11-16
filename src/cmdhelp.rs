@@ -73,7 +73,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("files", "rmdir", "rmdir <folder>", "delete an empty folder"),
     c("files", "df", "df", "space used by the RAM files"),
     c("files", "cat", "cat <file>", "print a file"),
-    c("files", "sha256sum", "sha256sum <file>...", "SHA-256 of files, to check downloads"),
+    c("packaging", "sha256sum", "sha256sum <file>...", "SHA-256 of files, to check downloads"),
     c("files", "write", "write [-f] <f> <t>", "create a file (-f replaces; \\n = new line)"),
     c("files", "append", "append <file> <text>", "add a line to the end of a file"),
     c("files", "edit", "edit <file>", "type many lines, end with a line holding only ."),
