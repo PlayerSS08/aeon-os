@@ -711,8 +711,11 @@ fn handle_udp(src_ip: Ipv4Addr, payload: &[u8]) {
         handle_dhcp(src_ip, data);
     }
     if src_port == 53 {
+        // Only the server we asked, on the port we asked from, with the id we sent. Anything else is ignored
+        // (and we keep waiting), so a stray or forged packet cannot take the place of the real answer.
         if let Some(w) = DNS_WAIT.lock().as_mut() {
-            if w.port == dst_port && w.reply.is_none() {
+            let id_ok = data.len() >= 2 && u16::from_be_bytes([data[0], data[1]]) == w.id;
+            if src_ip == w.server && w.port == dst_port && id_ok && w.reply.is_none() {
                 w.reply = Some(data.to_vec());
             }
         }
@@ -793,22 +796,33 @@ struct Conn {
 }
 
 static TCP_CONN: SpinLock<Option<Conn>> = SpinLock::new(None);
-static RAND_COUNTER: SpinLock<u32> = SpinLock::new(0);
+static RNG: SpinLock<Option<crate::entropy::Drbg>> = SpinLock::new(None);
 
-/// A hard-to-guess 32-bit value for initial sequence numbers, ports and DNS ids: a hash of the clock, a counter
-/// and our MAC. Good enough to make blind spoofing of a client connection impractical; not a CSPRNG.
+/// Secret key for the network's random values: the CPU's hardware random generator (4 x 64 bits), mixed with the
+/// clock and our MAC so that a machine without RDRAND is no worse than before (but then it is only as strong
+/// as those weak inputs; the boot log's `rdrand` line says which case applies).
+#[cfg(target_os = "uefi")]
+fn network_rng_key() -> [u8; crate::entropy::SEED_LEN] {
+    let mut pool = crate::entropy::Pool::new();
+    for _ in 0..4 {
+        if let Some(v) = crate::arch::rdrand64() {
+            pool.add_u64(v);
+        }
+    }
+    pool.add_u64(crate::arch::rdtsc());
+    pool.add_u64(uptime_us());
+    pool.add(&netdev::mac_address());
+    pool.finish()
+}
+#[cfg(not(target_os = "uefi"))]
+fn network_rng_key() -> [u8; crate::entropy::SEED_LEN] {
+    [0x5A; crate::entropy::SEED_LEN]
+}
+
+/// An unguessable 32-bit value for initial sequence numbers, ephemeral ports and DNS ids.
 fn random_u32() -> u32 {
-    let n = {
-        let mut c = RAND_COUNTER.lock();
-        *c = c.wrapping_add(1);
-        *c
-    };
-    let mut seed = [0u8; 18];
-    seed[..8].copy_from_slice(&uptime_us().to_le_bytes());
-    seed[8..12].copy_from_slice(&n.to_le_bytes());
-    seed[12..].copy_from_slice(&netdev::mac_address());
-    let d = crate::sha256::digest(&seed);
-    u32::from_le_bytes([d[0], d[1], d[2], d[3]])
+    let mut guard = RNG.lock();
+    guard.get_or_insert_with(|| crate::entropy::Drbg::new(network_rng_key())).next_u32()
 }
 
 fn tcp_checksum(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, tcp_segment: &[u8]) -> u16 {
@@ -924,6 +938,8 @@ fn tcp_tick() {
 
 struct DnsWait {
     port: u16,
+    id: u16,
+    server: Ipv4Addr,
     reply: Option<Vec<u8>>,
 }
 
@@ -964,10 +980,9 @@ pub fn dns_resolve(name: &str) -> Result<Ipv4Addr, String> {
     }
     let mut last = String::from("no answer from the DNS server");
     for _ in 0..3 {
-        let r = random_u32();
-        let (id, port) = (r as u16, 49152 + ((r >> 16) % 16000) as u16);
+        let (id, port) = (random_u32() as u16, 49152 + (random_u32() % 16384) as u16);
         let query = dns::build_query(id, &lower).map_err(|_| alloc::format!("'{name}' is not a valid host name"))?;
-        *DNS_WAIT.lock() = Some(DnsWait { port, reply: None });
+        *DNS_WAIT.lock() = Some(DnsWait { port, id, server, reply: None });
         if send_udp_packet(Ipv4Addr::ANY, server, port, 53, &query).is_err() {
             last = String::from("could not send the DNS query");
             continue;
@@ -986,7 +1001,7 @@ pub fn dns_resolve(name: &str) -> Result<Ipv4Addr, String> {
         }
         *DNS_WAIT.lock() = None;
         let Some(reply) = reply else { continue };
-        match dns::parse_response(id, &reply) {
+        match dns::parse_response(id, &lower, &reply) {
             Ok(addrs) => {
                 let ip = Ipv4Addr(addrs[0]);
                 dns_cache_put(&lower, ip);
@@ -1035,7 +1050,7 @@ fn fetch_once(
     max_body: usize,
     progress: &mut dyn FnMut(usize, Option<usize>),
 ) -> Result<(HttpResponse, Option<String>), String> {
-    let local_port = 49152 + (random_u32() % 16000) as u16;
+    let local_port = 49152 + (random_u32() % 16384) as u16;
     let now = uptime_us();
     let (conn, syn) = Tcp::connect(random_u32(), now);
     *TCP_CONN.lock() = Some(Conn { tcp: conn, remote_ip: ip, remote_port: url.port, local_port });
