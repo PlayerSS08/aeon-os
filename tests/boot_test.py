@@ -1275,6 +1275,27 @@ def t_apt(ctx):
         vm.close()
 
 
+def t_touchpad(ctx):
+    """No I2C hardware in QEMU: the probe must say so calmly, boot must continue, `touchpad` must answer."""
+    r = ctx.r
+    vm = Vm(make_esp(ctx.work, ctx.efi, "esp-touchpad", cfg="nomenu" + chr(10)), ctx.work, name="touchpad", mem=512)
+    try:
+        r.check("shell prompt", vm.wait_for("aeon> ", 150, "serial"))
+        t = vm.text()
+        r.check("the probe reports no serial-bus controller", "touchpad" in t and "no Intel serial-bus controllers" in t, t[-900:])
+        vm.type("touchpad")
+        vm.keys("ret")
+        r.check("`touchpad` says it is not in use", vm.wait_for("no touchpad in use", 20, "serial"), vm.serial_text()[-500:])
+        vm.type("touchpad scan")
+        vm.keys("ret")
+        r.check("`touchpad scan` answers", vm.wait_for("no usable I2C controller", 20, "serial"), vm.serial_text()[-500:])
+        vm.type("mouse")
+        vm.keys("ret")
+        r.check("`mouse` points at `touchpad`", vm.wait_for("see `touchpad`", 20, "serial"), vm.serial_text()[-500:])
+    finally:
+        vm.close()
+
+
 def t_usbnet(ctx):
     """A USB network function (QEMU's usb-net, RNDIS like a phone's USB tethering): DHCP and a download through it."""
     import functools, http.server, threading
@@ -2163,7 +2184,7 @@ def t_pendrive(ctx):
 
 
 TESTS = {
-    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "usbnet": t_usbnet, "apt": t_apt, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
+    "image": t_image, "boot": t_boot_and_splash, "shell": t_shell, "commands": t_commands, "fs": t_fs, "sched": t_sched, "textclip": t_text_clip, "longline": t_long_line, "prompt": t_prompt, "tools": t_tools, "editor": t_editor, "workflow": t_workflow, "sweep": t_sweep, "power": t_power, "usb": t_usb, "mouse": t_mouse, "net": t_net, "usbnet": t_usbnet, "touchpad": t_touchpad, "apt": t_apt, "pendrive": t_pendrive, "ahci": t_ahci, "cpu": t_cpu, "apic": t_apic, "waitq": t_waitq, "pci": t_pci, "console": t_console, "disk": t_disk, "disk32": t_disk32, "user": t_user, "config": t_config, "modes": t_modes,
     "bootcount": t_bootcount, "fwshell": t_fwshell, "lastpanic": t_lastpanic, "seed": t_seed_history, "loader": t_loader_iface, "menu": t_menu, "dawn": t_dawn, "panicscreen": t_panicscreen, "tpm": t_tpm, "notpm": t_no_tpm,
     "secureboot": t_secure_boot, "release": t_release, "faults": t_faults,
 }

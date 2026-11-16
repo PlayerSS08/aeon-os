@@ -407,7 +407,41 @@ fn cmd_mouse() {
             if b & 4 != 0 { "down" } else { "up" }
         ),
         None if has_mouse => out!("USB mouse ready; move it to show the pointer\n"),
-        None => out!("no mouse: plug a USB boot-protocol mouse into a USB-A port (touchpads on I2C are not supported yet)\n"),
+        None if crate::touchpad_hw::present() => out!("touchpad ready; touch it to show the pointer\n"),
+        None => out!("no mouse: plug in a USB mouse, or see `touchpad` for the laptop's own pad\n"),
+    }
+}
+
+/// `touchpad [scan|rescan|dump]`: the laptop's I2C touchpad, what the probe found, and tools to debug it.
+fn cmd_touchpad(rest: &str) {
+    match rest.trim() {
+        "" => {
+            for l in crate::touchpad_hw::report() {
+                out!("{}\n", l);
+            }
+            out!("{}\n", if crate::touchpad_hw::present() { "touchpad working: one finger moves, a light tap clicks, two fingers scroll, the pad button clicks" } else { "no touchpad in use (`touchpad scan` lists what answers on the I2C buses)" });
+        }
+        "scan" => {
+            for l in crate::touchpad_hw::scan_bus() {
+                out!("{}\n", l);
+            }
+        }
+        "rescan" => {
+            crate::touchpad_hw::init();
+            for l in crate::touchpad_hw::report() {
+                out!("{}\n", l);
+            }
+        }
+        "dump" => {
+            let lines = crate::touchpad_hw::dump_report_descriptor();
+            if lines.is_empty() {
+                out!("no touchpad report descriptor\n");
+            }
+            for l in lines {
+                out!("{}\n", l);
+            }
+        }
+        _ => out!("usage: touchpad [scan|rescan|dump]\n"),
     }
 }
 
@@ -2574,6 +2608,7 @@ fn run(line: &str, hist: &History) {
         "pci" => cmd_pci(),
         "usb" => cmd_usb(),
         "mouse" => cmd_mouse(),
+        "touchpad" => cmd_touchpad(rest),
         "disks" => cmd_disks(),
         "disksched" => cmd_disksched(rest),
         "dls" => cmd_dls(rest),
@@ -2894,7 +2929,8 @@ pub extern "C" fn shell_task(_: usize) {
     loop {
         let mut idle = true;
         // A USB mouse moves the pointer; the wheel scrolls the log (three lines a notch, up = older lines).
-        while let Some(m) = crate::xhci::poll_mouse() {
+        // The laptop's own touchpad (I2C) moves it the same way; it is read at most every few milliseconds.
+        while let Some(m) = crate::xhci::poll_mouse().or_else(crate::touchpad_hw::poll) {
             idle = false;
             log::with_console(|c| {
                 c.pointer_motion(m.dx, m.dy, m.buttons);

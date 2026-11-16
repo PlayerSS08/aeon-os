@@ -33,6 +33,7 @@ pub mod bootopts;
 pub mod cmdhelp;
 pub mod cpuid;
 pub mod dns;
+pub mod dwi2c;
 pub mod entropy;
 pub mod fat;
 pub mod fatname;
@@ -46,6 +47,8 @@ pub mod frames;
 pub mod heapalloc;
 pub mod http;
 pub mod hidkbd;
+pub mod hidparse;
+pub mod i2chid;
 pub mod ieee80211;
 pub mod keymap;
 pub mod lineedit;
@@ -70,6 +73,7 @@ pub mod spin;
 pub mod syscall;
 pub mod tcp;
 pub mod tcg2;
+pub mod touchpad;
 pub mod usbdesc;
 pub mod wifi;
 pub mod usbfs;
@@ -126,6 +130,8 @@ pub mod usermode;
 pub mod vblk;
 #[cfg(target_os = "uefi")]
 pub mod xhci;
+#[cfg(target_os = "uefi")]
+pub mod touchpad_hw;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Set `AEON_GIT_HASH` in the build environment to embed a revision in the boot banner.

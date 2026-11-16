@@ -1317,6 +1317,7 @@ extern "C" fn kernel_main() -> ! {
     aeon::pci::scan();
     aeon::vblk::probe();
     aeon::xhci::init();
+    aeon::touchpad_hw::init();
     aeon::ahci::probe();
     aeon::netdev::probe();
     if heap == 0 {

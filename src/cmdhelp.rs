@@ -35,6 +35,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("hardware", "pci", "pci", "devices on the PCI bus"),
     c("hardware", "usb", "usb", "USB controller and its ports"),
     c("hardware", "mouse", "mouse", "mouse pointer position and buttons (USB mouse)"),
+    c("hardware", "touchpad", "touchpad [scan|dump]", "laptop touchpad (I2C): status, debug"),
     c("hardware", "disks", "disks", "the disk, if there is one"),
     c("hardware", "dread", "dread <n> [off]", "32 bytes of sector n as hex"),
     c("network", "ip", "ip [a|r|l|n]", "configure and view IP, links, routing"),
