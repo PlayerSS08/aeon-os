@@ -43,7 +43,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("network", "ping", "ping <ip> [-c N]", "send ICMP Echo Requests and measure latency"),
     c("network", "dhcp", "dhcp [renew|status]", "auto-configure IP, gateway, and DNS"),
     c("network", "connect", "connect [eth|wifi]", "connect to Ethernet or Wi-Fi"),
-    c("network", "wifi", "wifi [scan|connect]", "Wi-Fi wireless networking"),
+    c("network", "wifi", "wifi [probe|diag]", "Wi-Fi chip probe (driver in progress)"),
     c("network", "curl", "curl <url> [-o file]", "download over http (names work; no https)"),
     c("status", "speedtest", "speedtest [url]", "measured download speed"),
     c("hardware", "report", "report", "save a diagnostic report to the USB stick"),

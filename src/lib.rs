@@ -69,6 +69,8 @@ pub mod procargs;
 pub mod readyq;
 pub mod rtc;
 pub mod rtl8168;
+pub mod rtw89;
+pub mod rtw89_regs;
 pub mod ramfs;
 pub mod schedpolicy;
 pub mod schedtrace;

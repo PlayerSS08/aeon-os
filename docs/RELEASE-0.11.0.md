@@ -30,6 +30,22 @@ checked is listed at the end; read it before trusting the image.
   A process killed from outside (Ctrl+C, `kill`) is cleaned up by the scheduler when it frees the task.
 * System calls run with interrupts off; a call that must wait yields in a loop and re-checks.
 
+## Wi-Fi driver, stage 1 (added the same day)
+
+The OMEN's RTL8852BE-VT has no driver yet, and the Linux driver it must be ported from (`rtw89`, GPL-2.0 OR
+BSD-3-Clause) is tens of thousands of lines, so it is being ported in stages that the laptop can check:
+
+| Stage | Content | State |
+|---|---|---|
+| 1 | find the chip, enable it, map its registers (**BAR 2**; the old `wifi diag` read BAR 0, an I/O window), power the MAC on and off exactly like Linux's `rtw8852bt_pwr_on_func`/`pwr_off_func`, read the cut version and analog-die id | written (`src/rtw89.rs`, register names generated from Linux's headers into `src/rtw89_regs.rs`); sequences replayed on a fake register file in 9 host tests; **never run on the chip** |
+| 2 | firmware download (`firmware/rtw8852bt_fw*.bin`): needs the PCI DMA rings and the DMAC/DLE/HFC set-up | not written |
+| 3 | BB/RF tables, calibration, a raw receive | not written |
+| 4 | scan, join, data path, hook into the existing WPA2 and IP code | not written |
+
+`wifi probe` is read-only; `wifi probe on` also powers the chip on and off and prints every step. `report` now
+includes the read-only probe. Stage 2 is written from what the first real run prints, so the first run on the
+laptop is the next step. This is not "Wi-Fi works": for internet today use USB tethering or the wired port.
+
 ## Checked
 
 * 660 host unit tests pass (47 new): page-table maths with a fake memory (`vmspace`), the ELF/stack loader

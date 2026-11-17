@@ -828,6 +828,8 @@ fn cmd_report() {
     r.push_str(&crate::netdev::diagnostics());
     let _ = writeln!(r, "\n== wifi ==");
     r.push_str(&wifi_diag_text());
+    let _ = writeln!(r, "\n== wifi chip (RTL8852BE-VT registers, read only) ==");
+    r.push_str(&crate::rtw89::probe(false));
     let _ = writeln!(r, "\n== usb ==");
     r.push_str(&usb_text());
     let _ = writeln!(r, "\n== touchpad ==");
@@ -907,7 +909,8 @@ fn cmd_wifi(rest: &str) {
         }
         Some("connect") => cmd_connect(&alloc::format!("wifi {}", rest.trim_start_matches("connect").trim())),
         Some("diag") => wifi_diag(),
-        Some(_) => out!("Usage: wifi [status | scan | connect <ssid> <password> | diag]\n"),
+        Some("probe") => out!("{}", crate::rtw89::probe(rest.split_whitespace().nth(1) == Some("on"))),
+        Some(_) => out!("Usage: wifi [status | scan | connect <ssid> <password> | diag | probe [on]]\n"),
     }
 }
 
