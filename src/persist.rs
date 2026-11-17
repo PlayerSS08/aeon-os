@@ -50,6 +50,14 @@ pub fn path_is_sane(p: &str) -> bool {
         && p[1..].split('/').all(|c| !c.is_empty() && c != "." && c != ".." && c.bytes().all(|b| (0x20..0x7F).contains(&b)))
 }
 
+/// Only the user's own files are saved and restored. System and package-managed places are never touched: the
+/// snapshot is read from a removable stick that anyone can edit and its checksum catches accidents, not forgery,
+/// so it must not be able to rewrite what the signed `apt` flow manages (package files, apt's status, serial and
+/// index, `/etc`). Packages come back only through `apt restore`.
+pub fn is_user_path(p: &str) -> bool {
+    !["/bin", "/etc", "/usr", "/var", "/usb"].iter().any(|d| p.strip_prefix(d).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
+}
+
 pub fn encode(entries: &[Entry]) -> Result<Vec<u8>, PersistError> {
     let total: usize = entries.iter().map(|e| e.path.len() + e.data.as_ref().map_or(0, Vec::len) + 7).sum();
     if entries.len() > MAX_ENTRIES || total > MAX_TOTAL {
@@ -222,6 +230,16 @@ mod tests {
         b.extend_from_slice(&0u32.to_le_bytes());
         b.extend_from_slice(b"junk");
         assert_eq!(decode(&sign(b)), Err(PersistError::Corrupt));
+    }
+
+    #[test]
+    fn system_and_package_paths_are_never_user_data() {
+        for p in ["/home/a.txt", "/note.txt", "/tmp/x", "/home", "/usrdata/x", "/etcetera", "/binary", "/variable/x"] {
+            assert!(is_user_path(p), "{p}");
+        }
+        for p in ["/etc", "/etc/hostname", "/usr/share/greet/README", "/var/lib/aeonpkg/status", "/var", "/bin/tool", "/usb/AEONFS.BIN"] {
+            assert!(!is_user_path(p), "{p}");
+        }
     }
 
     #[test]

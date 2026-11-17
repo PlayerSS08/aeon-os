@@ -462,7 +462,7 @@ static UNSAVED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool:
 static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 fn tree_fingerprint() -> u64 {
-    crate::persist::fingerprint(fs().entries())
+    crate::persist::fingerprint(fs().entries().filter(|(p, _)| crate::persist::is_user_path(p)))
 }
 
 /// Brings back the files an earlier session saved on the USB stick (silent when there is nothing saved).
@@ -474,15 +474,24 @@ fn persist_restore() {
     if let Ok(bytes) = crate::usbfs::hw_read(crate::usbfs::rel_path(SNAPSHOT), crate::persist::MAX_TOTAL + 4096) {
         match crate::persist::decode(&bytes) {
             Ok(entries) => {
-                let n = entries.len();
+                let (mut n, mut skipped) = (0usize, 0usize);
                 for e in entries {
+                    // Only the user's own files come back; system and package paths are refused (see persist).
+                    if !crate::persist::is_user_path(&e.path) {
+                        skipped += 1;
+                        continue;
+                    }
                     // Parents come before children; an item that cannot be recreated is skipped, not fatal.
                     let _ = match &e.data {
                         None => fs().mkdir(&e.path),
                         Some(d) => fs().write(&e.path, d),
                     };
+                    n += 1;
                 }
                 out!("restored {} saved item(s) from the USB stick\n", n);
+                if skipped > 0 {
+                    out!("ignored {} saved item(s) under system paths (/etc, /usr, /var, /bin)\n", skipped);
+                }
             }
             Err(e) => out!("the saved files on the USB stick were not restored: {}\n", e),
         }
@@ -498,7 +507,7 @@ fn persist_save(force: bool) {
     if !force && fp == SAVED_FP.load(Relaxed) {
         return;
     }
-    let entries: Vec<crate::persist::Entry> = fs().entries().map(|(p, d)| crate::persist::Entry { path: String::from(p), data: d.map(<[u8]>::to_vec) }).collect();
+    let entries: Vec<crate::persist::Entry> = fs().entries().filter(|(p, _)| crate::persist::is_user_path(p)).map(|(p, d)| crate::persist::Entry { path: String::from(p), data: d.map(<[u8]>::to_vec) }).collect();
     let bytes = match crate::persist::encode(&entries) {
         Ok(b) => b,
         Err(e) => {
