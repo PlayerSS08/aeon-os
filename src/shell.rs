@@ -462,7 +462,8 @@ static UNSAVED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool:
 static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 fn tree_fingerprint() -> u64 {
-    crate::persist::fingerprint(fs().entries().filter(|(p, _)| crate::persist::is_user_path(p)))
+    let owned = crate::apt::owned_paths(fs());
+    crate::persist::fingerprint(fs().entries().filter(|(p, _)| crate::persist::is_saved_path(p, &owned)))
 }
 
 /// Brings back the files an earlier session saved on the USB stick (silent when there is nothing saved).
@@ -475,9 +476,10 @@ fn persist_restore() {
         match crate::persist::decode(&bytes) {
             Ok(entries) => {
                 let (mut n, mut skipped) = (0usize, 0usize);
+                let owned = crate::apt::owned_paths(fs());
                 for e in entries {
                     // Only the user's own files come back; system and package paths are refused (see persist).
-                    if !crate::persist::is_user_path(&e.path) {
+                    if !crate::persist::is_saved_path(&e.path, &owned) {
                         skipped += 1;
                         continue;
                     }
@@ -507,7 +509,8 @@ fn persist_save(force: bool) {
     if !force && fp == SAVED_FP.load(Relaxed) {
         return;
     }
-    let entries: Vec<crate::persist::Entry> = fs().entries().filter(|(p, _)| crate::persist::is_user_path(p)).map(|(p, d)| crate::persist::Entry { path: String::from(p), data: d.map(<[u8]>::to_vec) }).collect();
+    let owned = crate::apt::owned_paths(fs());
+    let entries: Vec<crate::persist::Entry> = fs().entries().filter(|(p, _)| crate::persist::is_saved_path(p, &owned)).map(|(p, d)| crate::persist::Entry { path: String::from(p), data: d.map(<[u8]>::to_vec) }).collect();
     let bytes = match crate::persist::encode(&entries) {
         Ok(b) => b,
         Err(e) => {

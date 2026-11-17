@@ -90,6 +90,12 @@ pub fn set_source(fs: &mut RamFs, url: &str) -> Result<String, String> {
     Ok(norm)
 }
 
+/// Every path an installed package owns. The saved-files snapshot never carries these: packages come back
+/// only through the signed `apt restore`.
+pub fn owned_paths(fs: &RamFs) -> alloc::collections::BTreeSet<String> {
+    load_status(fs).into_iter().flat_map(|p| p.files).collect()
+}
+
 pub fn load_status(fs: &RamFs) -> Vec<Installed> {
     fs.read(STATUS_PATH).and_then(|d| core::str::from_utf8(d).ok()).map(pkg::parse_status).unwrap_or_default()
 }

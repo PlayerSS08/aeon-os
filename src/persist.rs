@@ -58,6 +58,12 @@ pub fn is_user_path(p: &str) -> bool {
     !["/bin", "/etc", "/usr", "/var", "/usb"].iter().any(|d| p.strip_prefix(d).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
 }
 
+/// The full rule: a user path that no installed package owns. The folder list alone cannot match everything a
+/// package may write (its files can land anywhere), so ownership decides too.
+pub fn is_saved_path(path: &str, owned: &alloc::collections::BTreeSet<String>) -> bool {
+    is_user_path(path) && !owned.contains(path)
+}
+
 pub fn encode(entries: &[Entry]) -> Result<Vec<u8>, PersistError> {
     let total: usize = entries.iter().map(|e| e.path.len() + e.data.as_ref().map_or(0, Vec::len) + 7).sum();
     if entries.len() > MAX_ENTRIES || total > MAX_TOTAL {
@@ -240,6 +246,16 @@ mod tests {
         for p in ["/etc", "/etc/hostname", "/usr/share/greet/README", "/var/lib/aeonpkg/status", "/var", "/bin/tool", "/usb/AEONFS.BIN"] {
             assert!(!is_user_path(p), "{p}");
         }
+    }
+
+    #[test]
+    fn a_path_a_package_owns_is_never_saved_wherever_it_is() {
+        let owned: alloc::collections::BTreeSet<String> = ["/opt/tool/run", "/note.txt"].iter().map(|s| String::from(*s)).collect();
+        assert!(!is_saved_path("/opt/tool/run", &owned)); // outside the system folders but package-owned
+        assert!(!is_saved_path("/note.txt", &owned)); // even at the root
+        assert!(!is_saved_path("/etc/hostname", &owned)); // system folder
+        assert!(is_saved_path("/opt/tool/mine.txt", &owned)); // the user's own file next to it
+        assert!(is_saved_path("/home/a.txt", &alloc::collections::BTreeSet::new()));
     }
 
     #[test]
