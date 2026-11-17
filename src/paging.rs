@@ -5,6 +5,9 @@
 //! headers), page 0 (unmapped, so null dereferences fault) and the stack guard page. RAM is mapped
 //! no-execute except the firmware's runtime-services code; MMIO is uncached and the framebuffer
 //! write-combined.
+//!
+//! Nothing here is reachable from ring 3: no entry in these tables carries the user bit. User programs
+//! live in their own page tables (`vmspace`), which share the kernel's two top-level entries.
 
 use crate::bootinfo::BootInfo;
 use crate::global::Global;
@@ -14,7 +17,6 @@ const P: u64 = 1;
 const RW: u64 = 1 << 1;
 const PWT: u64 = 1 << 3;
 const PCD: u64 = 1 << 4;
-const US: u64 = 1 << 2;
 const PS: u64 = 1 << 7;
 /// PAT selector bit in a 2 MiB page entry (bit 7 is PS there, so PAT lives at bit 12).
 const PAT_LARGE: u64 = 1 << 12;
@@ -198,32 +200,6 @@ impl Builder {
     }
 }
 
-impl Builder {
-    /// Maps one 4 KiB page for ring 3: user-accessible, with the given write/execute rights. The
-    /// entries above the leaf get the user bit too, but every other leaf stays supervisor-only, so
-    /// the rest of the kernel is still out of reach.
-    fn set_user_page(&mut self, addr: u64, writable: bool, exec: bool) -> bool {
-        let Some(pt) = self.split(addr) else {
-            return false;
-        };
-        let idx = ((addr % SZ_2M) / SZ_4K) as usize;
-        let Some(pd_slot) = self.pd_slot(addr & !(SZ_2M - 1)) else {
-            return false;
-        };
-        // SAFETY: `idx < 512` inside the page table from `split`; `pd_slot`, the PDPT entry and PML4
-        // entry 0 are live table entries owned by this builder (`addr` is below 512 GiB).
-        unsafe {
-            let e = pt.add(idx);
-            let keep = *e & (PWT | PCD | PAT_4K);
-            *e = (addr & ADDR) | P | US | keep | if writable { RW } else { 0 } | if exec { 0 } else { self.nx };
-            *pd_slot |= US;
-            *self.pdpt.cast::<u64>().add((addr / GIB) as usize) |= US;
-            *self.pml4.cast::<u64>() |= US;
-        }
-        true
-    }
-}
-
 fn rd16(b: &[u8], o: usize) -> Option<usize> {
     Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?) as usize)
 }
@@ -368,14 +344,26 @@ pub fn restore_page(addr: u64) -> bool {
     ok
 }
 
-/// Maps one 4 KiB page so that ring 3 can use it (`writable` and `exec` are never both true).
-pub fn user_page(addr: u64, writable: bool, exec: bool) -> bool {
-    if writable && exec {
-        return false; // never both: user pages are W^X in release builds too
+/// Physical address of the kernel's own PML4: the page-table root for kernel tasks.
+pub fn kernel_root() -> u64 {
+    PML4.as_ptr() as u64
+}
+
+/// The two PML4 entries that map the kernel (the first 1 TiB, identity-mapped). Every process's PML4
+/// starts with a copy of them, so the kernel stays mapped whichever process is running. The tables they
+/// point at are shared, so later kernel mapping changes (guard pages, device windows) show up everywhere.
+pub fn kernel_entries() -> [u64; 2] {
+    // SAFETY: plain reads of two entries that are written once in `build` and never change afterwards.
+    unsafe {
+        let t = PML4.as_ptr().cast::<u64>();
+        [t.read(), t.add(1).read()]
     }
-    let ok = with_builder(|b| b.set_user_page(addr, writable, exec));
-    invlpg(addr);
-    ok
+}
+
+/// True when non-executable pages are in force (the CPU has NX and `build` used it).
+pub fn nx_enabled() -> bool {
+    // SAFETY: plain read of a word written once in `build`.
+    unsafe { (*STATE.as_ptr()).nx != 0 }
 }
 
 /// Makes sure the 2 MiB page holding `addr` is mapped uncached and no-execute (device registers).

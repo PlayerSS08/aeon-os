@@ -299,6 +299,19 @@ A package source is a folder with `PKGINFO` (Package, Version, Depends, Descript
 | `reboot`| `reboot` | Hardware system reset. |
 | `shutdown`| `shutdown` | ACPI power off transition (S5 state). |
 
+### Programs, pipes and jobs (0.11.0, not yet booted: see docs/RELEASE-0.11.0.md)
+| Syntax | Meaning |
+|:---|:---|
+| `hello`, `echo hi`, `cat file`, `wc file`, `ls /bin`, `forktest` | Programs in `/bin` (shipped inside the image) run as real processes. A name that is not a builtin is looked up in `/bin`, then `/usb/bin`; a path with `/` runs that file. |
+| `a \| b \| c` | Pipe: all stages run at once. A builtin (such as `ps`) may be the first stage only. |
+| `cmd > file`, `cmd >> file` | Send output to a file (replace / append). Works for builtins too. |
+| `cmd &` | Run in the background; the shell announces when it ends. |
+| `Ctrl+C` | End the foreground job. `Ctrl+D` on an empty line is end-of-input for the program. |
+| `ps` | Lists kernel tasks, then programs with their pid and parent. |
+| `kill <n>` | Ends the program with pid `n` (pids start at 100), else the kernel task with id `n`. |
+| `date` | Date and time from the machine's clock chip (no time zone is applied). |
+| `run <demo>` | The built-in ring-3 demos (`hello linux fault gp spin badcall denied`); several can run at once. |
+
 ---
 
 ## 6. Screenshots

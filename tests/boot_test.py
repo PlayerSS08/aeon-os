@@ -459,7 +459,7 @@ def t_image(ctx):
         r.check(f"{label}: .sbat names the SBAT version and the aeon component",
                 sbat.startswith(b"sbat,1,SBAT Version,sbat,1,") and b"\naeon,1,Aeon,aeon," in sbat, repr(sbat[:120]))
         r.check(f"{label}: .sbat is NUL-terminated", sbat.endswith(b"\n\0"))
-    r.check("image is small (under 640 KiB)", os.path.getsize(ctx.efi) < 640 * 1024, str(os.path.getsize(ctx.efi)))
+    r.check("image is small (under 768 KiB)", os.path.getsize(ctx.efi) < 768 * 1024, str(os.path.getsize(ctx.efi)))
 
 
 def t_commands(ctx):
@@ -2078,7 +2078,8 @@ def t_user(ctx):
         s = vm.serial_text()
         m = re.search(r"started spin as task (\d+)", s)
         r.check("spin task id reported", bool(m))
-        run_cmds(vm, r, [("uptime", "up 00:"), ("run hello", "already running")])
+        # Programs are real processes now: a second one runs while the first still spins.
+        run_cmds(vm, r, [("uptime", "up 00:"), ("run hello", "hello from ring 3")])
         if m:
             run_cmds(vm, r, [("kill " + m.group(1), "stopped")])
             time.sleep(1.0)

@@ -19,9 +19,9 @@ DNS and HTTP, and a signed package manager.
 | Kernel design | small monolithic-style kernel, single address space | monolithic | hybrid | hybrid (Mach + BSD) | monolithic | microkernel | monolithic *(unverified)* | hybrid *(unverified)* | microkernel | monolithic, teaching |
 | Main language | Rust | C (+ Rust growing) | C/C++ | C/C++ | C | Rust | C++ | C++ | C | C |
 | Purpose | learn + run on one laptop | general | general | general | general | general-purpose Rust OS | from-scratch desktop Unix-like | BeOS-style desktop | research/teaching | teaching |
-| Per-process address spaces | **no** (one identity-mapped space, ring-3 programs are checked by syscall allow-list) | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Per-process address spaces | yes since 0.11.0 (own page tables per program; **untested on hardware**) | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | SMP scheduling | **no** (CPUs are listed, one runs the scheduler) | yes | yes | yes | yes | yes | yes | yes | yes | yes (simple) |
-| Run foreign binaries | **no** (built-in ring-3 programs only) | ELF | PE | Mach-O | ELF (+Linux compat) | own programs | own programs | own programs | own programs | own user programs |
+| Run foreign binaries | static ELF64 programs built for Aeon's Linux-numbered calls (`fork`, `execve`, pipes); no dynamic linking, no Linux userland | ELF | PE | Mach-O | ELF (+Linux compat) | own programs | own programs | own programs | own programs | own user programs |
 | Filesystems | RAM, FAT16/32 read, FAT32 write on one USB volume | ext4, XFS, Btrfs, ... | NTFS, ReFS, FAT | APFS | UFS, ZFS | RedoxFS | ext2, FAT | BFS | MINIX FS | simple log FS |
 | Networking | IPv4, TCP client, UDP, DHCP, DNS, HTTP; **no TLS, no listening sockets, no IPv6** | full | full | full | full | partial | partial | partial | partial | none |
 | Wi-Fi | stack tested in simulation; **no chip driver** | many drivers + firmware | many | many | limited | limited *(see below)* | none *(unverified)* | limited *(unverified)* | none | none |
@@ -39,7 +39,7 @@ FAT32 read/write, USB host controller + storage + mouse, PCI scan, NIC drivers, 
 measured boot (TPM), 570+ host tests and QEMU boot tests.
 
 **Intermediate (not done, in rough priority order):**
-1. Per-process page tables (CR3 isolation) and `execve` of ELF files from disk, then `fork`/`wait`, pipes.
+1. ~~Per-process page tables, `execve`, `fork`/`wait`, pipes~~ done in 0.11.0 (see `docs/RELEASE-0.11.0.md`; not yet booted). Next here: copy-on-write `fork`, signals, a real VFS.
 2. NVMe driver (the OMEN's internal disk; read-only first, because Windows/BitLocker lives there).
 3. I2C-HID touchpad (ELAN07F0 over the Intel serial-IO I2C controller, found through ACPI).
 4. RTL8852BE Wi-Fi driver (firmware, MAC/PHY tables, DMA rings): needs the laptop in the loop.

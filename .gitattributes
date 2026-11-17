@@ -8,3 +8,5 @@ usb/SHA256.txt text eol=lf
 # signed package repositories: byte-exact, never convert line endings (the signature covers the bytes)
 repo/** -text
 tests/fixtures/repo/** -text
+user/bin/* binary
+user/initfs.bin binary

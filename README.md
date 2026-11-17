@@ -5,6 +5,8 @@ stick on a UEFI PC, shows a logo with a progress bar, measures its command line 
 own randomness, leaves firmware control, sets up its own CPU and memory protections, and drops into a
 preemptive multitasking kernel with a shell.
 
+**New in 0.11.0** (see `docs/RELEASE-0.11.0.md`): real processes. Every program has its own page tables, `fork`/`execve`/`wait4`/`pipe` exist, `/bin` holds small Rust programs (`hello echo cat wc ls forktest`), the shell has pipes, `>`, `>>`, `&` and Ctrl+C, and `date` reads the clock chip. **This version was built and unit-tested on the host only; it has not been booted in QEMU or on the laptop.**
+
 **New since 0.10.0:** internet through a phone's USB tethering (RNDIS and CDC-ECM, `dhcp` after plugging in) and the laptop's own I2C touchpad (`touchpad`; both untested on real hardware, see `cmd.md`).
 
 **New in 0.10.0** (see `docs/RELEASE-0.10.0.md`): real TCP/DNS/HTTP (`dhcp`, `curl <url> [-o file]`, `sha256sum`), a signed package manager (`apt help`), USB mouse with an on-screen pointer (`mouse`), a Realtek RTL8168 wired driver (untested on hardware) and a tested WPA2 Wi-Fi stack with **no Wi-Fi chip driver yet** (`wifi status`). How Aeon compares with other systems and what is still missing: `docs/OS-LANDSCAPE.md`.

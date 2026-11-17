@@ -1,92 +1,159 @@
-//! System call numbers. Pure, host-testable. Calling convention: number in `rax`, arguments in `rdi`,
-//! `rsi`, `rdx`, `r10`, `r8`, `r9`, result in `rax`, issued with the `syscall` instruction.
+//! System call numbers, flags and error codes. Pure, host-testable.
 //!
-//! Follows the standard x86-64 Linux system call ABI.
+//! The calling convention and the numbers are the x86-64 Linux ones: number in `rax`, arguments in `rdi`,
+//! `rsi`, `rdx`, `r10`, `r8`, `r9`, result in `rax` (a small negative number is `-errno`), issued with the
+//! `syscall` instruction. Only `rax`, `rcx` and `r11` change across a call.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
 pub enum Number {
-    /// `read(fd, buf, count)`: Linux sys_read
+    /// `read(fd, buf, count)`
     Read = 0,
-    /// `write(fd, buf, count)`: Linux sys_write (also legacy `write(buf, count)`)
+    /// `write(fd, buf, count)`
     Write = 1,
-    /// `open(path, flags, mode)`: Linux sys_open
+    /// `open(path, flags, mode)`
     Open = 2,
-    /// `close(fd)`: Linux sys_close
+    /// `close(fd)`
     Close = 3,
-    /// `lseek(fd, offset, whence)`: Linux sys_lseek
+    /// `lseek(fd, offset, whence)`
     Lseek = 8,
-    /// `mmap(addr, len, prot, flags, fd, offset)`: Linux sys_mmap
+    /// `mmap(addr, len, prot, flags, fd, offset)`: anonymous private memory only
     Mmap = 9,
-    /// `brk(addr)`: Linux sys_brk
+    /// `munmap(addr, len)`
+    Munmap = 11,
+    /// `brk(addr)`
     Brk = 12,
-    /// `sched_yield()`: Linux sys_sched_yield
+    /// `pipe(fds[2])`
+    Pipe = 22,
+    /// `sched_yield()`
     Yield = 24,
-    /// `getpid()`: Linux sys_getpid
+    /// `dup2(old, new)`
+    Dup2 = 33,
+    /// `nanosleep(req, rem)`
+    Nanosleep = 35,
+    /// `getpid()`
     GetPid = 39,
-    /// `socket(domain, type, protocol)`: Linux sys_socket
-    Socket = 41,
-    /// `connect(sockfd, addr, addrlen)`: Linux sys_connect
-    Connect = 42,
-    /// `sendto(sockfd, buf, len, flags, dest_addr, addrlen)`: Linux sys_sendto
-    SendTo = 44,
-    /// `recvfrom(sockfd, buf, len, flags, src_addr, addrlen)`: Linux sys_recvfrom
-    RecvFrom = 45,
-    /// `bind(sockfd, addr, addrlen)`: Linux sys_bind
-    Bind = 49,
-    /// `listen(sockfd, backlog)`: Linux sys_listen
-    Listen = 50,
-    /// `exit(code)`: Linux sys_exit
+    /// `fork()`
+    Fork = 57,
+    /// `execve(path, argv, envp)`
+    Execve = 59,
+    /// `exit(code)`
     Exit = 60,
-    /// `clock_gettime(clk_id, tp)`: Linux sys_clock_gettime (uptime)
+    /// `wait4(pid, status, options, rusage)`
+    Wait4 = 61,
+    /// `kill(pid, sig)`: every signal ends the target
+    Kill = 62,
+    /// `uname(buf)`
+    Uname = 63,
+    /// `getcwd(buf, size)`
+    GetCwd = 79,
+    /// `chdir(path)`
+    Chdir = 80,
+    /// `mkdir(path, mode)`
+    Mkdir = 83,
+    /// `unlink(path)`
+    Unlink = 87,
+    /// `getppid()`
+    GetPpid = 110,
+    /// `getdents64(fd, buf, count)`
+    GetDents64 = 217,
+    /// `clock_gettime(clk_id, tp)`: 0 = clock chip time, 1 = time since boot
     ClockGetTime = 228,
+    /// `exit_group(code)`: the same as `exit` (one thread per process)
+    ExitGroup = 231,
 }
 
+/// Every call, in the order of their allow-mask bits.
+pub const ALL: [Number; 27] = [
+    Number::Read,
+    Number::Write,
+    Number::Open,
+    Number::Close,
+    Number::Lseek,
+    Number::Mmap,
+    Number::Munmap,
+    Number::Brk,
+    Number::Pipe,
+    Number::Yield,
+    Number::Dup2,
+    Number::Nanosleep,
+    Number::GetPid,
+    Number::Fork,
+    Number::Execve,
+    Number::Exit,
+    Number::Wait4,
+    Number::Kill,
+    Number::Uname,
+    Number::GetCwd,
+    Number::Chdir,
+    Number::Mkdir,
+    Number::Unlink,
+    Number::GetPpid,
+    Number::GetDents64,
+    Number::ClockGetTime,
+    Number::ExitGroup,
+];
+
+/// Most bytes one `write` to the screen takes; the rest is reported as not written.
 pub const MAX_WRITE: u64 = 4096;
-/// Returned for bad pointers, bad lengths and unknown calls.
+/// Most bytes one file `read` or `write` moves.
+pub const MAX_IO: u64 = 1024 * 1024;
+/// What a refused call returns: `-EPERM`.
 pub const ERR: u64 = u64::MAX;
 
-// Standard Linux file open flags
 pub const O_RDONLY: u32 = 0;
 pub const O_WRONLY: u32 = 1;
 pub const O_RDWR: u32 = 2;
+pub const O_ACCMODE: u32 = 3;
 pub const O_CREAT: u32 = 0x40;
+pub const O_TRUNC: u32 = 0x200;
 pub const O_APPEND: u32 = 0x400;
+pub const O_DIRECTORY: u32 = 0x1_0000;
 
-// Standard Linux socket constants
-pub const AF_INET: u32 = 2;
-pub const SOCK_STREAM: u32 = 1;
-pub const SOCK_DGRAM: u32 = 2;
-pub const IPPROTO_TCP: u32 = 6;
-pub const IPPROTO_UDP: u32 = 17;
-
-// Standard Linux lseek whence
 pub const SEEK_SET: u32 = 0;
 pub const SEEK_CUR: u32 = 1;
 pub const SEEK_END: u32 = 2;
 
-// Standard Linux mmap protection and flags
-pub const PROT_READ: u32 = 1;
-pub const PROT_WRITE: u32 = 2;
-pub const PROT_EXEC: u32 = 4;
-pub const MAP_SHARED: u32 = 1;
-pub const MAP_PRIVATE: u32 = 2;
-pub const MAP_ANONYMOUS: u32 = 0x20;
+pub const PROT_READ: u64 = 1;
+pub const PROT_WRITE: u64 = 2;
+pub const PROT_EXEC: u64 = 4;
+pub const MAP_PRIVATE: u64 = 2;
+pub const MAP_FIXED: u64 = 0x10;
+pub const MAP_ANONYMOUS: u64 = 0x20;
 
-// Standard Linux errno values
+/// `wait4` option: return 0 at once when no child has ended yet.
+pub const WNOHANG: u64 = 1;
+
+pub const CLOCK_REALTIME: u64 = 0;
+pub const CLOCK_MONOTONIC: u64 = 1;
+
+/// `d_type` values in a `getdents64` record.
+pub const DT_DIR: u8 = 4;
+pub const DT_REG: u8 = 8;
+
 pub const EPERM: u64 = 1;
 pub const ENOENT: u64 = 2;
+pub const ESRCH: u64 = 3;
+pub const E2BIG: u64 = 7;
+pub const ENOEXEC: u64 = 8;
 pub const EBADF: u64 = 9;
+pub const ECHILD: u64 = 10;
+pub const EAGAIN: u64 = 11;
 pub const ENOMEM: u64 = 12;
 pub const EACCES: u64 = 13;
 pub const EFAULT: u64 = 14;
+pub const EEXIST: u64 = 17;
+pub const ENOTDIR: u64 = 20;
+pub const EISDIR: u64 = 21;
 pub const EINVAL: u64 = 22;
+pub const EMFILE: u64 = 24;
 pub const ENOSPC: u64 = 28;
-pub const EAFNOSUPPORT: u64 = 97;
-pub const ENETUNREACH: u64 = 101;
-pub const ENOTCONN: u64 = 107;
-pub const ETIMEDOUT: u64 = 110;
-pub const ECONNREFUSED: u64 = 111;
+pub const ESPIPE: u64 = 29;
+pub const EPIPE: u64 = 32;
+pub const ERANGE: u64 = 34;
+pub const ENAMETOOLONG: u64 = 36;
+pub const ENOSYS: u64 = 38;
+pub const ENOTEMPTY: u64 = 39;
 
 pub const fn errno(code: u64) -> u64 {
     (0u64).wrapping_sub(code)
@@ -102,48 +169,35 @@ pub fn sanitize_output(buf: &mut [u8]) {
     }
 }
 
-pub const LEGACY_EXIT_BIT: u64 = 1 << 62;
-pub const LEGACY_YIELD_BIT: u64 = 1 << 61;
-
 impl Number {
     /// This call's bit in an allow-mask.
     pub const fn bit(self) -> u64 {
-        match self {
-            Number::ClockGetTime => 1 << 63,
-            _ => 1 << (self as u64),
+        let mut i = 0;
+        while i < ALL.len() {
+            if ALL[i] as u64 == self as u64 {
+                return 1 << i;
+            }
+            i += 1;
         }
+        0
     }
 }
 
 /// Calls every program may make: without `exit` a program could never end cleanly.
-/// Includes Linux sys_exit (60) and legacy exit (2 with code 0).
-pub const ALWAYS: u64 = Number::Exit.bit() | LEGACY_EXIT_BIT;
+pub const ALWAYS: u64 = Number::Exit.bit() | Number::ExitGroup.bit();
 
-/// The calls a built-in program is allowed to make (least privilege: `hello` may print, `denied`
-/// may only exit). Unknown program names get `exit` only.
+/// What a program loaded from a file may do: every call. Files and the screen are the same for all
+/// programs (Aeon has one user), so there is nothing to withhold from one that the shell itself has.
+pub const STANDARD: u64 = (1 << ALL.len()) - 1;
+
+/// The calls a built-in demo program is allowed to make (least privilege: `hello` may print, `denied`
+/// may only exit). Unknown names get `exit` only.
 pub fn allow_mask(program: &str) -> u64 {
     ALWAYS
         | match program {
             "hello" | "badcall" => Number::Write.bit(),
-            "spin" => Number::Yield.bit() | LEGACY_YIELD_BIT,
-            "linux" => {
-                Number::Read.bit()
-                    | Number::Write.bit()
-                    | Number::Open.bit()
-                    | Number::Close.bit()
-                    | Number::Lseek.bit()
-                    | Number::Mmap.bit()
-                    | Number::Brk.bit()
-                    | Number::Yield.bit()
-                    | Number::GetPid.bit()
-                    | Number::Socket.bit()
-                    | Number::Connect.bit()
-                    | Number::SendTo.bit()
-                    | Number::RecvFrom.bit()
-                    | Number::Bind.bit()
-                    | Number::Listen.bit()
-                    | Number::ClockGetTime.bit()
-            }
+            "spin" => Number::Yield.bit(),
+            "linux" => STANDARD,
             _ => 0,
         }
 }
@@ -153,46 +207,24 @@ pub const fn permits(mask: u64, n: Number) -> bool {
     mask & n.bit() != 0
 }
 
-/// True if raw call number `n` is permitted by `mask` (including legacy alias numbers).
-pub fn permits_raw(mask: u64, n: u64, a0: u64) -> bool {
-    match n {
-        2 if a0 == 0 => mask & LEGACY_EXIT_BIT != 0, // legacy exit
-        2 => mask & Number::Open.bit() != 0,         // Linux open
-        3 if a0 < 3 => mask & LEGACY_YIELD_BIT != 0, // legacy yield
-        3 => mask & Number::Close.bit() != 0,        // Linux close
-        4 => mask & Number::ClockGetTime.bit() != 0, // legacy uptime
-        5 => mask & Number::GetPid.bit() != 0,       // legacy getpid
-        _ => {
-            if let Some(num) = decode(n) {
-                permits(mask, num)
-            } else {
-                false
-            }
-        }
-    }
+pub fn decode(n: u64) -> Option<Number> {
+    ALL.iter().copied().find(|c| *c as u64 == n)
 }
 
-pub fn decode(n: u64) -> Option<Number> {
-    Some(match n {
-        0 => Number::Read,
-        1 => Number::Write,
-        2 => Number::Open,
-        3 => Number::Close,
-        8 => Number::Lseek,
-        9 => Number::Mmap,
-        12 => Number::Brk,
-        24 => Number::Yield,
-        39 => Number::GetPid,
-        41 => Number::Socket,
-        42 => Number::Connect,
-        44 => Number::SendTo,
-        45 => Number::RecvFrom,
-        49 => Number::Bind,
-        50 => Number::Listen,
-        60 => Number::Exit,
-        228 => Number::ClockGetTime,
-        _ => return None,
-    })
+/// Writes one `linux_dirent64` record for `name` into `out` and returns its length, or `None` when it
+/// does not fit. Records are padded to 8 bytes; `next_off` is the position to continue from.
+pub fn write_dirent(out: &mut [u8], ino: u64, next_off: u64, d_type: u8, name: &[u8]) -> Option<usize> {
+    let len = (19 + name.len() + 1).next_multiple_of(8);
+    if len > out.len() || len > u16::MAX as usize {
+        return None;
+    }
+    out[..len].fill(0);
+    out[0..8].copy_from_slice(&ino.to_le_bytes());
+    out[8..16].copy_from_slice(&next_off.to_le_bytes());
+    out[16..18].copy_from_slice(&(len as u16).to_le_bytes());
+    out[18] = d_type;
+    out[19..19 + name.len()].copy_from_slice(name);
+    Some(len)
 }
 
 #[cfg(test)]
@@ -200,126 +232,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decode_roundtrip() {
-        let all = [
-            Number::Read,
-            Number::Write,
-            Number::Open,
-            Number::Close,
-            Number::Lseek,
-            Number::Mmap,
-            Number::Brk,
-            Number::Yield,
-            Number::GetPid,
-            Number::Socket,
-            Number::Connect,
-            Number::SendTo,
-            Number::RecvFrom,
-            Number::Bind,
-            Number::Listen,
-            Number::Exit,
-            Number::ClockGetTime,
-        ];
-        for n in all {
+    fn decode_roundtrip_and_unknown() {
+        for n in ALL {
             assert_eq!(decode(n as u64), Some(n));
+        }
+        for n in [4, 5, 6, 7, 10, 13, 23, 25, 38, 40, 41, 42, 44, 45, 49, 50, 58, 64, 227, 229, 232, u64::MAX] {
+            assert_eq!(decode(n), None, "{n}");
         }
     }
 
     #[test]
+    fn number_bits_are_distinct_and_nonzero() {
+        let mut seen = 0u64;
+        for n in ALL {
+            assert_ne!(n.bit(), 0, "{n:?}");
+            assert_eq!(seen & n.bit(), 0, "duplicate bit for {n:?}");
+            seen |= n.bit();
+        }
+        assert_eq!(seen, STANDARD);
+    }
+
+    #[test]
     fn allow_masks_are_least_privilege() {
-        let all = [
-            Number::Read,
-            Number::Write,
-            Number::Open,
-            Number::Close,
-            Number::Lseek,
-            Number::Mmap,
-            Number::Brk,
-            Number::Yield,
-            Number::GetPid,
-            Number::Socket,
-            Number::Connect,
-            Number::SendTo,
-            Number::RecvFrom,
-            Number::Bind,
-            Number::Listen,
-            Number::Exit,
-            Number::ClockGetTime,
-        ];
-        // Every program can exit, and nothing can make a call outside its list.
-        for p in ["hello", "fault", "gp", "spin", "badcall", "denied", "whatever"] {
+        // Every program can exit, and the restricted demos can do nothing outside their list.
+        for p in ["hello", "fault", "gp", "spin", "badcall", "denied", "whatever", ""] {
             assert!(permits(allow_mask(p), Number::Exit), "{p} must be able to exit");
-            assert!(!permits(allow_mask(p), Number::ClockGetTime), "{p} must not read the clock");
-            assert!(!permits(allow_mask(p), Number::GetPid), "{p} must not read its id");
+            assert!(permits(allow_mask(p), Number::ExitGroup));
+            for n in [Number::Open, Number::Fork, Number::Execve, Number::Kill, Number::Unlink, Number::GetPid, Number::ClockGetTime] {
+                assert!(!permits(allow_mask(p), n), "{p} must not be allowed {n:?}");
+            }
         }
         assert!(permits(allow_mask("hello"), Number::Write));
         assert!(!permits(allow_mask("hello"), Number::Yield));
         assert!(permits(allow_mask("spin"), Number::Yield));
         assert!(!permits(allow_mask("spin"), Number::Write));
-        // `linux` program can perform all Linux calls
-        for n in all {
-            assert!(permits(allow_mask("linux"), n), "linux must permit {n:?}");
-        }
-        // `denied` and unknown names can only exit.
-        for p in ["denied", "whatever", ""] {
-            for n in all {
-                assert_eq!(permits(allow_mask(p), n), n == Number::Exit, "{p} {n:?}");
+        for p in ["denied", "fault", "gp", "whatever"] {
+            for n in ALL {
+                assert_eq!(permits(allow_mask(p), n), matches!(n, Number::Exit | Number::ExitGroup), "{p} {n:?}");
             }
         }
-    }
-
-    #[test]
-    fn permits_raw_legacy_and_linux() {
-        let mask = allow_mask("hello");
-        // Legacy exit (n=2, a0=0)
-        assert!(permits_raw(mask, 2, 0));
-        // Linux open (n=2, a0=0x4000) not permitted for hello
-        assert!(!permits_raw(mask, 2, 0x4000));
-        // Linux exit (n=60)
-        assert!(permits_raw(mask, 60, 0));
-        // Linux write (n=1)
-        assert!(permits_raw(mask, 1, 1));
-
-        let denied_mask = allow_mask("denied");
-        assert!(permits_raw(denied_mask, 60, 0));
-        assert!(permits_raw(denied_mask, 2, 0));
-        assert!(!permits_raw(denied_mask, 4, 0)); // uptime denied
-    }
-
-    #[test]
-    fn number_bits_are_distinct() {
-        let all = [
-            Number::Read,
-            Number::Write,
-            Number::Open,
-            Number::Close,
-            Number::Lseek,
-            Number::Mmap,
-            Number::Brk,
-            Number::Yield,
-            Number::GetPid,
-            Number::Socket,
-            Number::Connect,
-            Number::SendTo,
-            Number::RecvFrom,
-            Number::Bind,
-            Number::Listen,
-            Number::Exit,
-            Number::ClockGetTime,
-        ];
-        let mut seen = 0u64;
-        for n in all {
-            assert_eq!(seen & n.bit(), 0, "duplicate bit for {n:?}");
-            seen |= n.bit();
-        }
-        assert_eq!(seen & LEGACY_EXIT_BIT, 0);
-        assert_eq!(seen & LEGACY_YIELD_BIT, 0);
-    }
-
-    #[test]
-    fn decode_unknown_is_none() {
-        for n in [4, 5, 6, 7, 10, 11, 13, 23, 25, 38, 40, 59, 61, 227, 229, u64::MAX] {
-            assert_eq!(decode(n), None);
+        for n in ALL {
+            assert!(permits(allow_mask("linux"), n));
+            assert!(permits(STANDARD, n));
         }
     }
 
@@ -335,8 +289,25 @@ mod tests {
 
     #[test]
     fn errno_values() {
-        assert_eq!(errno(EPERM), u64::MAX);
-        assert_eq!(errno(ENOENT), u64::MAX - 1);
-        assert_eq!(errno(EBADF), u64::MAX - 8);
+        assert_eq!(errno(EPERM), ERR);
+        assert_eq!(errno(ENOENT) as i64, -2);
+        assert_eq!(errno(ENOSYS) as i64, -38);
+    }
+
+    #[test]
+    fn dirent_records() {
+        let mut buf = [0xFFu8; 64];
+        let n = write_dirent(&mut buf, 7, 3, DT_REG, b"hello.txt").unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(u64::from_le_bytes(buf[0..8].try_into().unwrap()), 7);
+        assert_eq!(u64::from_le_bytes(buf[8..16].try_into().unwrap()), 3);
+        assert_eq!(u16::from_le_bytes(buf[16..18].try_into().unwrap()), 32);
+        assert_eq!(buf[18], DT_REG);
+        assert_eq!(&buf[19..29], b"hello.txt\0");
+        assert!(buf[29..32].iter().all(|b| *b == 0));
+        assert_eq!(buf[32], 0xFF);
+        // Exactly fitting and one byte short.
+        assert_eq!(write_dirent(&mut [0u8; 24], 1, 1, DT_DIR, b"abcd"), Some(24));
+        assert_eq!(write_dirent(&mut [0u8; 23], 1, 1, DT_DIR, b"abcd"), None);
     }
 }

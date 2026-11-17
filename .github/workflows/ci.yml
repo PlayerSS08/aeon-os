@@ -38,11 +38,11 @@ jobs:
       - name: Release build (UEFI)
         run: cargo build --release
 
-      - name: Image must stay under 512 KiB
+      - name: Image must stay under 768 KiB
         run: |
           size=$(stat -c %s target/x86_64-unknown-uefi/release/aeon.efi)
-          echo "aeon.efi is $size bytes (limit 524288)"
-          test "$size" -lt 524288
+          echo "aeon.efi is $size bytes (limit 786432)"
+          test "$size" -lt 786432
 
       - name: Count unsafe blocks (information only)
         run: |

@@ -14,7 +14,7 @@ use crate::readyq::ReadyQueue;
 use crate::schedtrace::{Event, Reason, TraceRing};
 use crate::waitq::WaitList;
 
-pub const MAX_TASKS: usize = 16;
+pub const MAX_TASKS: usize = 32;
 const STACK_PAGES: usize = 8; // 32 KiB per task
 const STACK_BYTES: usize = STACK_PAGES * 4096;
 /// Stack-overflow canary. Starts as a fixed value and is replaced by a boot-seed-derived one before
@@ -29,6 +29,8 @@ fn canary() -> u64 {
     CANARY_VALUE.load(Ordering::Relaxed)
 }
 const NAME_LEN: usize = 16;
+/// The address bits of CR3 (the low 12 are flags/PCID).
+const CR3_ADDR: u64 = 0x000F_FFFF_FFFF_F000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
@@ -66,10 +68,30 @@ struct Task {
     name_len: usize,
     /// Runs in ring 3 (see `usermode`).
     user: bool,
+    /// Page-table root of the task's process; 0 for kernel threads, which use the kernel's own tables.
+    cr3: u64,
+}
+
+/// Where a ring-3 task starts: instruction and stack pointers, flags and the general registers in the
+/// order the switch frame holds them (r15 r14 r13 r12 r11 r10 r9 r8 rdi rsi rbp rbx rdx rcx rax).
+#[derive(Clone, Copy)]
+pub struct UserStart {
+    pub rip: u64,
+    pub rsp: u64,
+    pub rflags: u64,
+    pub gpr: [u64; GPR_COUNT],
+    pub cr3: u64,
+}
+
+impl UserStart {
+    /// A fresh program: every register zero, interrupts on.
+    pub fn fresh(rip: u64, rsp: u64, cr3: u64) -> Self {
+        Self { rip, rsp, rflags: 0x202, gpr: [0; GPR_COUNT], cr3 }
+    }
 }
 
 const FREE_TASK: Task =
-    Task { state: State::Free, rsp: 0, stack: 0, wake_tick: 0, ticks: 0, name: [0; NAME_LEN], name_len: 0, user: false };
+    Task { state: State::Free, rsp: 0, stack: 0, wake_tick: 0, ticks: 0, name: [0; NAME_LEN], name_len: 0, user: false, cr3: 0 };
 
 struct Sched {
     tasks: [Task; MAX_TASKS],
@@ -103,7 +125,7 @@ const fn fx_template() -> [u8; 512] {
 static FX_TEMPLATE: [u8; 512] = fx_template();
 
 /// Register-frame layout built for a new task (low to high): fxsave area, 15 GPRs, iretq frame.
-const GPR_COUNT: usize = 15;
+pub const GPR_COUNT: usize = 15;
 const FRAME_QWORDS: usize = 512 / 8 + GPR_COUNT + 5;
 
 /// Turns the running boot thread into task 0. Call once, before enabling preemption.
@@ -141,11 +163,11 @@ pub fn spawn(name: &str, entry: extern "C" fn(usize), arg: usize) -> Option<usiz
 
 /// Creates a task that starts in ring 3 at `rip` with stack pointer `user_rsp`. It runs on its own
 /// kernel stack whenever it enters the kernel.
-pub fn spawn_user(name: &str, rip: u64, user_rsp: u64) -> Option<usize> {
-    create(name, rip, 0, Some(user_rsp))
+pub fn spawn_user(name: &str, start: &UserStart) -> Option<usize> {
+    create(name, start.rip, 0, Some(start))
 }
 
-fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usize> {
+fn create(name: &str, rip: u64, arg: usize, user: Option<&UserStart>) -> Option<usize> {
     // One extra page below the stack is unmapped as a guard, so an overflow faults immediately.
     let base = mm::alloc_frames(STACK_PAGES + 1)?;
     // No guard page means a stack overflow would silently corrupt a neighbour: refuse to start the task.
@@ -173,12 +195,18 @@ fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usi
         // GPR order from the lowest address: r15 r14 r13 r12 r11 r10 r9 r8 rdi rsi rbp rbx rdx rcx rax.
         g.add(8).write(arg as u64); // rdi (unused by win64, kept for clarity)
         g.add(13).write(arg as u64); // rcx: first argument in the Microsoft x64 ABI
+        if let Some(u) = user {
+            for (i, v) in u.gpr.iter().enumerate() {
+                g.add(i).write(*v);
+            }
+        }
         let f = g.add(GPR_COUNT);
         f.write(rip);
-        f.add(1).write(if user_rsp.is_some() { arch::USER_CS } else { arch::KERNEL_CS } as u64); // cs
-        f.add(2).write(0x202); // rflags: IF set
-        f.add(3).write(user_rsp.unwrap_or(entry_rsp)); // rsp
-        f.add(4).write(if user_rsp.is_some() { arch::USER_DS } else { arch::KERNEL_DS } as u64); // ss
+        f.add(1).write(if user.is_some() { arch::USER_CS } else { arch::KERNEL_CS } as u64); // cs
+        // Only the arithmetic flags of a forked parent carry over; IF is always set, IOPL never.
+        f.add(2).write(user.map_or(0x202, |u| (u.rflags & 0xCD5) | 0x202));
+        f.add(3).write(user.map_or(entry_rsp, |u| u.rsp)); // rsp
+        f.add(4).write(if user.is_some() { arch::USER_DS } else { arch::KERNEL_DS } as u64); // ss
     }
 
     arch::without_interrupts(|| {
@@ -188,7 +216,7 @@ fn create(name: &str, rip: u64, arg: usize, user_rsp: Option<u64>) -> Option<usi
         let mut nm = [0u8; NAME_LEN];
         let n = name.len().min(NAME_LEN);
         nm[..n].copy_from_slice(&name.as_bytes()[..n]);
-        s.tasks[slot] = Task { state: State::Ready, rsp: sp, stack, wake_tick: 0, ticks: 0, name: nm, name_len: n, user: user_rsp.is_some() };
+        s.tasks[slot] = Task { state: State::Ready, rsp: sp, stack, wake_tick: 0, ticks: 0, name: nm, name_len: n, user: user.is_some(), cr3: user.map_or(0, |u| u.cr3) };
         // A new task is ready: it joins the back of the queue.
         s.ready.push_back(slot as u8);
         Some(slot)
@@ -238,7 +266,13 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     for i in 1..MAX_TASKS {
         if s.tasks[i].state == State::Dead && i != cur {
             free_stack(s.tasks[i].stack, true);
+            let was_user = s.tasks[i].user;
             s.tasks[i] = FREE_TASK;
+            if was_user {
+                // The process behind the task gives back its memory and files. This CPU is not using
+                // its page tables: `i` is not the running task and CR3 follows the running task.
+                crate::usermode::task_gone(i);
+            }
         }
     }
     // Tasks whose sleep is over become ready and join the back of the queue first ...
@@ -273,6 +307,13 @@ extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
     let ktop = if next == 0 { s.boot_stack_top } else { s.tasks[next].stack + STACK_BYTES as u64 };
     // SAFETY: interrupt context (interrupts off); `ktop` is the top of the incoming task's mapped kernel stack.
     unsafe { crate::usermode::set_kernel_stack(ktop) };
+    // The address space follows the task: a process's own tables, or the kernel's for kernel threads.
+    let root = if s.tasks[next].cr3 != 0 { s.tasks[next].cr3 } else { crate::paging::kernel_root() };
+    if arch::read_cr3() & CR3_ADDR != root {
+        // SAFETY: `root` is the kernel PML4 or a process PML4 that holds the kernel's two entries, so
+        // the code, stacks and data in use right now stay mapped across the switch.
+        unsafe { arch::write_cr3(root) };
+    }
     s.tasks[next].rsp
 }
 
@@ -468,6 +509,28 @@ pub fn user_alive(id: usize) -> bool {
         // SAFETY: interrupts off on a single CPU.
         let s = unsafe { SCHED.get_irqs_off() };
         id < MAX_TASKS && s.tasks[id].user && !matches!(s.tasks[id].state, State::Free | State::Dead)
+    })
+}
+
+/// Points the running task at a new page-table root and loads it (`execve` swapping the program image).
+///
+/// # Safety
+/// `root` must be a live PML4 that contains the kernel's entries, and interrupts must be off.
+pub unsafe fn set_current_root(root: u64) {
+    // SAFETY: interrupts are off (caller's contract), so this is the only reference to the scheduler.
+    let s = unsafe { SCHED.get_irqs_off() };
+    let c = s.current;
+    s.tasks[c].cr3 = root;
+    // SAFETY: forwarded contract: the new tables map everything the kernel is using.
+    unsafe { arch::write_cr3(root) };
+}
+
+/// The state of task `id`, or `Free` for an id out of range.
+pub fn state_of(id: usize) -> State {
+    arch::without_interrupts(|| {
+        // SAFETY: interrupts off on a single CPU.
+        let s = unsafe { SCHED.get_irqs_off() };
+        s.tasks.get(id).map_or(State::Free, |t| t.state)
     })
 }
 

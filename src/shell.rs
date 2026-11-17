@@ -25,12 +25,21 @@ use crate::spin::SpinLock;
 use crate::textcmd;
 use crate::usbfs;
 use crate::usermode;
+use crate::shparse;
 
 struct Out;
 
+/// While set, shell output is collected here instead of printed (the first stage of a pipeline, or a
+/// command whose output goes to a file with `>`).
+static CAPTURE: Global<Option<Vec<u8>>> = Global::new(None);
+
 impl Write for Out {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        log::print_raw(s.as_bytes());
+        // SAFETY: only the shell task writes through `Out`, and it never holds this reference across a call.
+        match unsafe { CAPTURE.get() } {
+            Some(buf) => buf.extend_from_slice(s.as_bytes()),
+            None => log::print_raw(s.as_bytes()),
+        }
         Ok(())
     }
 }
@@ -261,6 +270,10 @@ fn cmd_ps() {
     sched::for_each(|t| {
         out!("{:<2} {:<16} {:<9} {}\n", t.id, t.name, t.state.name(), t.ticks);
     });
+    if usermode::process_count() > 0 {
+        out!("programs: pid (use with `kill`), parent (0 = shell), name\n");
+        usermode::for_each_process(|pid, ppid, name, task| out!("  {:<4} {:<4} {:<16} task {}\n", pid, ppid, name, task));
+    }
 }
 
 fn cmd_memmap() {
@@ -2001,15 +2014,238 @@ fn cmd_rm(arg: &str) {
 
 fn cmd_run(name: &str) {
     match usermode::run(name) {
-        Ok(id) => out!("started {} as task {}
-", name, id),
-        Err(usermode::RunError::Unknown) => out!("unknown program '{}', available: {}
-", name, usermode::PROGRAMS.join(" ")),
-        Err(usermode::RunError::Busy) => out!("a user program is already running (see `ps`, `kill <id>`)
-"),
-        Err(usermode::RunError::NotReady) => out!("user programs are not available (needs the scheduler and a CPU with SMAP)\n"),
-        Err(usermode::RunError::NoMemory) => out!("cannot start {}: out of memory or task slots
-", name),
+        Ok(pid) => out!("started {} as task {}\n", name, pid),
+        Err(usermode::RunError::Unknown) => match shparse::parse(name) {
+            Ok(l) if find_program(name.split_whitespace().next().unwrap_or("")).is_some() => exec_job(&l),
+            _ => out!("unknown program '{}', available: {} (or a file in /bin)\n", name, usermode::PROGRAMS.join(" ")),
+        },
+        Err(usermode::RunError::NotReady) => out!("user programs are not available (they need the scheduler: not in recovery mode)\n"),
+        Err(usermode::RunError::NoMemory) => out!("cannot start {}: out of memory or process slots\n", name),
+        Err(usermode::RunError::BadFile(why)) => out!("cannot start {}: {}\n", name, why),
+    }
+}
+
+// ---- programs from files, pipes, redirection and background jobs ----
+
+/// Splits a command into words; double quotes group words and are removed.
+fn tokenize(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quoted = false;
+    for c in s.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                in_word = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if in_word {
+                    out.push(core::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    out
+}
+
+/// The program file a command name stands for: a path as typed, or the name in `/bin` or `/usb/bin`.
+fn find_program(cmd: &str) -> Option<(String, Vec<u8>)> {
+    if cmd.is_empty() {
+        return None;
+    }
+    let here = if cwd().is_empty() { "/" } else { cwd().as_str() };
+    let mut candidates: Vec<String> = Vec::new();
+    if cmd.contains('/') {
+        candidates.extend(resolve(here, cmd));
+    } else {
+        candidates.extend(resolve("/bin", cmd));
+        candidates.extend(resolve("/usb/bin", cmd));
+    }
+    for path in candidates {
+        let data = if usbfs::is_usb(&path) {
+            usbfs::hw_read(usbfs::rel_path(&path), 1024 * 1024).ok()
+        } else {
+            fs().read(&path).map(|d| d.to_vec())
+        };
+        if let Some(d) = data {
+            return Some((path, d));
+        }
+    }
+    None
+}
+
+/// Creates (or empties) the file a `>` points at and returns its path, or says why not.
+fn redirect_target(name: &str, append: bool) -> Option<String> {
+    let path = path_arg(name)?;
+    if usbfs::is_usb(&path) {
+        let rel = usbfs::rel_path(&path);
+        if let Err(e) = usbfs::check_write_safety(rel) {
+            out!("cannot write {}: {}\n", name, e);
+            return None;
+        }
+        if !append || usbfs::hw_read(rel, 1).is_err() {
+            if let Err(e) = usbfs::hw_write(rel, b"", true) {
+                out!("cannot write {}: {}\n", name, e);
+                return None;
+            }
+        }
+    } else if !append || fs().read(&path).is_none() {
+        if let Err(e) = fs().write(&path, b"") {
+            fs_error(e, name);
+            return None;
+        }
+    }
+    Some(path)
+}
+
+/// Writes captured builtin output to the file a `>` points at.
+fn store_redirect(path: &str, data: &[u8], append: bool) {
+    if usbfs::is_usb(path) {
+        let rel = usbfs::rel_path(path);
+        let mut all = if append { usbfs::hw_read(rel, 1024 * 1024).unwrap_or_default() } else { Vec::new() };
+        all.extend_from_slice(data);
+        if let Err(e) = usbfs::hw_write(rel, &all, true) {
+            out!("cannot write {}: {}\n", path, e);
+        }
+    } else {
+        let r = if append { fs().append(path, data) } else { fs().write(path, data) };
+        if let Err(e) = r {
+            fs_error(e, path);
+        }
+    }
+}
+
+/// Runs one parsed line: programs from files run as processes (several at once, joined by pipes); a shell
+/// builtin may only be the first stage, and its output is collected and passed on.
+fn exec_job(l: &shparse::Line<'_>) {
+    let n = l.stages.len();
+    let here = String::from(if cwd().is_empty() { "/" } else { cwd().as_str() });
+    // Check everything before starting anything.
+    let mut progs: Vec<Option<(String, Vec<u8>)>> = Vec::new();
+    for (i, st) in l.stages.iter().enumerate() {
+        let toks = tokenize(st);
+        let Some(cmd) = toks.first() else { return };
+        let prog = find_program(cmd);
+        if prog.is_none() && i > 0 {
+            out!("`{}` cannot read from a pipe: only programs from /bin can be later stages\n", cmd);
+            return;
+        }
+        progs.push(prog);
+    }
+    let redirect = match l.redirect {
+        Some((name, append)) => match redirect_target(name, append) {
+            Some(p) => Some((p, append)),
+            None => return,
+        },
+        None => None,
+    };
+    let mut pids: Vec<u32> = Vec::new();
+    let mut prev_read: Option<usize> = None;
+    for (i, st) in l.stages.iter().enumerate() {
+        let last = i == n - 1;
+        let toks = tokenize(st);
+        let stdin = prev_read.take().map_or(usermode::Io::Console, usermode::Io::PipeRead);
+        let (stdout, next_read) = if !last {
+            match usermode::pipe_create() {
+                Some(id) => (usermode::Io::PipeWrite(id), Some(id)),
+                None => {
+                    out!("too many pipes in use\n");
+                    break;
+                }
+            }
+        } else if let Some((path, append)) = &redirect {
+            (usermode::Io::File { path: path.clone(), append: *append }, None)
+        } else {
+            (usermode::Io::Console, None)
+        };
+        match progs[i].take() {
+            Some((path, file)) => {
+                let name = path.rsplit('/').next().unwrap_or("prog");
+                let args: Vec<&[u8]> = toks.iter().map(|t| t.as_bytes()).collect();
+                match usermode::spawn_elf(name, &file, &args, &here, stdin, stdout) {
+                    Ok(pid) => pids.push(pid),
+                    Err(e) => {
+                        out!("cannot start {}: {}\n", toks[0], run_error_text(&e));
+                        if let Some(id) = next_read {
+                            usermode::pipe_release(id, false);
+                        }
+                        break;
+                    }
+                }
+            }
+            None => {
+                // A builtin as the first stage: collect what it prints.
+                // SAFETY: shell task only; the buffer is taken back before anything else prints.
+                unsafe { *CAPTURE.get() = Some(Vec::new()) };
+                run_plain(st, &History::new());
+                // SAFETY: as above.
+                let data = unsafe { CAPTURE.get().take() }.unwrap_or_default();
+                match (&stdout, &redirect) {
+                    (usermode::Io::PipeWrite(id), _) => {
+                        if usermode::pipe_fill(*id, &data) < data.len() {
+                            out!("(output longer than a pipe holds: cut)\n");
+                        }
+                        usermode::pipe_release(*id, true);
+                    }
+                    (_, Some((path, append))) => store_redirect(path, &data, *append),
+                    _ => log::print_raw(&data),
+                }
+            }
+        }
+        prev_read = next_read;
+    }
+    if let Some(id) = prev_read {
+        // The last started stage never took its input end (a later stage failed to start).
+        usermode::pipe_release(id, false);
+    }
+    if pids.is_empty() {
+        return;
+    }
+    if l.background {
+        out!("[{}] started in the background\n", pids[pids.len() - 1]);
+    } else {
+        usermode::set_foreground(&pids);
+    }
+}
+
+fn run_error_text(e: &usermode::RunError) -> &'static str {
+    match e {
+        usermode::RunError::BadFile(w) => w,
+        usermode::RunError::NoMemory => "out of memory or process slots",
+        usermode::RunError::NotReady => "programs are not available in recovery mode",
+        usermode::RunError::Unknown => "unknown program",
+    }
+}
+
+fn run_job_line(line: &str) {
+    match shparse::parse(line) {
+        Ok(l) => exec_job(&l),
+        Err(e) => out!("{}\n", e.message()),
+    }
+}
+
+fn cmd_date() {
+    match crate::rtc::now() {
+        Some(t) => out!(
+            "{} {} {:2} {:02}:{:02}:{:02} {} (clock time; the chip holds the zone it was last set in)\n",
+            t.weekday_name(),
+            t.month_name(),
+            t.day,
+            t.hour,
+            t.min,
+            t.sec,
+            t.year
+        ),
+        None => out!("the machine's clock chip gave no usable time; `uptime` shows the time since boot\n"),
     }
 }
 
@@ -2886,6 +3122,15 @@ fn cmd_pi(rest: &str) {
 
 fn run(line: &str, hist: &History) {
     let line = line.trim();
+    if !shparse::is_plain(line) {
+        run_job_line(line);
+        return;
+    }
+    run_plain(line, hist);
+}
+
+fn run_plain(line: &str, hist: &History) {
+    let line = line.trim();
     let (cmd, rest) = line.split_once(' ').map_or((line, ""), |(c, r)| (c, r.trim()));
     // A file command typed with nothing after it says how it is used, instead of complaining about an empty name.
     if rest.is_empty() && matches!(cmd, "cat" | "rm" | "mkdir" | "rmdir" | "write" | "append" | "touch") {
@@ -2956,6 +3201,7 @@ fn run(line: &str, hist: &History) {
         "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),
         "kill" => match rest.parse::<usize>() {
+            Ok(id) if usermode::kill_pid(id as u32) => out!("task {} stopped\n", id),
             Ok(id) if sched::kill(id) => out!("task {} stopped\n", id),
             Ok(id) => out!("no killable task {}\n", id),
             Err(_) => out!("usage: kill <id>\n"),
@@ -2996,7 +3242,7 @@ fn run(line: &str, hist: &History) {
         "sleep" => cmd_sleep(rest),
         "whoami" => out!("aeon (Aeon has no user accounts: everything runs with full rights)\n"),
         "hostname" => out!("aeon\n"),
-        "date" => out!("no clock: Aeon has no real-time clock yet; `uptime` shows the time since boot\n"),
+        "date" => cmd_date(),
         "clear" | "cls" => {
             log::with_console(Console::clear_log);
         }
@@ -3014,6 +3260,7 @@ fn run(line: &str, hist: &History) {
             persist_save(UNSAVED.load(core::sync::atomic::Ordering::Relaxed));
             power::shutdown()
         }
+        other if find_program(other).is_some() => run_job_line(line),
         other => match cmdhelp::suggest(other) {
             Some(near) => out!("unknown command '{}'. Did you mean `{}`? (`help` lists everything)\n", other, near),
             None => out!("unknown command '{}', try `help`\n", other),
@@ -3268,11 +3515,20 @@ pub extern "C" fn shell_task(_: usize) {
             let _ = f.mkdir(dir);
         }
     }
+    // The programs that ship inside the image (`cat`, `ls`, ...), copied into /bin if not already there.
+    if let Some(progs) = crate::initfs::unpack(crate::initfs::ARCHIVE) {
+        for (name, data) in progs {
+            let path = alloc::format!("/bin/{name}");
+            if f.read(&path).is_none() {
+                let _ = f.write(&path, &data);
+            }
+        }
+    }
     if f.read("/etc/hostname").is_none() {
         let _ = f.write("/etc/hostname", b"aeon-host\n");
     }
     if f.read("/etc/os-release").is_none() {
-        let _ = f.write("/etc/os-release", b"NAME=Aeon OS\nVERSION=0.10.0\nID=aeon\nPRETTY_NAME=\"Aeon OS 0.10.0-uefi\"\n");
+        let _ = f.write("/etc/os-release", b"NAME=Aeon OS\nVERSION=0.11.0\nID=aeon\nPRETTY_NAME=\"Aeon OS 0.11.0-uefi\"\n");
     }
 
     persist_restore();
@@ -3293,6 +3549,17 @@ pub extern "C" fn shell_task(_: usize) {
                 }
             });
         }
+        // A foreground program that has ended gives the prompt back; finished background ones are announced.
+        if let Some(code) = usermode::foreground_done() {
+            if code != 0 {
+                out!("[exit {}]\n", code);
+            }
+            out!("{}", prompt());
+        }
+        for (pid, name, code) in usermode::reap_background() {
+            out!("[{}] {} done (exit {})\n", pid, name, code);
+        }
+        usermode::reap_demos();
         // Keys come from the PS/2 controller and from a USB keyboard (xHCI driver), whichever has one.
         loop {
             let key = if let Some(code) = ps2_byte() {
@@ -3305,6 +3572,22 @@ pub extern "C" fn shell_task(_: usize) {
             } else {
                 break;
             };
+            if usermode::has_foreground() {
+                // Keys go to the running program, line by line, like a terminal.
+                match key {
+                    Key::Interrupt => {
+                        usermode::interrupt_foreground();
+                        out!("^C\n");
+                    }
+                    Key::Char(c) => usermode::console_key(Some(c), false, false, false),
+                    Key::Enter => usermode::console_key(None, true, false, false),
+                    Key::Backspace => usermode::console_key(None, false, true, false),
+                    Key::Ctrl(b'd') => usermode::console_key(None, false, false, true),
+                    _ => {}
+                }
+                continue;
+            }
+            let _fs = usermode::FsGuard::new();
             if let Some(s) = session.as_mut() {
                 if edit_key(s, key) {
                     session = None;
@@ -3389,7 +3672,9 @@ pub extern "C" fn shell_task(_: usize) {
                         run(line, &hist);
                         // Any command that changed a file is saved to the USB stick right away.
                         persist_save(false);
-                        out!("{}", prompt());
+                        if !usermode::has_foreground() {
+                            out!("{}", prompt());
+                        }
                     }
                 }
                 Key::Interrupt => {
