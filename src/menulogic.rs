@@ -14,6 +14,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Boot,
+    Wifi,
     Recovery,
     FirmwareShell,
     Debug,
@@ -22,12 +23,13 @@ pub enum Entry {
     PowerOff,
 }
 
-pub const ENTRIES: [Entry; 7] = [Entry::Boot, Entry::Recovery, Entry::FirmwareShell, Entry::Debug, Entry::FirmwareSetup, Entry::Restart, Entry::PowerOff];
+pub const ENTRIES: [Entry; 8] = [Entry::Boot, Entry::Wifi, Entry::Recovery, Entry::FirmwareShell, Entry::Debug, Entry::FirmwareSetup, Entry::Restart, Entry::PowerOff];
 
 impl Entry {
     pub fn label(self, debug_on: bool) -> &'static str {
         match self {
             Entry::Boot => "Boot Aeon",
+            Entry::Wifi => "Wi-Fi networks",
             Entry::Recovery => "Recovery mode",
             Entry::FirmwareShell => "Firmware shell",
             Entry::Debug if debug_on => "Debug logging: on",
@@ -42,6 +44,7 @@ impl Entry {
     pub fn description(self) -> &'static str {
         match self {
             Entry::Boot => "Start Aeon normally.",
+            Entry::Wifi => "Choose the Wi-Fi network to use, through the host.",
             Entry::Recovery => "Start with messages on screen and no scheduler, for repairs.",
             Entry::FirmwareShell => "Open the UEFI command shell.",
             Entry::Debug => "Turn detailed messages during boot on or off.",
@@ -91,6 +94,11 @@ pub struct Menu {
 impl Menu {
     pub fn new(timeout_secs: u8) -> Menu {
         Menu { sel: 0, timeout_ms: u32::from(timeout_secs) * 1000, elapsed_ms: 0, counting: timeout_secs > 0 }
+    }
+
+    /// Starts the countdown again from the full time (after a sub-screen such as the Wi-Fi list was open).
+    pub fn restart(&mut self) {
+        self.elapsed_ms = 0;
     }
 
     pub fn selected(&self) -> usize {
@@ -258,6 +266,8 @@ mod tests {
         let mut m = Menu::new(15);
         m.tick(10_000);
         assert_eq!(m.key(Key::Down), Outcome::List);
+        assert_eq!(m.selected_entry(), Entry::Wifi);
+        assert_eq!(m.key(Key::Down), Outcome::List);
         assert_eq!(m.selected_entry(), Entry::Recovery);
         assert_eq!(m.countdown(), Some(15), "full countdown after the last key");
         assert_eq!(footer(&m), "Recovery mode in 15 seconds");
@@ -270,6 +280,7 @@ mod tests {
         let mut m = Menu::new(15);
         m.key(Key::Down);
         m.key(Key::Down);
+        m.key(Key::Down);
         assert_eq!(m.selected_entry(), Entry::FirmwareShell);
         assert_eq!(m.countdown(), Some(15), "not frozen: a full countdown after the last key");
         assert_eq!(footer(&m), "Boot Aeon in 15 seconds, or press Enter for Firmware shell");
@@ -280,7 +291,7 @@ mod tests {
         assert_eq!(m.tick(1000), Outcome::Run(Entry::Boot), "the shell is not started; Aeon boots");
         // moving on every entry keeps restarting the full countdown
         let mut m = Menu::new(15);
-        for _ in 0..6 {
+        for _ in 0..7 {
             m.tick(5000);
             m.key(Key::Down);
             assert_eq!(m.countdown(), Some(15));
@@ -339,6 +350,18 @@ mod tests {
     }
 
     #[test]
+    fn wifi_never_starts_by_itself_and_restart_resets_the_countdown() {
+        assert!(!Entry::Wifi.starts_by_itself());
+        let mut m = Menu::new(15);
+        m.key(Key::Down);
+        assert_eq!(m.key(Key::Enter), Outcome::Run(Entry::Wifi));
+        m.tick(9_000);
+        m.restart();
+        assert_eq!(m.countdown(), Some(15));
+        assert_eq!(m.tick(15_000), Outcome::Run(Entry::Boot), "the countdown boots Aeon, it never reopens the Wi-Fi list");
+    }
+
+    #[test]
     fn timeout_zero_never_counts() {
         let mut m = Menu::new(0);
         assert_eq!(m.countdown(), None);
@@ -357,7 +380,7 @@ mod tests {
 
     #[test]
     fn labels_and_descriptions_are_present_and_plain() {
-        assert_eq!(ENTRIES.len(), 7);
+        assert_eq!(ENTRIES.len(), 8);
         for e in ENTRIES {
             assert!(!e.label(false).is_empty() && !e.label(true).is_empty());
             assert!(e.description().len() < 70, "{e:?} description must fit on one line");

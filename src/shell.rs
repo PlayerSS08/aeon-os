@@ -886,13 +886,25 @@ fn cmd_connect(rest: &str) {
             cmd_ethernet("connect");
         }
         Some("wifi") | Some("wlan") => {
-            if parts.next().is_none() {
-                out!("Usage: connect wifi <ssid> <password>\n");
+            let Some(ssid) = parts.next() else {
+                out!("Usage: connect wifi <ssid> [password]\n");
                 return;
+            };
+            let pass = parts.next().unwrap_or("");
+            out!("asking the host to join '{}'...\n", ssid);
+            match crate::wifihost::link::connect(ssid, pass.as_bytes()) {
+                Ok(_) => {
+                    crate::wifihost::set_connected(ssid);
+                    out!("connected to '{}' (through the host). Getting an address...\n", ssid);
+                    cmd_dhcp("");
+                }
+                Err(e) => {
+                    out!("not connected: {}\n", e.as_str());
+                    if !crate::wifihost::link::present() {
+                        wifi_report();
+                    }
+                }
             }
-            out!("cannot join a Wi-Fi network: there is no driver for this machine's Wi-Fi chip yet.\n");
-            wifi_report();
-            out!("Use the Ethernet cable (`dhcp`) for internet today.\n");
         }
         Some(other) => {
             out!("Unknown connection type: '{}'. Usage: connect [ethernet | wifi <ssid> <password>]\n", other);
@@ -900,17 +912,150 @@ fn cmd_connect(rest: &str) {
     }
 }
 
-fn cmd_wifi(rest: &str) {
-    match rest.split_whitespace().next() {
-        Some("status") | None => wifi_report(),
-        Some("scan") => {
-            out!("cannot scan: there is no driver for this machine's Wi-Fi chip yet.\n");
+/// At start-up: if a Wi-Fi network was chosen in the boot menu, get an address at once so the shell opens online.
+fn wifi_autoconnect() {
+    let mut b = [0u8; crate::wifihost::SSID_MAX];
+    if let Some(n) = crate::wifihost::connected(&mut b) {
+        out!("Wi-Fi: '{}' was chosen in the boot menu (through the host). Going online...\n", core::str::from_utf8(&b[..n]).unwrap_or("?"));
+        cmd_dhcp("");
+    }
+}
+
+/// `wifi scan` through the host helper.
+fn wifi_scan_host() {
+    let mut nets = [crate::wifihost::Net::EMPTY; crate::wifihost::MAX_NETS];
+    match crate::wifihost::link::scan(&mut nets) {
+        Ok(0) => out!("no Wi-Fi networks found\n"),
+        Ok(n) => {
+            out!("  SIGNAL  SECURITY  NETWORK (scanned by the host's Wi-Fi)\n");
+            for net in &nets[..n] {
+                out!("  {:>5}%  {:<8}  {}{}\n", net.signal, if net.secure { "locked" } else { "open" }, net.ssid(), if net.current { "   <- connected now" } else { "" });
+            }
+            out!("join one with: wifi connect <name> <password>\n");
+        }
+        Err(e) => {
+            out!("cannot scan: {}\n", e.as_str());
             wifi_report();
         }
+    }
+}
+
+/// Waits for the next key from the PS/2 or USB keyboard (for commands that ask a question).
+fn wait_key(kbd: &mut Keyboard) -> Key {
+    loop {
+        if let Some(code) = ps2_byte() {
+            if let Some(k) = kbd.feed(code) {
+                return k;
+            }
+            continue;
+        }
+        if let Some(k) = crate::xhci::poll_key() {
+            return k;
+        }
+        sched::sleep_ms(10);
+    }
+}
+
+/// Asks for one line of text. `hidden` echoes stars (passwords). `None` when Esc or Ctrl+C cancels.
+fn ask_line(question: &str, hidden: bool, max: usize) -> Option<String> {
+    let mut kbd = Keyboard::new();
+    let mut text = String::new();
+    out!("{}", question);
+    loop {
+        match wait_key(&mut kbd) {
+            Key::Enter => {
+                put(b"\n");
+                return Some(text);
+            }
+            Key::Esc | Key::Interrupt => {
+                put(b" (cancelled)\n");
+                return None;
+            }
+            Key::Backspace => {
+                if text.pop().is_some() {
+                    put(b"\x08 \x08");
+                }
+            }
+            Key::Char(c) if (0x20..0x7F).contains(&c) && text.len() < max => {
+                text.push(c as char);
+                put(if hidden { b"*" } else { core::slice::from_ref(&c) });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `wifi`: the interactive Wi-Fi chooser. Lists the networks the host sees with numbers, asks which one,
+/// asks for its password (shown as stars), has the host join it and gets an address.
+fn wifi_choose() {
+    out!("Looking for Wi-Fi networks...\n");
+    let mut nets = [crate::wifihost::Net::EMPTY; crate::wifihost::MAX_NETS];
+    let n = match crate::wifihost::link::scan(&mut nets) {
+        Ok(0) => {
+            out!("no Wi-Fi networks found. Try `wifi` again.\n");
+            return;
+        }
+        Ok(n) => n,
+        Err(e) => {
+            out!("cannot scan: {}\n", e.as_str());
+            return;
+        }
+    };
+    out!("\n   #  SIGNAL  SECURITY  NETWORK\n");
+    for (i, net) in nets[..n].iter().enumerate() {
+        out!("  {:>2}  {:>5}%  {:<8}  {}{}\n", i + 1, net.signal, if net.secure { "locked" } else { "open" }, net.ssid(), if net.current { "   <- connected now" } else { "" });
+    }
+    out!("\n");
+    let pick = loop {
+        let Some(answer) = ask_line(&alloc::format!("Network number (1-{n}, Esc to cancel): "), false, 3) else { return };
+        match answer.trim().parse::<usize>() {
+            Ok(k) if (1..=n).contains(&k) => break nets[k - 1],
+            _ => out!("please type a number from 1 to {n}\n"),
+        }
+    };
+    let ssid = String::from(pick.ssid());
+    let mut password = String::new();
+    if pick.secure && !pick.current {
+        password = loop {
+            let Some(p) = ask_line(&alloc::format!("Password for {ssid}: "), true, 63) else { return };
+            if p.len() >= 8 {
+                break p;
+            }
+            out!("a Wi-Fi password has at least 8 characters\n");
+        };
+    }
+    out!("Connecting to {}...\n", ssid);
+    let result = crate::wifihost::link::connect(&ssid, password.as_bytes());
+    // Overwrite the password before the memory is freed.
+    // SAFETY: zero bytes keep the string valid UTF-8.
+    unsafe { password.as_bytes_mut().fill(0) };
+    match result {
+        Ok(_) => {
+            crate::wifihost::set_connected(&ssid);
+            out!("Connected to {} (through the host). Getting an address...\n", ssid);
+            cmd_dhcp("");
+        }
+        Err(e) => out!("Not connected: {}\n", e.as_str()),
+    }
+}
+
+fn cmd_wifi(rest: &str) {
+    match rest.split_whitespace().next() {
+        None => wifi_choose(),
+        Some("status") => {
+            let mut b = [0u8; crate::wifihost::SSID_MAX];
+            match crate::wifihost::connected(&mut b) {
+                Some(n) => out!("Wi-Fi (through the host): connected to '{}'\n", core::str::from_utf8(&b[..n]).unwrap_or("?")),
+                None if crate::wifihost::link::hello() => out!("Wi-Fi (through the host): helper ready, no network chosen. Try `wifi scan`.\n"),
+                None => {}
+            }
+            wifi_report();
+        }
+        Some("scan") => wifi_scan_host(),
         Some("connect") => cmd_connect(&alloc::format!("wifi {}", rest.trim_start_matches("connect").trim())),
         Some("diag") => wifi_diag(),
         Some("probe") => out!("{}", crate::rtw89::probe(rest.split_whitespace().nth(1) == Some("on"))),
-        Some(_) => out!("Usage: wifi [status | scan | connect <ssid> <password> | diag | probe [on]]\n"),
+        Some(_) => out!("Usage: wifi (choose a network) | wifi [status | scan | connect <ssid> <password> | diag | probe [on]]\n"),
     }
 }
 
@@ -3535,6 +3680,7 @@ pub extern "C" fn shell_task(_: usize) {
     }
 
     persist_restore();
+    wifi_autoconnect();
     out!("\nAeon shell. Type `help`.\n{}", prompt());
     loop {
         let mut idle = true;

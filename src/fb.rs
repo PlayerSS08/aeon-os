@@ -530,6 +530,18 @@ impl Console {
         }
     }
 
+    /// Clears everything between the wordmark and the footer, so a list of a different length (the Wi-Fi
+    /// networks) can be drawn without leftovers of the previous one.
+    pub fn menu_clear_body(&self) {
+        if !self.menu {
+            return;
+        }
+        let sc = if self.width >= 3000 { 2 } else { 1 };
+        let top = self.height / 14 + gfont::WORDMARK.height as usize * self.ws + 20 * sc;
+        let bottom = self.height.saturating_sub(gfont::SANS_16.height as usize * sc + 32 * sc);
+        self.fill_rect(0, top, self.width, bottom.saturating_sub(top), self.px(BG));
+    }
+
     /// Repaints the line at the bottom of the boot menu (the countdown or the key help).
     pub fn menu_footer(&self, footer: &str) {
         if !self.menu {

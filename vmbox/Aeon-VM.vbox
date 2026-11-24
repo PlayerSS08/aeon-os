@@ -8,7 +8,7 @@
 ** Written by VirtualBox 7.2.22 (r175245)
 -->
 <VirtualBox xmlns="http://www.virtualbox.org/" version="1.19-windows">
-  <Machine uuid="{628c6af2-ef91-445d-a4f7-12d164895b8c}" name="Aeon-VM" OSType="Other_64" snapshotFolder="Snapshots" lastStateChange="2026-11-16T09:08:19Z">
+  <Machine uuid="{628c6af2-ef91-445d-a4f7-12d164895b8c}" name="Aeon-VM" OSType="Other_64" snapshotFolder="Snapshots" lastStateChange="2026-11-17T03:44:28Z">
     <MediaRegistry>
       <HardDisks>
         <HardDisk uuid="{3505efa3-ce2e-4b9c-8047-3fa6ff599e82}" location="Aeon-Boot.vdi" format="VDI" type="Normal"/>
@@ -17,7 +17,7 @@
     </MediaRegistry>
     <ExtraData>
       <ExtraDataItem name="GUI/LastCloseAction" value="PowerOff"/>
-      <ExtraDataItem name="GUI/LastNormalWindowPosition" value="0,23,1536,889,max"/>
+      <ExtraDataItem name="GUI/LastNormalWindowPosition" value="7,30,819,668"/>
       <ExtraDataItem name="GUI/LastScaleWindowPosition" value="448,216,640,480,max"/>
       <ExtraDataItem name="GUI/ScaleFactor" value="1"/>
       <ExtraDataItem name="VBoxInternal/CPUM/MtrrVarCountIsVirtual" value="0"/>
@@ -50,7 +50,7 @@
       <AudioAdapter useDefault="true" driver="WAS"/>
       <Clipboard/>
       <GuestProperties>
-        <GuestProperty name="/VirtualBox/HostInfo/GUI/LanguageID" value="en_US" timestamp="1794818978359847600" flags=""/>
+        <GuestProperty name="/VirtualBox/HostInfo/GUI/LanguageID" value="en_US" timestamp="1794847763557897000" flags="RDONLYGUEST"/>
       </GuestProperties>
       <StorageControllers>
         <StorageController name="SATA" type="AHCI" PortCount="30" useHostIOCache="false" Bootable="true" IDE0MasterEmulationPort="0" IDE0SlaveEmulationPort="1" IDE1MasterEmulationPort="2" IDE1SlaveEmulationPort="3">

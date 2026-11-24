@@ -85,6 +85,7 @@ pub mod tcg2;
 pub mod touchpad;
 pub mod usbdesc;
 pub mod wifi;
+pub mod wifihost;
 pub mod usbfs;
 pub mod usbmsd;
 pub mod usbnet;

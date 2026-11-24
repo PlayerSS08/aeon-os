@@ -729,7 +729,7 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
     info!("menu", "menu open: boot starts in {} s (arrow keys choose another entry, Enter selects, any other key stops the countdown)", opts.menu_timeout);
     // Dawn owns the screen; log lines are held back and replayed when it closes.
-    info!("menu", "options: Boot Aeon | Recovery mode | Firmware shell | Debug logging | Firmware setup | Restart | Power off");
+    info!("menu", "options: Boot Aeon | Wi-Fi networks | Recovery mode | Firmware shell | Debug logging | Firmware setup | Restart | Power off");
     let hz = u128::from(log::tsc_hz().max(1));
     let mut menu = Menu::new(opts.menu_timeout);
     let mut last = aeon::arch::rdtsc();
@@ -774,6 +774,16 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
                 leave_menu(true);
                 return opts;
             }
+            Entry::Wifi => {
+                wifi_picker(st, bs);
+                // SAFETY: con_in is a live protocol (checked at the top); drops keys typed during the exchange.
+                unsafe { ((*st.con_in).reset)(st.con_in, false) };
+                let _ = log::with_console(|c| c.menu_clear_body());
+                menu.restart();
+                last = aeon::arch::rdtsc();
+                draw_menu(&menu, opts.debug);
+                show_footer(&menu);
+            }
             Entry::Recovery => {
                 boot_info().recovery = true;
                 info!("menu", "recovery mode selected: no timer, no scheduler");
@@ -801,10 +811,157 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
 
 /// Paints the whole menu: the list, the line about the highlighted entry and the countdown line.
 fn draw_menu(menu: &aeon::menulogic::Menu, debug: bool) {
-    let entries = aeon::menulogic::ENTRIES.map(|e| (e.label(debug), e.description()));
+    let mut ssid = [0u8; aeon::wifihost::SSID_MAX];
+    let mut status = aeon::menulogic::FooterBuf::new();
+    if let Some(n) = aeon::wifihost::connected(&mut ssid) {
+        let _ = write!(status, "Connected to {}. Enter to choose another network.", core::str::from_utf8(&ssid[..n]).unwrap_or("?"));
+    }
+    let entries = aeon::menulogic::ENTRIES.map(|e| {
+        let desc = if e == aeon::menulogic::Entry::Wifi && !status.as_str().is_empty() { status.as_str() } else { e.description() };
+        (e.label(debug), desc)
+    });
     let mut footer = aeon::menulogic::FooterBuf::new();
     menu.footer(&mut footer);
     let _ = log::with_console(|c| c.menu_draw(&entries, menu.selected(), footer.as_str()));
+}
+
+/// Shows a line at the bottom of the boot menu.
+fn menu_say(text: &str) {
+    let _ = log::with_console(|c| c.menu_footer(text));
+}
+
+/// Next key from the firmware, waiting for it.
+fn next_key(st: &SystemTable, bs: &BootServices) -> (u16, u16) {
+    loop {
+        let _ = (bs.stall)(10_000);
+        if let Some(k) = read_key(st) {
+            return k;
+        }
+    }
+}
+
+/// Password entry on the footer line, shown as stars. `None` when Esc cancels.
+fn read_password(st: &SystemTable, bs: &BootServices, ssid: &str, pass: &mut [u8; 63]) -> Option<usize> {
+    let mut plen = 0usize;
+    loop {
+        let mut f = aeon::menulogic::FooterBuf::new();
+        let _ = write!(f, "Password for {}: ", ssid);
+        for _ in 0..plen.min(24) {
+            let _ = f.write_str("*");
+        }
+        if plen < 8 {
+            let _ = f.write_str("  (8+ characters)");
+        }
+        menu_say(f.as_str());
+        match next_key(st, bs) {
+            (0x17, _) => return None,
+            (_, 0x0D) if plen >= 8 => return Some(plen),
+            (_, 0x08) => plen = plen.saturating_sub(1),
+            (_, ch @ 0x20..=0x7E) if plen < pass.len() => {
+                pass[plen] = ch as u8;
+                plen += 1;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The Wi-Fi list opened from Dawn: asks the host helper (COM2) to scan, lets the reader pick a network with the
+/// arrow keys, asks for the password and has the host join it. Nothing here touches a radio: in a VM the host's
+/// Wi-Fi is the only Wi-Fi there is (see `aeon::wifihost`).
+fn wifi_picker(st: &SystemTable, bs: &BootServices) {
+    use aeon::wifihost::{link, Net, MAX_NETS};
+    const LABEL: usize = 64;
+    'rescan: loop {
+        let _ = log::with_console(|c| c.menu_clear_body());
+        menu_say("Looking for Wi-Fi networks...");
+        let mut nets = [Net::EMPTY; MAX_NETS];
+        let count = match link::scan(&mut nets) {
+            Ok(n) => n,
+            Err(e) => {
+                info!("wifi", "scan failed: {}", e.as_str());
+                menu_say(e.as_str());
+                let _ = next_key(st, bs);
+                return;
+            }
+        };
+        info!("wifi", "host scan found {} network(s)", count);
+        // Labels like "Hostel_WiFi   82%  locked", then "Scan again" and "Back".
+        let mut labels = [[0u8; LABEL]; MAX_NETS];
+        let mut lens = [0usize; MAX_NETS];
+        for i in 0..count {
+            let mut b = aeon::menulogic::FooterBuf::new();
+            let n = &nets[i];
+            let _ = write!(b, "{}   {}%{}{}", n.ssid(), n.signal, if n.secure { "  locked" } else { "  open" }, if n.current { "  (now)" } else { "" });
+            let t = b.as_str().as_bytes();
+            let l = t.len().min(LABEL);
+            labels[i][..l].copy_from_slice(&t[..l]);
+            lens[i] = l;
+        }
+        let total = count + 2;
+        let mut sel = 0usize;
+        let _ = log::with_console(|c| c.menu_clear_body());
+        loop {
+            let mut entries = [("", ""); MAX_NETS + 2];
+            for i in 0..count {
+                let label = core::str::from_utf8(&labels[i][..lens[i]]).unwrap_or("?");
+                let desc = if nets[i].current {
+                    "The host is on this network now. Enter to use it."
+                } else if nets[i].secure {
+                    "Press Enter, then type the Wi-Fi password."
+                } else {
+                    "Open network, no password."
+                };
+                entries[i] = (label, desc);
+            }
+            entries[count] = ("Scan again", "Look for networks again.");
+            entries[count + 1] = ("Back", "Return to the boot menu.");
+            let _ = log::with_console(|c| c.menu_draw(&entries[..total], sel, ""));
+            menu_say(if count == 0 { "No networks found. Scan again or go back." } else { "Arrow keys choose a network, Enter selects, Esc goes back." });
+            match next_key(st, bs) {
+                (0x01, _) => sel = (sel + total - 1) % total,
+                (0x02, _) => sel = (sel + 1) % total,
+                (0x17, _) => return,
+                (_, 0x0D) if sel == count => continue 'rescan,
+                (_, 0x0D) if sel == count + 1 => return,
+                (_, 0x0D) => {
+                    let net = nets[sel];
+                    let mut pass = [0u8; 63];
+                    let plen = if net.secure && !net.current {
+                        match read_password(st, bs, net.ssid(), &mut pass) {
+                            Some(n) => n,
+                            None => continue,
+                        }
+                    } else {
+                        0
+                    };
+                    let mut f = aeon::menulogic::FooterBuf::new();
+                    let _ = write!(f, "Connecting to {}...", net.ssid());
+                    menu_say(f.as_str());
+                    let result = link::connect(net.ssid(), &pass[..plen]);
+                    pass.fill(0); // the password is not kept
+                    let mut f = aeon::menulogic::FooterBuf::new();
+                    match result {
+                        Ok(_) => {
+                            aeon::wifihost::set_connected(net.ssid());
+                            info!("wifi", "host joined the chosen network");
+                            let _ = write!(f, "Connected to {}. Aeon goes online when it starts.", net.ssid());
+                            menu_say(f.as_str());
+                            let _ = (bs.stall)(1_500_000);
+                            return;
+                        }
+                        Err(e) => {
+                            info!("wifi", "connect failed: {}", e.as_str());
+                            let _ = write!(f, "Not connected: {}", e.as_str());
+                            menu_say(f.as_str());
+                            let _ = next_key(st, bs);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Repaints only the line under the menu: the countdown, or the key help once it has stopped.
