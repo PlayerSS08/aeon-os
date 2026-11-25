@@ -129,6 +129,3 @@ Aeon is an **educational project**. Every change is tested in QEMU with OVMF, a 
 
 **Roadmap:** SMP, IOAPIC interrupts, NVMe, a USB keyboard driver and an `aarch64` port.
 
-## Credits
-
-The fonts are Inter and JetBrains Mono, both under the SIL Open Font License. Their license texts are in [`docs/licenses/`](docs/licenses/).
