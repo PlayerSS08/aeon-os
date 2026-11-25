@@ -227,6 +227,13 @@ BOOT_UUID = "3505efa3-ce2e-4b9c-8047-3fa6ff599e82"
 DEMO_UUID = "47b5a9a9-b5ee-4139-9545-cffd0c15e638"
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Build Aeon-Boot.vdi and Aeon-DemoDisk.vdi for VirtualBox")
+    ap.add_argument("--efi", help="boot image to put in EFI\\BOOT\\BOOTX64.EFI (default: vmbox\\latest\\BOOTX64.EFI if present, else usb\\)")
+    ap.add_argument("--mode", default="1280x800", help="screen mode written to aeon.cfg (default 1280x800; 'auto' = largest the display offers)")
+    ap.add_argument("--new-uuids", action="store_true", help="give the disks fresh UUIDs (for a second VM on the same machine)")
+    args = ap.parse_args()
+
     vm_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(vm_dir, "..", "OS", "usb"),
@@ -245,10 +252,14 @@ def main():
         sys.exit(1)
 
     print("Reading Aeon bootloader files from:", aeon_usb)
-    # Always the signed image in usb/ (what is shipped): a demo must boot exactly that, not a stray build.
-    with open(os.path.join(aeon_usb, r"EFI\BOOT\BOOTX64.EFI"), "rb") as f:
+    # The newest build (vmbox\latest\, with the Wi-Fi host picker) when present, else the signed release in usb\.
+    efi = args.efi
+    if not efi:
+        latest = os.path.join(vm_dir, "latest", "BOOTX64.EFI")
+        efi = latest if os.path.exists(latest) else os.path.join(aeon_usb, r"EFI\BOOT\BOOTX64.EFI")
+    with open(efi, "rb") as f:
         bootx64 = f.read()
-    print("Boot image: usb\\EFI\\BOOT\\BOOTX64.EFI,", len(bootx64), "bytes")
+    print("Boot image:", os.path.abspath(efi) + ",", len(bootx64), "bytes")
     with open(os.path.join(aeon_usb, "SHA256.txt"), "rb") as f:
         sha = f.read()
     with open(os.path.join(aeon_usb, "aeon-secureboot.cer"), "rb") as f:
@@ -258,8 +269,14 @@ def main():
         'bootx64_efi': bootx64,
         'sha256_txt': sha,
         'cert': cert,
-        'aeon_cfg': b"# Aeon Boot Configuration (no mode= line: Aeon picks the largest screen mode the display offers)\ntimeout=15\n"
+        # Without a mode= line Aeon picks the largest mode VirtualBox offers (5120x3200: unreadably small text).
+        'aeon_cfg': (b"# Aeon Boot Configuration\n" +
+                     (b"" if args.mode == "auto" else b"mode=" + args.mode.encode() + b"\n") +
+                     b"timeout=15\n")
     }
+    global BOOT_UUID, DEMO_UUID
+    if args.new_uuids:
+        BOOT_UUID, DEMO_UUID = str(uuid.uuid4()), str(uuid.uuid4())
 
     boot_raw = os.path.join(vm_dir, "Aeon-Boot.raw")
     boot_vdi = os.path.join(vm_dir, "Aeon-Boot.vdi")

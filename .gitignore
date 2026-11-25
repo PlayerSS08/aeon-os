@@ -13,3 +13,4 @@ vmbox/*.png
 
 # package repository signing key (never commit)
 .secrets/
+vmbox/VMs/

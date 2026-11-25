@@ -10,3 +10,4 @@ repo/** -text
 tests/fixtures/repo/** -text
 user/bin/* binary
 user/initfs.bin binary
+*.bat text eol=crlf
